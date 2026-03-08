@@ -136,13 +136,4 @@
     font-family: system-ui, -apple-system, sans-serif;
   }
 
-  /* Override prose's dark pre background with theme-aware colors */
-  .prose pre {
-    background-color: var(--muted);
-    color: var(--foreground);
-  }
-  .prose pre code,
-  .prose pre code.hljs {
-    color: inherit;
-  }
 }

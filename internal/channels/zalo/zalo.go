@@ -13,6 +13,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -231,19 +233,33 @@ func (c *Channel) handleImageMessage(msg *zaloMessage) {
 		content = "[image]"
 	}
 
+	// Download photo from Zalo CDN to local temp file (CDN URLs are auth-restricted/expiring)
 	var media []string
+	var photoURL string
 	switch {
 	case msg.PhotoURL != "":
-		media = []string{msg.PhotoURL}
+		photoURL = msg.PhotoURL
 	case msg.Photo != "":
-		media = []string{msg.Photo}
+		photoURL = msg.Photo
+	}
+
+	if photoURL != "" {
+		localPath, err := c.downloadMedia(photoURL)
+		if err != nil {
+			slog.Warn("zalo photo download failed, passing URL as fallback",
+				"photo_url", photoURL, "error", err)
+			media = []string{photoURL}
+		} else {
+			media = []string{localPath}
+		}
 	}
 
 	slog.Info("zalo image message received",
 		"sender_id", senderID,
 		"chat_id", chatID,
-		"photo_url", msg.PhotoURL,
+		"photo_url", photoURL,
 		"has_media", len(media) > 0,
+		"downloaded", len(media) > 0 && !strings.HasPrefix(media[0], "http"),
 	)
 
 	metadata := map[string]string{
@@ -319,6 +335,55 @@ func (c *Channel) sendPairingReply(senderID, chatID string) {
 		c.pairingDebounce.Store(senderID, time.Now())
 		slog.Info("zalo pairing reply sent", "sender_id", senderID, "code", code)
 	}
+}
+
+// --- Media download ---
+
+const maxMediaBytes = 10 * 1024 * 1024 // 10MB
+
+// downloadMedia fetches a photo from a Zalo CDN URL and saves it as a local temp file.
+func (c *Channel) downloadMedia(url string) (string, error) {
+	resp, err := c.client.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("fetch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("http %d", resp.StatusCode)
+	}
+
+	// Detect extension from Content-Type
+	ext := ".jpg"
+	ct := resp.Header.Get("Content-Type")
+	switch {
+	case strings.Contains(ct, "png"):
+		ext = ".png"
+	case strings.Contains(ct, "gif"):
+		ext = ".gif"
+	case strings.Contains(ct, "webp"):
+		ext = ".webp"
+	}
+
+	f, err := os.CreateTemp("", "goclaw_zalo_*"+ext)
+	if err != nil {
+		return "", fmt.Errorf("create temp: %w", err)
+	}
+	defer f.Close()
+
+	n, err := io.Copy(f, io.LimitReader(resp.Body, maxMediaBytes))
+	if err != nil {
+		os.Remove(f.Name())
+		return "", fmt.Errorf("write: %w", err)
+	}
+
+	slog.Debug("zalo media downloaded",
+		"url", url[:min(len(url), 80)],
+		"path", filepath.Base(f.Name()),
+		"bytes", n,
+	)
+
+	return f.Name(), nil
 }
 
 // --- Chunked text sending ---

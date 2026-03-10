@@ -88,7 +88,7 @@ func (c *Channel) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("zalo getMe failed: %w", err)
 	}
-	slog.Info("zalo bot connected", "bot_id", info.ID, "bot_name", info.Name)
+	slog.Info("zalo bot connected", "bot_id", info.ID, "bot_name", info.Label())
 
 	c.SetRunning(true)
 
@@ -232,13 +232,18 @@ func (c *Channel) handleImageMessage(msg *zaloMessage) {
 	}
 
 	var media []string
-	if msg.Photo != "" {
+	switch {
+	case msg.PhotoURL != "":
+		media = []string{msg.PhotoURL}
+	case msg.Photo != "":
 		media = []string{msg.Photo}
 	}
 
-	slog.Debug("zalo image message received",
+	slog.Info("zalo image message received",
 		"sender_id", senderID,
 		"chat_id", chatID,
+		"photo_url", msg.PhotoURL,
+		"has_media", len(media) > 0,
 	)
 
 	metadata := map[string]string{
@@ -350,28 +355,41 @@ type zaloAPIResponse struct {
 }
 
 type zaloBotInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID          string `json:"id"`
+	Name        string `json:"account_name"`
+	DisplayName string `json:"display_name"`
+}
+
+func (b *zaloBotInfo) Label() string {
+	if b.DisplayName != "" {
+		return b.DisplayName
+	}
+	return b.Name
 }
 
 type zaloMessage struct {
-	MessageID string   `json:"message_id"`
-	Text      string   `json:"text"`
-	Photo     string   `json:"photo"`
-	Caption   string   `json:"caption"`
-	From      zaloFrom `json:"from"`
-	Chat      zaloChat `json:"chat"`
-	Date      int64    `json:"date"`
+	MessageID   string   `json:"message_id"`
+	MessageType string   `json:"message_type"`
+	Text        string   `json:"text"`
+	Photo       string   `json:"photo"`
+	PhotoURL    string   `json:"photo_url"`
+	Caption     string   `json:"caption"`
+	From        zaloFrom `json:"from"`
+	Chat        zaloChat `json:"chat"`
+	Date        int64    `json:"date"`
 }
 
 type zaloFrom struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	IsBot       bool   `json:"is_bot"`
 }
 
 type zaloChat struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	ChatType string `json:"chat_type"`
 }
 
 type zaloUpdate struct {
@@ -445,11 +463,28 @@ func (c *Channel) getUpdates(timeout int) ([]zaloUpdate, error) {
 		return nil, err
 	}
 
+	// Try array first
 	var updates []zaloUpdate
-	if err := json.Unmarshal(result, &updates); err != nil {
+	if err := json.Unmarshal(result, &updates); err == nil {
+		return updates, nil
+	}
+
+	// Try single object (Zalo Bot Platform returns one update at a time)
+	var single zaloUpdate
+	if err := json.Unmarshal(result, &single); err == nil && single.EventName != "" {
+		slog.Info("zalo update received", "event", single.EventName)
+		return []zaloUpdate{single}, nil
+	}
+
+	// Try wrapped {"updates": [...]}
+	var wrapped struct {
+		Updates []zaloUpdate `json:"updates"`
+	}
+	if err := json.Unmarshal(result, &wrapped); err != nil {
+		slog.Warn("zalo getUpdates unknown format", "raw", string(result[:min(len(result), 500)]))
 		return nil, fmt.Errorf("unmarshal updates: %w", err)
 	}
-	return updates, nil
+	return wrapped.Updates, nil
 }
 
 func (c *Channel) sendMessage(chatID, text string) error {

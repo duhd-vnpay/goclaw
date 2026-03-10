@@ -22,4 +22,5 @@ type Stores struct {
 	BuiltinTools     BuiltinToolStore
 	PendingMessages  PendingMessageStore
 	KnowledgeGraph   KnowledgeGraphStore
+	Party            PartyStore
 }

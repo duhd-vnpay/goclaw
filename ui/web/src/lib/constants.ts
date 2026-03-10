@@ -25,6 +25,7 @@ export const ROUTES = {
   PROVIDERS: "/providers",
   TEAMS: "/teams",
   TEAM_DETAIL: "/teams/:id",
+  PARTY: "/party",
   CUSTOM_TOOLS: "/custom-tools",
   BUILTIN_TOOLS: "/builtin-tools",
   MCP: "/mcp",

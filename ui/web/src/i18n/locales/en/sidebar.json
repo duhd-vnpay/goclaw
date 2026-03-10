@@ -29,6 +29,7 @@
     "config": "Config",
     "approvals": "Approvals",
     "nodes": "Nodes",
-    "tts": "TTS"
+    "tts": "TTS",
+    "party": "Party Mode"
   }
 }

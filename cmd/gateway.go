@@ -696,6 +696,11 @@ func runGateway() {
 	// Register channels/instances/links/teams RPC methods
 	wireChannelRPCMethods(server, pgStores, channelMgr, agentRouter, msgBus)
 
+	// Register party mode WS RPC methods
+	if pgStores.Party != nil {
+		methods.NewPartyMethods(pgStores.Party, pgStores.Agents, providerRegistry, msgBus).Register(server.Router())
+	}
+
 	// Wire channel event subscribers (cache invalidation, pairing, cascade disable)
 	wireChannelEventSubscribers(msgBus, server, pgStores, channelMgr, instanceLoader, pairingMethods, cfg)
 

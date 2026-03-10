@@ -84,6 +84,9 @@ const PendingMessagesPage = lazy(() =>
 const MemoryPage = lazy(() =>
   import("@/pages/memory/memory-page").then((m) => ({ default: m.MemoryPage })),
 );
+const PartyPage = lazy(() =>
+  import("@/pages/party/party-page").then((m) => ({ default: m.PartyPage })),
+);
 
 function PageLoader() {
   return (
@@ -152,6 +155,7 @@ export function AppRoutes() {
           <Route path={ROUTES.STORAGE} element={<StoragePage />} />
           <Route path={ROUTES.PENDING_MESSAGES} element={<PendingMessagesPage />} />
           <Route path={ROUTES.MEMORY} element={<MemoryPage />} />
+          <Route path={ROUTES.PARTY} element={<PartyPage />} />
         </Route>
 
         {/* Catch-all → overview */}

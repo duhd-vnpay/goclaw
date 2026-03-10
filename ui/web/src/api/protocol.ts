@@ -141,6 +141,15 @@ export const Methods = {
   DELEGATIONS_LIST: "delegations.list",
   DELEGATIONS_GET: "delegations.get",
 
+  // Party mode
+  PARTY_START: "party.start",
+  PARTY_ROUND: "party.round",
+  PARTY_QUESTION: "party.question",
+  PARTY_ADD_CONTEXT: "party.add_context",
+  PARTY_SUMMARY: "party.summary",
+  PARTY_EXIT: "party.exit",
+  PARTY_LIST: "party.list",
+
   // Phase 3+ - NICE TO HAVE
   LOGS_TAIL: "logs.tail",
 } as const;
@@ -199,6 +208,18 @@ export const Events = {
 
   // Trace lifecycle
   TRACE_UPDATED: "trace.updated",
+
+  // Party mode
+  PARTY_STARTED: "party.started",
+  PARTY_PERSONA_INTRO: "party.persona.intro",
+  PARTY_ROUND_STARTED: "party.round.started",
+  PARTY_PERSONA_THINKING: "party.persona.thinking",
+  PARTY_PERSONA_SPOKE: "party.persona.spoke",
+  PARTY_ROUND_COMPLETE: "party.round.complete",
+  PARTY_CONTEXT_ADDED: "party.context.added",
+  PARTY_SUMMARY_READY: "party.summary.ready",
+  PARTY_ARTIFACT: "party.artifact",
+  PARTY_CLOSED: "party.closed",
 } as const;
 
 /** All event names relevant to team debug view */

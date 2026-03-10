@@ -6,6 +6,15 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 )
 
+func (s *PGSessionStore) SetHistory(key string, msgs []providers.Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if data, ok := s.cache[key]; ok {
+		data.Messages = msgs
+		data.Updated = time.Now()
+	}
+}
+
 func (s *PGSessionStore) TruncateHistory(key string, keepLast int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

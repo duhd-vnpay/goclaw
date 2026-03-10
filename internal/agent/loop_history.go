@@ -151,7 +151,18 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 	// History pipeline matching TS: limitHistoryTurns → pruneContext → sanitizeHistory.
 	trimmed := limitHistoryTurns(history, historyLimit)
 	pruned := pruneContextMessages(trimmed, l.contextWindow, l.contextPruningCfg)
-	messages = append(messages, sanitizeHistory(pruned)...)
+	sanitized, droppedCount := sanitizeHistory(pruned)
+	messages = append(messages, sanitized...)
+
+	// If orphaned messages were found and dropped, persist the cleaned history
+	// back to the session store so the same orphans don't trigger on every request.
+	if droppedCount > 0 {
+		slog.Info("sanitizeHistory: cleaned session history",
+			"session", sessionKey, "dropped", droppedCount)
+		cleanedHistory, _ := sanitizeHistory(history)
+		l.sessions.SetHistory(sessionKey, cleanedHistory)
+		l.sessions.Save(sessionKey)
+	}
 
 	// Current user message
 	messages = append(messages, providers.Message{
@@ -270,21 +281,26 @@ func limitHistoryTurns(msgs []providers.Message, limit int) []providers.Message 
 //   - Orphaned tool messages at start of history (after truncation)
 //   - tool_result without matching tool_use in preceding assistant message
 //   - assistant with tool_calls but missing tool_results
-func sanitizeHistory(msgs []providers.Message) []providers.Message {
+//
+// Returns the cleaned messages and the number of messages that were dropped or synthesized.
+func sanitizeHistory(msgs []providers.Message) ([]providers.Message, int) {
 	if len(msgs) == 0 {
-		return msgs
+		return msgs, 0
 	}
+
+	dropped := 0
 
 	// 1. Skip leading orphaned tool messages (no preceding assistant with tool_calls).
 	start := 0
 	for start < len(msgs) && msgs[start].Role == "tool" {
-		slog.Warn("dropping orphaned tool message at history start",
+		slog.Debug("sanitizeHistory: dropping orphaned tool message at history start",
 			"tool_call_id", msgs[start].ToolCallID)
 		start++
+		dropped++
 	}
 
 	if start >= len(msgs) {
-		return nil
+		return nil, dropped
 	}
 
 	// 2. Walk through messages ensuring tool_result follows matching tool_use.
@@ -309,30 +325,33 @@ func sanitizeHistory(msgs []providers.Message) []providers.Message {
 					result = append(result, toolMsg)
 					delete(expectedIDs, toolMsg.ToolCallID)
 				} else {
-					slog.Warn("dropping mismatched tool result",
+					slog.Debug("sanitizeHistory: dropping mismatched tool result",
 						"tool_call_id", toolMsg.ToolCallID)
+					dropped++
 				}
 			}
 
 			// Synthesize missing tool results
 			for id := range expectedIDs {
-				slog.Warn("synthesizing missing tool result", "tool_call_id", id)
+				slog.Debug("sanitizeHistory: synthesizing missing tool result", "tool_call_id", id)
 				result = append(result, providers.Message{
 					Role:       "tool",
 					Content:    "[Tool result missing — session was compacted]",
 					ToolCallID: id,
 				})
+				dropped++
 			}
 		} else if msg.Role == "tool" {
 			// Orphaned tool message mid-history (no preceding assistant with matching tool_calls)
-			slog.Warn("dropping orphaned tool message mid-history",
+			slog.Debug("sanitizeHistory: dropping orphaned tool message mid-history",
 				"tool_call_id", msg.ToolCallID)
+			dropped++
 		} else {
 			result = append(result, msg)
 		}
 	}
 
-	return result
+	return result, dropped
 }
 
 func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {

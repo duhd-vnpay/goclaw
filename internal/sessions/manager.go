@@ -260,6 +260,19 @@ func (m *Manager) GetLastPromptTokens(key string) (int, int) {
 	return 0, 0
 }
 
+// SetHistory replaces the full message history for a session.
+func (m *Manager) SetHistory(key string, msgs []providers.Message) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[key]
+	if !ok {
+		return
+	}
+	s.Messages = msgs
+	s.Updated = time.Now()
+}
+
 // TruncateHistory keeps only the last N messages.
 func (m *Manager) TruncateHistory(key string, keepLast int) {
 	m.mu.Lock()

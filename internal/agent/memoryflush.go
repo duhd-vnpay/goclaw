@@ -155,7 +155,8 @@ func (l *Loop) runMemoryFlush(ctx context.Context, sessionKey string, settings *
 	if len(recentHistory) > 10 {
 		recentHistory = recentHistory[len(recentHistory)-10:]
 	}
-	messages = append(messages, sanitizeHistory(recentHistory)...)
+	sanitized, _ := sanitizeHistory(recentHistory)
+	messages = append(messages, sanitized...)
 
 	// Flush prompt
 	messages = append(messages, providers.Message{

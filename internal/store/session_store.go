@@ -99,6 +99,7 @@ type SessionStore interface {
 	GetContextWindow(key string) int
 	SetLastPromptTokens(key string, tokens, msgCount int)
 	GetLastPromptTokens(key string) (tokens, msgCount int)
+	SetHistory(key string, msgs []providers.Message)
 	TruncateHistory(key string, keepLast int)
 	Reset(key string)
 	Delete(key string) error

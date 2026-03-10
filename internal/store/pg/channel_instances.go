@@ -145,25 +145,28 @@ func (s *PGChannelInstanceStore) scanInstances(rows *sql.Rows) ([]store.ChannelI
 }
 
 func (s *PGChannelInstanceStore) Update(ctx context.Context, id uuid.UUID, updates map[string]any) error {
-	// Encrypt credentials if present
+	// Ensure credentials is always []byte for the bytea column
 	if credsVal, ok := updates["credentials"]; ok && credsVal != nil {
-		var credsStr string
+		var credsBytes []byte
 		switch v := credsVal.(type) {
+		case []byte:
+			credsBytes = v
 		case string:
-			credsStr = v
+			credsBytes = []byte(v)
 		default:
-			// Object/map from JSON — marshal to string for encryption
+			// Object/map from JSON — marshal to []byte
 			if b, err := json.Marshal(v); err == nil {
-				credsStr = string(b)
+				credsBytes = b
 			}
 		}
-		if credsStr != "" && s.encKey != "" {
-			encrypted, err := crypto.Encrypt(credsStr, s.encKey)
+		if len(credsBytes) > 0 && s.encKey != "" {
+			encrypted, err := crypto.Encrypt(string(credsBytes), s.encKey)
 			if err != nil {
 				return fmt.Errorf("encrypt credentials: %w", err)
 			}
-			updates["credentials"] = []byte(encrypted)
+			credsBytes = []byte(encrypted)
 		}
+		updates["credentials"] = credsBytes
 	}
 	updates["updated_at"] = time.Now()
 	return execMapUpdate(ctx, s.db, "channel_instances", id, updates)

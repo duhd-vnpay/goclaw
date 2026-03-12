@@ -261,6 +261,16 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		status = store.TeamTaskStatusBlocked
 	}
 
+	channel := ToolChannelFromCtx(ctx)
+	meta, _ := args["metadata"].(map[string]any)
+	if meta == nil {
+		meta = make(map[string]any)
+	}
+	if senderID := store.SenderIDFromContext(ctx); senderID != "" {
+		meta["sender_id"] = senderID
+	}
+	meta["channel"] = channel
+
 	task := &store.TeamTaskData{
 		TeamID:      team.ID,
 		Subject:     subject,
@@ -268,8 +278,9 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		Status:      status,
 		BlockedBy:   blockedBy,
 		Priority:    priority,
+		Metadata:    meta,
 		UserID:      store.UserIDFromContext(ctx),
-		Channel:     ToolChannelFromCtx(ctx),
+		Channel:     channel,
 	}
 
 	if err := t.manager.teamStore.CreateTask(ctx, task); err != nil {

@@ -308,7 +308,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 					reminder := "[System] " + strings.Join(parts, "\n\n")
 					messages = append(messages,
 						providers.Message{Role: "user", Content: reminder},
-						providers.Message{Role: "assistant", Content: "I see the task status. Let me handle accordingly."},
+						// No assistant prefill — thinking models reject it.
 					)
 				}
 			}

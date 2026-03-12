@@ -46,7 +46,8 @@ type Loop struct {
 	contextWindow int
 	maxIterations int
 	maxToolCalls  int
-	workspace     string
+	workspace        string
+	workspaceSharing *store.WorkspaceSharingConfig
 
 	// Per-agent overrides from DB (nil = use global defaults)
 	restrictToWs  *bool
@@ -153,7 +154,8 @@ type LoopConfig struct {
 	ContextWindow   int
 	MaxIterations   int
 	MaxToolCalls    int
-	Workspace       string
+	Workspace        string
+	WorkspaceSharing *store.WorkspaceSharingConfig
 
 	// Per-agent DB overrides (nil = use global defaults)
 	RestrictToWs *bool
@@ -262,6 +264,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		maxIterations:          cfg.MaxIterations,
 		maxToolCalls:           cfg.MaxToolCalls,
 		workspace:              cfg.Workspace,
+		workspaceSharing:       cfg.WorkspaceSharing,
 		restrictToWs:           cfg.RestrictToWs,
 		subagentsCfg:           cfg.SubagentsCfg,
 		memoryCfg:              cfg.MemoryCfg,

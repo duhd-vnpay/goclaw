@@ -72,7 +72,7 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]any) *Re
 		return ErrorResult("memory system not available")
 	}
 
-	userID := store.UserIDFromContext(ctx)
+	userID := store.MemoryUserID(ctx)
 	searchOpts := store.MemorySearchOptions{
 		MaxResults: maxResults,
 		MinScore:   minScore,
@@ -167,7 +167,7 @@ func (t *MemoryGetTool) Execute(ctx context.Context, args map[string]any) *Resul
 		return ErrorResult("memory system not available")
 	}
 
-	userID := store.UserIDFromContext(ctx)
+	userID := store.MemoryUserID(ctx)
 
 	// Try per-user first, then global
 	content, err := t.memStore.GetDocument(ctx, agentID.String(), userID, path)

@@ -286,7 +286,12 @@
       "sharedUsers": "User được chia sẻ",
       "sharedUsersTip": "Danh sách user ID cụ thể luôn dùng chung workspace. Định dạng: channel:userId (vd: telegram:386246614)",
       "userIdPlaceholder": "Nhập user ID (vd: telegram:386246614)",
-      "warning": "Khi bật chia sẻ, tất cả người dùng được chia sẻ có thể đọc và ghi file trong cùng thư mục workspace. Bộ nhớ cũng được chia sẻ; file ngữ cảnh vẫn được cô lập theo từng người dùng. Thay đổi cài đặt này không di chuyển dữ liệu cũ — bộ nhớ per-user trước đó sẽ không còn truy cập được."
+      "warning": "Khi bật chia sẻ, tất cả người dùng được chia sẻ có thể đọc và ghi file trong cùng thư mục workspace. Chia sẻ bộ nhớ được cài đặt riêng. File ngữ cảnh vẫn được cô lập theo từng người dùng.",
+      "memoryGroupLabel": "Memory & Knowledge Graph",
+      "folderGroupLabel": "Thư mục Workspace",
+      "shareMemory": "Chia sẻ Memory & KG",
+      "shareMemoryTip": "Tất cả người dùng truy cập chung Memory và Knowledge Graph. Độc lập với việc chia sẻ thư mục workspace. Khi tắt, mỗi người dùng có vùng nhớ riêng.",
+      "shareMemoryNote": "Bật/tắt không di chuyển dữ liệu — memory per-user trước đó sẽ không truy cập được trong chế độ shared."
     },
     "compaction": {
       "title": "Nén ngữ cảnh",

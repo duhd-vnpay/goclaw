@@ -276,6 +276,18 @@
       "selectToolsDeny": "选择要拒绝的工具...",
       "selectToolsAlsoAllow": "选择附加工具..."
     },
+    "workspaceSharing": {
+      "title": "工作区共享",
+      "description": "控制用户之间的工作区文件隔离",
+      "sharedDm": "在私聊中共享",
+      "sharedDmTip": "启用后，所有私聊用户共享同一工作区目录",
+      "sharedGroup": "在群组中共享",
+      "sharedGroupTip": "启用后，群聊中的所有成员共享同一工作区目录",
+      "sharedUsers": "共享用户",
+      "sharedUsersTip": "始终共享工作区的特定用户ID。格式：channel:userId（例如 telegram:386246614）",
+      "userIdPlaceholder": "输入用户ID（例如 telegram:386246614）",
+      "warning": "启用共享后，所有共享用户可以读写同一工作区目录中的文件。记忆也会共享；上下文文件仍按用户隔离。切换此设置不会迁移现有数据——之前的用户独立记忆将无法访问。"
+    },
     "compaction": {
       "title": "压缩",
       "description": "上下文窗口压缩和压缩前记忆设置",

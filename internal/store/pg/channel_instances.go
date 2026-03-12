@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -172,7 +173,10 @@ func (s *PGChannelInstanceStore) Update(ctx context.Context, id uuid.UUID, updat
 
 		// Merge with existing credentials so partial updates don't wipe other fields
 		if len(newCreds) > 0 {
-			existing, _ := s.loadExistingCreds(ctx, id)
+			existing, err := s.loadExistingCreds(ctx, id)
+			if err != nil {
+				return fmt.Errorf("load existing credentials for merge: %w", err)
+			}
 			for k, v := range newCreds {
 				existing[k] = v
 			}
@@ -200,8 +204,11 @@ func (s *PGChannelInstanceStore) Update(ctx context.Context, id uuid.UUID, updat
 func (s *PGChannelInstanceStore) loadExistingCreds(ctx context.Context, id uuid.UUID) (map[string]any, error) {
 	var raw []byte
 	err := s.db.QueryRowContext(ctx, "SELECT credentials FROM channel_instances WHERE id = $1", id).Scan(&raw)
-	if err != nil || len(raw) == 0 {
-		return make(map[string]any), err
+	if errors.Is(err, sql.ErrNoRows) || len(raw) == 0 {
+		return make(map[string]any), nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	if s.encKey != "" {
 		if dec, err := crypto.Decrypt(string(raw), s.encKey); err == nil {

@@ -66,11 +66,15 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 
 	// Per-user workspace: show the user's subdirectory in the system prompt.
 	// Uses cached workspace from user_agent_profiles (includes channel isolation).
+	// When workspace sharing is enabled, show the base workspace without user subfolder.
 	promptWorkspace := l.workspace
 	if l.agentUUID != uuid.Nil && userID != "" && l.workspace != "" {
 		if cachedWs, ok := l.userWorkspaces.Load(userID); ok {
-			promptWorkspace = filepath.Join(cachedWs.(string), sanitizePathSegment(userID))
-		} else {
+			promptWorkspace = cachedWs.(string)
+			if !l.shouldShareWorkspace(userID, peerKind) {
+				promptWorkspace = filepath.Join(promptWorkspace, sanitizePathSegment(userID))
+			}
+		} else if !l.shouldShareWorkspace(userID, peerKind) {
 			promptWorkspace = filepath.Join(l.workspace, sanitizePathSegment(userID))
 		}
 	}

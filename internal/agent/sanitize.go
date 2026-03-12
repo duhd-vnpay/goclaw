@@ -322,22 +322,37 @@ var configLeakFileNames = []string{
 	"internal_config", "system prompt",
 }
 
+// Patterns to strip markdown code from content before config leak detection.
+// Mentions inside code blocks/inline code are typically architecture docs, not leaks.
+var fencedCodeBlockPattern = regexp.MustCompile("(?s)```[^`]*```")
+var inlineCodePattern = regexp.MustCompile("`[^`\n]+`")
+
+// stripMarkdownCode removes fenced code blocks and inline code from text.
+func stripMarkdownCode(s string) string {
+	s = fencedCodeBlockPattern.ReplaceAllString(s, "")
+	s = inlineCodePattern.ReplaceAllString(s, "")
+	return s
+}
+
 // StripConfigLeak detects when a predefined agent dumps its internal configuration
 // (e.g. referencing SOUL.md, AGENTS.md, IDENTITY.md) and replaces the entire
 // response with a friendly decline.
 //
 // Only active for predefined agents. Single-gate detection:
-// 3+ distinct internal file names mentioned → replace entire response.
-// A predefined agent legitimately referencing 3+ internal config files in one
-// response is essentially impossible, so this has no false-positive risk.
+// 3+ distinct internal file names mentioned in plain text → replace entire response.
+// Mentions inside markdown code blocks and inline code are excluded from counting,
+// as they typically appear in architecture explanations rather than actual leaks.
 func StripConfigLeak(content, agentType string) string {
 	if agentType != "predefined" || content == "" {
 		return content
 	}
 
+	// Count hits only in plain text (outside code blocks/inline code)
+	plain := stripMarkdownCode(content)
+
 	hits := 0
 	for _, name := range configLeakFileNames {
-		if strings.Contains(content, name) {
+		if strings.Contains(plain, name) {
 			hits++
 		}
 	}

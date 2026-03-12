@@ -43,8 +43,15 @@ func (c *Channel) handleDM(msg protocol.UserMessage) {
 		return
 	}
 
+	// Annotate with sender display name so the agent knows who is messaging.
+	senderName := msg.Data.DName
+	if senderName != "" {
+		content = fmt.Sprintf("[From: %s]\n%s", senderName, content)
+	}
+
 	slog.Debug("zalo_personal DM received",
 		"sender", senderID,
+		"dname", senderName,
 		"thread", threadID,
 		"preview", channels.Truncate(content, 50),
 	)
@@ -88,6 +95,12 @@ func (c *Channel) handleGroupMessage(msg protocol.GroupMessage) {
 				Timestamp: time.Now(),
 				MessageID: msg.Data.MsgID,
 			}, c.historyLimit)
+
+			// Collect contact even when bot is not mentioned (cache prevents DB spam).
+			if cc := c.ContactCollector(); cc != nil {
+				cc.EnsureContact(context.Background(), c.Type(), c.Name(), senderID, senderID, senderName, "", "group")
+			}
+
 			slog.Debug("zalo_personal group message recorded (no mention)",
 				"group_id", threadID,
 				"sender", senderName,

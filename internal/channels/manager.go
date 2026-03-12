@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
 // RunContext tracks an active agent run for streaming/reaction event forwarding.
@@ -25,11 +26,12 @@ type RunContext struct {
 // Manager manages all registered channels, handling their lifecycle
 // and routing outbound messages to the correct channel.
 type Manager struct {
-	channels     map[string]Channel
-	bus          *bus.MessageBus
-	runs         sync.Map // runID string → *RunContext
-	dispatchTask *asyncTask
-	mu           sync.RWMutex
+	channels         map[string]Channel
+	bus              *bus.MessageBus
+	runs             sync.Map // runID string → *RunContext
+	dispatchTask     *asyncTask
+	mu               sync.RWMutex
+	contactCollector *store.ContactCollector
 }
 
 type asyncTask struct {
@@ -137,7 +139,25 @@ func (m *Manager) GetEnabledChannels() []string {
 func (m *Manager) RegisterChannel(name string, channel Channel) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Propagate contact collector to channels that embed BaseChannel.
+	if m.contactCollector != nil {
+		if bc, ok := channel.(interface{ SetContactCollector(*store.ContactCollector) }); ok {
+			bc.SetContactCollector(m.contactCollector)
+		}
+	}
 	m.channels[name] = channel
+}
+
+// SetContactCollector sets the contact collector for all current and future channels.
+func (m *Manager) SetContactCollector(cc *store.ContactCollector) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.contactCollector = cc
+	for _, ch := range m.channels {
+		if bc, ok := ch.(interface{ SetContactCollector(*store.ContactCollector) }); ok {
+			bc.SetContactCollector(cc)
+		}
+	}
 }
 
 // ChannelTypeForName returns the platform type for a channel instance name.

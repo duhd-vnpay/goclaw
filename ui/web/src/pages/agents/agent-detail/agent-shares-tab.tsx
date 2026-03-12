@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Plus, Trash2, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Combobox } from "@/components/ui/combobox";
 import {
   Select,
   SelectContent,
@@ -13,7 +13,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { useHttp } from "@/hooks/use-ws";
+import { useContactPicker } from "@/hooks/use-contact-picker";
+import { useContactResolver } from "@/hooks/use-contact-resolver";
 import { useAgentShares } from "../hooks/use-agent-shares";
+import type { ChannelContact } from "@/types/contact";
 
 interface AgentSharesTabProps {
   agentId: string;
@@ -34,10 +38,33 @@ function roleBadgeVariant(role: string) {
 
 export function AgentSharesTab({ agentId }: AgentSharesTabProps) {
   const { t } = useTranslation("agents");
+  const http = useHttp();
   const { shares, loading, addShare, revokeShare } = useAgentShares(agentId);
   const [newUserId, setNewUserId] = useState("");
   const [newRole, setNewRole] = useState("user");
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
+
+  // Contact picker for the add form
+  const listContacts = useCallback(
+    async (search: string): Promise<ChannelContact[]> => {
+      const res = await http.get<{ contacts: ChannelContact[] }>("/v1/contacts", {
+        search,
+        limit: "20",
+      });
+      return res.contacts ?? [];
+    },
+    [http],
+  );
+  const { options, searchContacts } = useContactPicker(listContacts);
+
+  // Resolve display names for existing shares
+  const shareUserIDs = useMemo(() => shares.map((s) => s.user_id), [shares]);
+  const { resolve } = useContactResolver(shareUserIDs);
+
+  const handleUserIdChange = (val: string) => {
+    setNewUserId(val);
+    searchContacts(val);
+  };
 
   const handleAddShare = async () => {
     if (!newUserId.trim()) return;
@@ -58,14 +85,11 @@ export function AgentSharesTab({ agentId }: AgentSharesTabProps) {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <div className="flex-1 space-y-1.5">
             <Label htmlFor="shareUserId">{t("shares.userId")}</Label>
-            <Input
-              id="shareUserId"
+            <Combobox
               value={newUserId}
-              onChange={(e) => setNewUserId(e.target.value)}
+              onChange={handleUserIdChange}
+              options={options}
               placeholder={t("shares.userIdPlaceholder")}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && newUserId.trim()) handleAddShare();
-              }}
             />
           </div>
           <div className="w-full space-y-1.5 sm:w-36">
@@ -108,30 +132,46 @@ export function AgentSharesTab({ agentId }: AgentSharesTabProps) {
             <span>{t("shares.role")}</span>
             <span />
           </div>
-          {shares.map((share) => (
-            <div
-              key={share.user_id}
-              className="grid min-w-[300px] grid-cols-[1fr_100px_48px] items-center gap-2 border-b px-4 py-3 last:border-0"
-            >
-              <div>
-                <span className="text-sm font-medium">{share.user_id}</span>
-                {share.granted_by && (
-                  <span className="ml-2 text-xs text-muted-foreground">
-                    by {share.granted_by}
-                  </span>
-                )}
-              </div>
-              <Badge variant={roleBadgeVariant(share.role)}>{share.role}</Badge>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setRevokeTarget(share.user_id)}
+          {shares.map((share) => {
+            const contact = resolve(share.user_id);
+            const contactByGrant = share.granted_by ? resolve(share.granted_by) : null;
+            return (
+              <div
+                key={share.user_id}
+                className="grid min-w-[300px] grid-cols-[1fr_100px_48px] items-center gap-2 border-b px-4 py-3 last:border-0"
               >
-                <Trash2 className="h-3.5 w-3.5 text-destructive" />
-              </Button>
-            </div>
-          ))}
+                <div>
+                  <span className="text-sm font-medium">
+                    {contact?.display_name ?? share.user_id}
+                  </span>
+                  {contact?.display_name && (
+                    <span className="ml-1.5 text-xs text-muted-foreground font-mono">
+                      {share.user_id}
+                    </span>
+                  )}
+                  {contact?.username && (
+                    <span className="ml-1.5 text-xs text-muted-foreground">
+                      @{contact.username}
+                    </span>
+                  )}
+                  {share.granted_by && (
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      by {contactByGrant?.display_name ?? share.granted_by}
+                    </span>
+                  )}
+                </div>
+                <Badge variant={roleBadgeVariant(share.role)}>{share.role}</Badge>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setRevokeTarget(share.user_id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                </Button>
+              </div>
+            );
+          })}
         </div>
       )}
 

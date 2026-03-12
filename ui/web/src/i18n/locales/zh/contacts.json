@@ -1,0 +1,32 @@
+{
+  "title": "联系人",
+  "description": "从所有Channel交互中自动收集的联系人。",
+  "searchPlaceholder": "按名称、用户名或 ID 搜索...",
+  "filter": "筛选",
+  "emptyTitle": "暂无联系人",
+  "emptyDescription": "当用户通过Channel与Agent交互时，联系人将自动出现在此处。",
+  "noMatchTitle": "未找到匹配的联系人",
+  "noMatchDescription": "请尝试其他搜索词或筛选条件。",
+  "columns": {
+    "name": "名称",
+    "username": "用户名",
+    "senderId": "发送者 ID",
+    "channelType": "Channel",
+    "peerKind": "类型",
+    "lastSeen": "最后活跃"
+  },
+  "permissionsNote": {
+    "title": "各Channel联系人名称权限说明",
+    "telegram": "Telegram — 名称和用户名自动获取。",
+    "discord": "Discord — 显示名称和用户名自动获取。",
+    "zalo": "Zalo — 显示名称自动获取。",
+    "slack": "Slack — 通过 Slack API 解析显示名称（Bot 需在工作区内）。",
+    "feishu": "飞书/Lark — 需要 contact:user.base:readonly 权限。未授权时名称将为空。"
+  },
+  "filters": {
+    "allChannels": "所有Channel",
+    "allTypes": "所有类型",
+    "direct": "私聊",
+    "group": "群组"
+  }
+}

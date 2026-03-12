@@ -81,6 +81,9 @@
     "selfEvolutionLabel": "Cho phép agent tiến hóa phong cách giao tiếp",
     "selfEvolutionHint": "Khi được bật, agent có thể cập nhật SOUL.md để tinh chỉnh giọng điệu, từ vựng và phong cách phản hồi dựa trên tương tác. Nhận dạng, tên và hướng dẫn hoạt động vẫn bị khóa.",
     "selfEvolutionInfo": "Agent sẽ tiến hóa phong cách theo thời gian qua các cập nhật SOUL.md. Chỉ phong cách và giọng điệu bị ảnh hưởng — nhận dạng và quy tắc quy trình làm việc vẫn cố định.",
+    "budget": "Ngân sách hàng tháng",
+    "budgetLabel": "Giới hạn ngân sách (USD)",
+    "budgetHint": "Giới hạn chi tiêu hàng tháng tùy chọn. Agent sẽ từ chối yêu cầu khi vượt quá. Để trống cho không giới hạn.",
     "saveChanges": "Lưu thay đổi",
     "saving": "Đang lưu...",
     "saved": "Đã lưu",
@@ -147,7 +150,8 @@
     "contextFile": "Tệp ngữ cảnh",
     "perUser": "theo người dùng",
     "emptyFile": "trống",
-    "estTokens": "Ước {{tokens}} token"
+    "estTokens": "Ước {{tokens}} token",
+    "insertContact": "Tìm liên hệ để chèn..."
   },
   "fileEditor": {
     "editWithAi": "Chỉnh sửa với AI",
@@ -160,7 +164,7 @@
   "shares": {
     "grantAccess": "Cấp quyền truy cập",
     "userId": "ID người dùng",
-    "userIdPlaceholder": "Nhập ID người dùng...",
+    "userIdPlaceholder": "Tìm liên hệ hoặc nhập ID người dùng...",
     "role": "Vai trò",
     "share": "Chia sẻ",
     "loadingShares": "Đang tải chia sẻ...",
@@ -210,7 +214,9 @@
     "noSkillsDesc": "Tải lên skill trong trang Skill để cấp cho agent.",
     "skillsGranted": "{{granted}} trong {{total}} skill được cấp",
     "filterSkills": "Lọc skill...",
-    "noSkillsMatch": "Không có skill nào phù hợp."
+    "noSkillsMatch": "Không có skill nào phù hợp.",
+    "system": "Hệ thống",
+    "alwaysAvailable": "Luôn khả dụng"
   },
   "instances": {
     "loadingInstances": "Đang tải phiên bản...",
@@ -222,7 +228,9 @@
     "loading": "Đang tải...",
     "saving": "Đang lưu...",
     "save": "Lưu",
-    "saved": "Đã lưu"
+    "saved": "Đã lưu",
+    "searchContacts": "Tìm liên hệ để thêm...",
+    "noContactsFound": "Không tìm thấy liên hệ"
   },
   "summoning": {
     "title": "Đang triệu hồi agent...",
@@ -270,13 +278,15 @@
     },
     "compaction": {
       "title": "Nén ngữ cảnh",
-      "description": "Cài đặt nén cửa sổ ngữ cảnh và xả bộ nhớ",
-      "reserveTokensFloor": "Sàn token dự trữ",
+      "description": "Cài đặt nén cửa sổ ngữ cảnh và ghi nhớ trước nén",
       "maxHistoryShare": "Phần lịch sử tối đa (0-1)",
+      "maxHistoryShareTip": "Tỷ lệ tối đa của cửa sổ ngữ cảnh dành cho lịch sử hội thoại (vd: 0.75 = 75%). Nén kích hoạt khi vượt quá.",
       "minMessages": "Tin nhắn tối thiểu",
+      "minMessagesTip": "Số tin nhắn tối thiểu trước khi nén có thể kích hoạt, bất kể số token.",
       "keepLastMessages": "Giữ tin nhắn cuối",
-      "memoryFlush": "Xả bộ nhớ",
-      "softThreshold": "Ngưỡng mềm (token)"
+      "keepLastMessagesTip": "Số tin nhắn gần nhất giữ lại sau khi nén. Các tin nhắn cũ hơn được thay thế bằng bản tóm tắt.",
+      "memoryFlush": "Ghi nhớ trước nén",
+      "memoryFlushTip": "Trước khi nén, agent được một lượt để lưu ngữ cảnh quan trọng vào file bộ nhớ. Cũng kích hoạt trích xuất Knowledge Graph."
     },
     "contextPruning": {
       "title": "Cắt bớt ngữ cảnh",

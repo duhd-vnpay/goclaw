@@ -1,7 +1,10 @@
 {
   "groups": {
     "core": "Core",
-    "management": "Management",
+    "conversations": "Conversations",
+    "connectivity": "Connectivity",
+    "capabilities": "Capabilities",
+    "data": "Data",
     "monitoring": "Monitoring",
     "system": "System"
   },
@@ -13,12 +16,14 @@
     "sessions": "Sessions",
     "pendingMessages": "Pending Messages",
     "channels": "Channels",
+    "contacts": "Contacts",
     "skills": "Skills",
     "cron": "Cron",
     "customTools": "Custom Tools",
     "builtinTools": "Built-in Tools",
     "mcpServers": "MCP Servers",
     "memory": "Memory",
+    "knowledgeGraph": "Knowledge Graph",
     "traces": "Traces",
     "realtimeEvents": "Realtime Events",
     "delegations": "Delegations",
@@ -30,6 +35,7 @@
     "approvals": "Approvals",
     "nodes": "Nodes",
     "tts": "TTS",
-    "party": "Party Mode"
+    "party": "Party Mode",
+    "activity": "Activity"
   }
 }

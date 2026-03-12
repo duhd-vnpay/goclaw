@@ -60,35 +60,36 @@ export function KGEntitiesTab({ agentId, userId }: KGEntitiesTabProps) {
     extractFromText(text, provider, model, userId);
 
   return (
-    <div>
-      {/* Stats bar */}
-      {stats && (
-        <div className="flex gap-4 text-xs text-muted-foreground mb-3">
-          <span>{t("kg.stats.entities", { count: stats.entity_count })}</span>
-          <span>{t("kg.stats.relations", { count: stats.relation_count })}</span>
-          {Object.entries(stats.entity_types).map(([type, count]) => (
-            <span key={type}>{type}: {count}</span>
-          ))}
-        </div>
-      )}
-
-      {/* Search + actions */}
-      <div className="flex gap-2 mb-4">
+    <div className="flex h-full flex-col">
+      {/* Search + stats + actions — single compact row */}
+      <div className="flex items-center gap-2 mb-3">
         <Input
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={t("kg.search.placeholder")}
-          className="max-w-sm"
+          className="max-w-[220px] h-8 text-xs"
         />
-        <Button variant="outline" size="sm" onClick={handleSearch} disabled={fetching} className="gap-1 h-9">
-          <Search className="h-3.5 w-3.5" /> {t("kg.search.button")}
+        <Button variant="outline" size="sm" onClick={handleSearch} disabled={fetching} className="gap-1 h-8 px-2.5">
+          <Search className="h-3.5 w-3.5" />
         </Button>
         {appliedQuery && (
-          <Button variant="ghost" size="sm" onClick={() => { setAppliedQuery(""); setSearchQuery(""); }} className="h-9">
+          <Button variant="ghost" size="sm" onClick={() => { setAppliedQuery(""); setSearchQuery(""); }} className="h-8 px-2 text-xs">
             {t("kg.search.clear")}
           </Button>
         )}
+
+        {/* Inline stats */}
+        {stats && (
+          <div className="flex gap-2 text-[10px] text-muted-foreground ml-1">
+            <span>{t("kg.stats.entities", { count: stats.entity_count })}</span>
+            <span>{t("kg.stats.relations", { count: stats.relation_count })}</span>
+            {Object.entries(stats.entity_types).map(([type, count]) => (
+              <span key={type}>{type}: {count}</span>
+            ))}
+          </div>
+        )}
+
         <div className="flex-1" />
 
         {/* View mode toggle */}
@@ -97,7 +98,7 @@ export function KGEntitiesTab({ agentId, userId }: KGEntitiesTabProps) {
             variant={viewMode === "table" ? "secondary" : "ghost"}
             size="sm"
             onClick={() => setViewMode("table")}
-            className="h-9 rounded-r-none gap-1 px-2.5"
+            className="h-8 rounded-r-none px-2"
           >
             <LayoutGrid className="h-3.5 w-3.5" />
           </Button>
@@ -105,21 +106,22 @@ export function KGEntitiesTab({ agentId, userId }: KGEntitiesTabProps) {
             variant={viewMode === "graph" ? "secondary" : "ghost"}
             size="sm"
             onClick={() => setViewMode("graph")}
-            className="h-9 rounded-l-none gap-1 px-2.5"
+            className="h-8 rounded-l-none px-2"
           >
             <Share2 className="h-3.5 w-3.5" />
           </Button>
         </div>
 
-        <Button variant="outline" size="sm" onClick={() => refresh()} disabled={fetching} className="gap-1 h-9">
-          <RefreshCw className={"h-3.5 w-3.5" + (fetching ? " animate-spin" : "")} /> {t("kg.refresh")}
+        <Button variant="outline" size="sm" onClick={() => refresh()} disabled={fetching} className="gap-1 h-8 px-2.5">
+          <RefreshCw className={"h-3.5 w-3.5" + (fetching ? " animate-spin" : "")} />
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setExtractOpen(true)} className="gap-1 h-9">
+        <Button variant="outline" size="sm" onClick={() => setExtractOpen(true)} className="gap-1 h-8 px-2.5">
           <Sparkles className="h-3.5 w-3.5" /> {t("kg.extract")}
         </Button>
       </div>
 
       {/* Content area */}
+      <div className="min-h-0 flex-1">
       {viewMode === "graph" ? (
         <KGGraphView
           entities={graphData.entities}
@@ -135,8 +137,8 @@ export function KGEntitiesTab({ agentId, userId }: KGEntitiesTabProps) {
           description={appliedQuery ? t("kg.emptySearchDescription") : t("kg.emptyDescription")}
         />
       ) : (
-        <div className="rounded-md border">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto rounded-md border">
+          <table className="w-full min-w-[600px] text-sm">
             <thead>
               <tr className="border-b bg-muted/50">
                 <th className="px-4 py-3 text-left font-medium">{t("kg.columns.name")}</th>
@@ -188,6 +190,7 @@ export function KGEntitiesTab({ agentId, userId }: KGEntitiesTabProps) {
           </table>
         </div>
       )}
+      </div>
 
       {/* Entity detail dialog */}
       <KGEntityDetailDialog

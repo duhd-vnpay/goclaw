@@ -81,6 +81,9 @@
     "selfEvolutionLabel": "Allow agent to evolve its communication style",
     "selfEvolutionHint": "When enabled, the agent can update its SOUL.md to refine tone, vocabulary, and response style based on interactions. Identity, name, and operating instructions remain locked.",
     "selfEvolutionInfo": "Agent will evolve its style over time through SOUL.md updates. Only style and tone are affected — identity and workflow rules stay fixed.",
+    "budget": "Monthly Budget",
+    "budgetLabel": "Budget limit (USD)",
+    "budgetHint": "Optional monthly spending cap. Agent will reject requests when exceeded. Leave empty for unlimited.",
     "saveChanges": "Save Changes",
     "saving": "Saving...",
     "saved": "Saved",
@@ -147,7 +150,8 @@
     "contextFile": "Context file",
     "perUser": "per-user",
     "emptyFile": "empty",
-    "estTokens": "Est {{tokens}} tokens"
+    "estTokens": "Est {{tokens}} tokens",
+    "insertContact": "Search contact to insert..."
   },
   "fileEditor": {
     "editWithAi": "Edit with AI",
@@ -160,7 +164,7 @@
   "shares": {
     "grantAccess": "Grant Access",
     "userId": "User ID",
-    "userIdPlaceholder": "Enter user ID...",
+    "userIdPlaceholder": "Search contacts or enter user ID...",
     "role": "Role",
     "share": "Share",
     "loadingShares": "Loading shares...",
@@ -210,7 +214,9 @@
     "noSkillsDesc": "Upload skills in the Skills page to grant them to agents.",
     "skillsGranted": "{{granted}} of {{total}} skills granted",
     "filterSkills": "Filter skills...",
-    "noSkillsMatch": "No skills match your search."
+    "noSkillsMatch": "No skills match your search.",
+    "system": "System",
+    "alwaysAvailable": "Always available"
   },
   "instances": {
     "loadingInstances": "Loading instances...",
@@ -222,7 +228,9 @@
     "loading": "Loading...",
     "saving": "Saving...",
     "save": "Save",
-    "saved": "Saved"
+    "saved": "Saved",
+    "searchContacts": "Search contacts to add...",
+    "noContactsFound": "No contacts found"
   },
   "summoning": {
     "title": "Summoning Your Agent...",
@@ -271,12 +279,14 @@
     "compaction": {
       "title": "Compaction",
       "description": "Context window compaction and memory flush settings",
-      "reserveTokensFloor": "Reserve Tokens Floor",
       "maxHistoryShare": "Max History Share (0-1)",
+      "maxHistoryShareTip": "Maximum fraction of context window for conversation history (e.g. 0.75 = 75%). Compaction triggers when exceeded.",
       "minMessages": "Min Messages",
+      "minMessagesTip": "Minimum messages before compaction can trigger, regardless of token count.",
       "keepLastMessages": "Keep Last Messages",
+      "keepLastMessagesTip": "Recent messages kept after compaction. Older messages are replaced by a summary.",
       "memoryFlush": "Memory Flush",
-      "softThreshold": "Soft Threshold (tokens)"
+      "memoryFlushTip": "Before compaction, the agent gets a turn to save important context to memory files. Also triggers Knowledge Graph extraction."
     },
     "contextPruning": {
       "title": "Context Pruning",

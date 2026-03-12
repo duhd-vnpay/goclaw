@@ -21,16 +21,13 @@ const (
 	DefaultMemoryFlushSystemPrompt = "Pre-compaction memory flush turn. " +
 		"The session is near auto-compaction; capture durable memories to disk. " +
 		"You may reply, but usually NO_REPLY is correct."
-
-	DefaultSoftThresholdTokens = 4000
 )
 
 // MemoryFlushSettings holds resolved flush config with defaults applied.
 type MemoryFlushSettings struct {
-	Enabled             bool
-	SoftThresholdTokens int
-	Prompt              string
-	SystemPrompt        string
+	Enabled      bool
+	Prompt       string
+	SystemPrompt string
 }
 
 // ResolveMemoryFlushSettings resolves flush settings from config, applying defaults.
@@ -39,10 +36,9 @@ func ResolveMemoryFlushSettings(compaction *config.CompactionConfig) *MemoryFlus
 	if compaction == nil || compaction.MemoryFlush == nil {
 		// Default: enabled
 		return &MemoryFlushSettings{
-			Enabled:             true,
-			SoftThresholdTokens: DefaultSoftThresholdTokens,
-			Prompt:              DefaultMemoryFlushPrompt,
-			SystemPrompt:        DefaultMemoryFlushSystemPrompt,
+			Enabled:      true,
+			Prompt:       DefaultMemoryFlushPrompt,
+			SystemPrompt: DefaultMemoryFlushSystemPrompt,
 		}
 	}
 
@@ -52,15 +48,11 @@ func ResolveMemoryFlushSettings(compaction *config.CompactionConfig) *MemoryFlus
 	}
 
 	settings := &MemoryFlushSettings{
-		Enabled:             true,
-		SoftThresholdTokens: DefaultSoftThresholdTokens,
-		Prompt:              DefaultMemoryFlushPrompt,
-		SystemPrompt:        DefaultMemoryFlushSystemPrompt,
+		Enabled:      true,
+		Prompt:       DefaultMemoryFlushPrompt,
+		SystemPrompt: DefaultMemoryFlushSystemPrompt,
 	}
 
-	if mf.SoftThresholdTokens > 0 {
-		settings.SoftThresholdTokens = mf.SoftThresholdTokens
-	}
 	if mf.Prompt != "" {
 		settings.Prompt = mf.Prompt
 	}
@@ -72,7 +64,8 @@ func ResolveMemoryFlushSettings(compaction *config.CompactionConfig) *MemoryFlus
 }
 
 // shouldRunMemoryFlush checks whether a memory flush should run before compaction.
-// Matching TS memory-flush.ts:shouldRunMemoryFlush.
+// Flush always runs when compaction triggers (called inside maybeSummarize),
+// gated only by enabled/memory checks and a dedup guard per compaction cycle.
 func (l *Loop) shouldRunMemoryFlush(sessionKey string, totalTokens int, settings *MemoryFlushSettings) bool {
 	if settings == nil || !settings.Enabled || !l.hasMemory {
 		return false
@@ -82,23 +75,7 @@ func (l *Loop) shouldRunMemoryFlush(sessionKey string, totalTokens int, settings
 		return false
 	}
 
-	// Threshold = contextWindow - reserveTokensFloor - softThresholdTokens
-	// When totalTokens >= threshold → flush
-	reserveFloor := 20000 // default
-	if l.compactionCfg != nil && l.compactionCfg.ReserveTokensFloor > 0 {
-		reserveFloor = l.compactionCfg.ReserveTokensFloor
-	}
-
-	threshold := l.contextWindow - reserveFloor - settings.SoftThresholdTokens
-	if threshold <= 0 {
-		return false
-	}
-
-	if totalTokens < threshold {
-		return false
-	}
-
-	// Deduplication: skip if already flushed in this compaction cycle
+	// Deduplication: skip if already flushed in this compaction cycle.
 	compactionCount := l.sessions.GetCompactionCount(sessionKey)
 	lastFlushAt := l.sessions.GetMemoryFlushCompactionCount(sessionKey)
 	if lastFlushAt >= 0 && lastFlushAt == compactionCount {

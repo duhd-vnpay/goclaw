@@ -111,6 +111,17 @@ func (s *PGAgentStore) GetOrCreateUserProfile(ctx context.Context, agentID uuid.
 	return isInserted, ws, nil
 }
 
+// EnsureUserProfile creates a minimal user_agent_profiles row if not exists.
+// Used when admin manually adds a contact as an agent instance via the UI.
+func (s *PGAgentStore) EnsureUserProfile(ctx context.Context, agentID uuid.UUID, userID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO user_agent_profiles (agent_id, user_id, first_seen_at, last_seen_at)
+		VALUES ($1, $2, NOW(), NOW())
+		ON CONFLICT (agent_id, user_id) DO NOTHING
+	`, agentID, userID)
+	return err
+}
+
 // --- User Instances ---
 
 func (s *PGAgentStore) ListUserInstances(ctx context.Context, agentID uuid.UUID) ([]store.UserInstanceData, error) {

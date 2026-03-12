@@ -160,6 +160,7 @@ export function AgentFilesTab({
           canEdit={canEdit}
           onSave={handleSave}
           headerActions={aiActions || undefined}
+          contactSearchEnabled={isPredefined}
         />
       </div>
 

@@ -12,7 +12,8 @@
     "agent": "Agent",
     "allAgents": "All agents",
     "scope": "Scope",
-    "allScope": "All (global + personal)"
+    "allScope": "All (global + personal)",
+    "selectAgent": "Select an agent"
   },
   "tabs": {
     "documents": "Documents",
@@ -85,6 +86,10 @@
     "path": "Path:"
   },
   "kg": {
+    "pageTitle": "Knowledge Graph",
+    "pageDescription": "Explore entities and relationships extracted from agent memory.",
+    "selectAgentTitle": "Select an agent",
+    "selectAgentDescription": "Choose an agent to view its knowledge graph.",
     "emptyTitle": "No entities",
     "emptyDescription": "No knowledge graph entities for this agent yet.",
     "emptySearchDescription": "No entities match your search.",

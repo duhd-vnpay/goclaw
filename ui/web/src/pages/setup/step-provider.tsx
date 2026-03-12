@@ -35,6 +35,8 @@ export function StepProvider({ onComplete }: StepProviderProps) {
   const [error, setError] = useState("");
 
   const isCLI = providerType === "claude_cli";
+  // Local Ollama uses no API key — the server accepts any non-empty Bearer value internally
+  const isOllama = providerType === "ollama";
 
   const handleTypeChange = (value: string) => {
     setProviderType(value);
@@ -53,7 +55,7 @@ export function StepProvider({ onComplete }: StepProviderProps) {
   );
 
   const handleCreate = async () => {
-    if (!isCLI && !apiKey.trim()) { setError(t("provider.errors.apiKeyRequired")); return; }
+    if (!isCLI && !isOllama && !apiKey.trim()) { setError(t("provider.errors.apiKeyRequired")); return; }
     setLoading(true);
     setError("");
     try {
@@ -61,7 +63,7 @@ export function StepProvider({ onComplete }: StepProviderProps) {
         name: name.trim(),
         provider_type: providerType,
         api_base: apiBase.trim() || undefined,
-        api_key: isCLI ? undefined : apiKey.trim(),
+        api_key: isCLI || isOllama ? undefined : apiKey.trim(),
         enabled: true,
       }) as ProviderData;
       onComplete(provider);
@@ -143,7 +145,7 @@ export function StepProvider({ onComplete }: StepProviderProps) {
           {error && <p className="text-sm text-destructive">{error}</p>}
 
           <div className="flex justify-end">
-            <Button onClick={handleCreate} disabled={loading || (!isCLI && !apiKey.trim())}>
+            <Button onClick={handleCreate} disabled={loading || (!isCLI && !isOllama && !apiKey.trim())}>
               {loading ? t("provider.creating") : t("provider.create")}
             </Button>
           </div>

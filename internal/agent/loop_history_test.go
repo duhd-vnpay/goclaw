@@ -93,7 +93,7 @@ func TestLimitHistoryTurns_LimitExceedsTotal(t *testing.T) {
 }
 
 func TestSanitizeHistory_Empty(t *testing.T) {
-	got := sanitizeHistory(nil)
+	got, _ := sanitizeHistory(nil)
 	if len(got) != 0 {
 		t.Errorf("expected empty, got %d", len(got))
 	}
@@ -106,7 +106,7 @@ func TestSanitizeHistory_DropsLeadingOrphanedTools(t *testing.T) {
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi"},
 	}
-	got := sanitizeHistory(msgs)
+	got, _ := sanitizeHistory(msgs)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 messages, got %d", len(got))
 	}
@@ -126,7 +126,7 @@ func TestSanitizeHistory_MatchesToolResults(t *testing.T) {
 		{Role: "tool", Content: "written", ToolCallID: "tc2"},
 		{Role: "assistant", Content: "done"},
 	}
-	got := sanitizeHistory(msgs)
+	got, _ := sanitizeHistory(msgs)
 	if len(got) != 5 {
 		t.Fatalf("expected 5, got %d", len(got))
 	}
@@ -143,7 +143,7 @@ func TestSanitizeHistory_SynthesizesMissingToolResult(t *testing.T) {
 		// tc2 is missing
 		{Role: "user", Content: "next"},
 	}
-	got := sanitizeHistory(msgs)
+	got, _ := sanitizeHistory(msgs)
 
 	// user + assistant + tc1 result + synthesized tc2 result + user
 	if len(got) != 5 {
@@ -175,7 +175,7 @@ func TestSanitizeHistory_DropsMismatchedToolResult(t *testing.T) {
 		{Role: "tool", Content: "stray", ToolCallID: "unknown_id"},
 		{Role: "user", Content: "next"},
 	}
-	got := sanitizeHistory(msgs)
+	got, _ := sanitizeHistory(msgs)
 
 	// The stray tool message should be dropped, tc1 result kept
 	for _, m := range got {
@@ -192,7 +192,7 @@ func TestSanitizeHistory_DropsOrphanedToolMidHistory(t *testing.T) {
 		{Role: "tool", Content: "orphan mid", ToolCallID: "tc_orphan"},
 		{Role: "user", Content: "bye"},
 	}
-	got := sanitizeHistory(msgs)
+	got, _ := sanitizeHistory(msgs)
 
 	for _, m := range got {
 		if m.ToolCallID == "tc_orphan" {

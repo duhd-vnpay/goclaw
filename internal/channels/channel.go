@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
 // InternalChannels are system channels excluded from outbound dispatch.
@@ -134,12 +135,13 @@ type ReactionChannel interface {
 // BaseChannel provides shared functionality for all channel implementations.
 // Channel implementations should embed this struct.
 type BaseChannel struct {
-	name        string
-	channelType string // platform type; defaults to name if unset
-	bus         *bus.MessageBus
-	running     bool
-	allowList   []string
-	agentID     string // for DB instances: routes to specific agent (empty = use resolveAgentRoute)
+	name             string
+	channelType      string // platform type; defaults to name if unset
+	bus              *bus.MessageBus
+	running          bool
+	allowList        []string
+	agentID          string                 // for DB instances: routes to specific agent (empty = use resolveAgentRoute)
+	contactCollector *store.ContactCollector // optional: auto-collect contacts from channel messages
 }
 
 // NewBaseChannel creates a new BaseChannel with the given parameters.
@@ -173,6 +175,12 @@ func (c *BaseChannel) AgentID() string { return c.agentID }
 
 // SetAgentID sets the explicit agent ID for routing (used by InstanceLoader for DB instances).
 func (c *BaseChannel) SetAgentID(id string) { c.agentID = id }
+
+// SetContactCollector sets the contact collector for auto-collecting contacts from messages.
+func (c *BaseChannel) SetContactCollector(cc *store.ContactCollector) { c.contactCollector = cc }
+
+// ContactCollector returns the contact collector (may be nil).
+func (c *BaseChannel) ContactCollector() *store.ContactCollector { return c.contactCollector }
 
 // IsRunning returns whether the channel is running.
 func (c *BaseChannel) IsRunning() bool { return c.running }
@@ -306,6 +314,13 @@ func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []st
 	}
 
 	c.bus.PublishInbound(msg)
+}
+
+// PendingCompactable is optionally implemented by channels that have a PendingHistory
+// supporting LLM-based compaction. InstanceLoader uses this to wire compaction config
+// after channel creation.
+type PendingCompactable interface {
+	SetPendingCompaction(cfg *CompactionConfig)
 }
 
 // Truncate shortens a string to maxLen, appending "..." if truncated.

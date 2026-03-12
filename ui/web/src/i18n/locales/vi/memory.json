@@ -12,7 +12,8 @@
     "agent": "Agent",
     "allAgents": "Tất cả agent",
     "scope": "Phạm vi",
-    "allScope": "Tất cả (toàn cục + cá nhân)"
+    "allScope": "Tất cả (toàn cục + cá nhân)",
+    "selectAgent": "Chọn agent"
   },
   "tabs": {
     "documents": "Tài liệu",
@@ -85,6 +86,10 @@
     "path": "Đường dẫn:"
   },
   "kg": {
+    "pageTitle": "Knowledge Graph",
+    "pageDescription": "Khám phá các thực thể và quan hệ được trích xuất từ bộ nhớ agent.",
+    "selectAgentTitle": "Chọn agent",
+    "selectAgentDescription": "Chọn agent để xem đồ thị tri thức.",
     "emptyTitle": "Không có thực thể",
     "emptyDescription": "Chưa có thực thể đồ thị tri thức nào cho agent này.",
     "emptySearchDescription": "Không có thực thể nào khớp với tìm kiếm của bạn.",

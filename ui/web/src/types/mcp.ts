@@ -12,6 +12,7 @@ export interface MCPServerData {
   timeout_sec: number;
   enabled: boolean;
   created_by: string;
+  agent_count?: number;
   created_at: string;
   updated_at: string;
 }

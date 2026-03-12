@@ -1,5 +1,5 @@
 {
-  "title": "节点",
+  "title": "Nodes",
   "description": "管理已配对设备和待处理配对请求",
   "emptyTitle": "没有设备",
   "emptyDescription": "没有已配对设备或待处理配对请求。",

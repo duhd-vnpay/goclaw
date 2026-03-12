@@ -38,7 +38,7 @@ deploy-*.sh
 docs/technical-diaries
 plans
 release-manifest.json
-k8s/
+k8s-*/*
 
 # Test credentials (never commit)
 tests/**/creds.json

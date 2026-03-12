@@ -291,6 +291,7 @@ func (m *Manager) TruncateHistory(key string, keepLast int) {
 	s.Updated = time.Now()
 }
 
+
 // Reset clears a session's history and summary.
 func (m *Manager) Reset(key string) {
 	m.mu.Lock()

@@ -93,6 +93,12 @@ func (h *MCPHandler) auth(next http.HandlerFunc) http.HandlerFunc {
 
 // --- Server CRUD ---
 
+// mcpServerWithCounts extends MCPServerData with agent grant count for list responses.
+type mcpServerWithCounts struct {
+	store.MCPServerData
+	AgentCount int `json:"agent_count"`
+}
+
 func (h *MCPHandler) handleListServers(w http.ResponseWriter, r *http.Request) {
 	servers, err := h.store.ListServers(r.Context())
 	if err != nil {
@@ -101,7 +107,15 @@ func (h *MCPHandler) handleListServers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": i18n.T(locale, i18n.MsgFailedToList, "servers")})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"servers": servers})
+
+	// Enrich with agent grant counts
+	counts, _ := h.store.CountAgentGrantsByServer(r.Context())
+	result := make([]mcpServerWithCounts, len(servers))
+	for i, srv := range servers {
+		result[i] = mcpServerWithCounts{MCPServerData: srv, AgentCount: counts[srv.ID]}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"servers": result})
 }
 
 func (h *MCPHandler) handleCreateServer(w http.ResponseWriter, r *http.Request) {

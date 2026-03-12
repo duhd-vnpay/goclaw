@@ -79,7 +79,7 @@
       "config": "Config",
       "credentials": "Credentials",
       "groups": "Groups",
-      "writers": "Writers"
+      "managers": "Managers"
     },
     "general": {
       "name": "Name",
@@ -107,44 +107,48 @@
       "noSchema": "No configuration schema for this channel type.",
       "saved": "Saved",
       "saveConfig": "Save Config",
-      "saving": "Saving..."
+      "saving": "Saving...",
+      "webhookUrlLabel": "Set this as your Lark app's Event Request URL:",
+      "copyPath": "Copy path"
     },
     "groups": {
       "saved": "Saved",
       "saveGroups": "Save Groups",
       "saving": "Saving..."
     },
-    "writers": {
-      "description": "Manage which users are allowed to write/edit files in group chats.",
+    "managers": {
+      "description": "Manage which users have manager permissions in group chats.",
       "groups": "Groups",
-      "noWriterGroups": "No writer groups",
-      "noWriterGroupsHint": "Use the form below to add writers to a group.",
-      "loadingWriters": "Loading writers...",
-      "noWriters": "No writers in this group.",
-      "writersCount": "{{count}} writer",
-      "writersCountPlural": "{{count}} writers",
+      "noManagerGroups": "No manager groups",
+      "noManagerGroupsHint": "Use the form below to add a manager to a group.",
+      "loadingManagers": "Loading managers...",
+      "noManagers": "No managers in this group.",
+      "managersCount": "{{count}} manager",
+      "managersCountPlural": "{{count}} managers",
+      "searchContacts": "Search contacts...",
+      "noResults": "No contacts found",
       "columns": {
         "userId": "User ID",
         "name": "Name",
         "username": "Username"
       },
       "addForm": {
-        "title": "Add Writer to New Group",
-        "hint": "Add a writer to a group that doesn't appear in the list above.",
+        "title": "Add Manager to New Group",
+        "hint": "Add a manager to a group that doesn't appear in the list above.",
         "groupId": "Group ID *",
         "groupIdPlaceholder": "e.g. group:telegram:-100123456",
         "userId": "User ID *",
-        "userIdPlaceholder": "e.g. 12345678",
+        "userIdPlaceholder": "Search or enter user ID",
         "displayName": "Display Name",
         "username": "Username",
         "optional": "Optional",
         "usernameWithout": "Optional (without @)",
         "adding": "Adding...",
-        "addWriter": "Add Writer",
+        "addManager": "Add Manager",
         "add": "Add",
         "errors": {
           "groupUserRequired": "Group ID and User ID are required",
-          "failedAdd": "Failed to add writer"
+          "failedAdd": "Failed to add manager"
         }
       }
     }

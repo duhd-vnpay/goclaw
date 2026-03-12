@@ -191,81 +191,14 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		content += message.Caption
 	}
 
-	// Process media (photos, audio, voice, documents)
-	mediaList := c.resolveMedia(ctx, message)
-
-	// When user replies to a message with media, also resolve media from the replied message.
-	// This re-downloads the file from Telegram so the agent can analyze it even if the
-	// original turn was compacted out of session history.
-	if message.ReplyToMessage != nil && len(mediaList) == 0 {
-		replyMedia := c.resolveMedia(ctx, message.ReplyToMessage)
-		if len(replyMedia) > 0 {
-			mediaList = append(mediaList, replyMedia...)
-			slog.Debug("telegram: resolved media from replied message",
-				"reply_msg_id", message.ReplyToMessage.MessageID,
-				"media_count", len(replyMedia),
-			)
-		}
-	}
-
-	var mediaFiles []bus.MediaFile
-
-	if len(mediaList) > 0 {
-		// First pass: process each media item.
-		// For audio/voice: attempt STT transcription so that buildMediaTags can embed the transcript.
-		// For documents: extract text content to append after the media tags.
-		// Note: buildMediaTags is called AFTER this loop so it picks up populated Transcript fields.
-		var extraContent string
-		for i := range mediaList {
-			m := &mediaList[i]
-
-			switch m.Type {
-			case "audio", "voice":
-				transcript, sttErr := c.transcribeAudio(ctx, m.FilePath)
-				if sttErr != nil {
-					slog.Warn("telegram: STT transcription failed, falling back to media placeholder",
-						"type", m.Type, "error", sttErr,
-					)
-				} else {
-					m.Transcript = transcript
-				}
-
-			case "document":
-				// Extract text content from documents
-				if m.FileName != "" && m.FilePath != "" {
-					docContent, err := extractDocumentContent(m.FilePath, m.FileName)
-					if err != nil {
-						slog.Warn("document extraction failed", "file", m.FileName, "error", err)
-					} else if docContent != "" {
-						extraContent += "\n\n" + docContent
-					}
-				}
-
-			case "video", "animation":
-				// Video files are handled by the read_video tool via MediaRef pipeline.
-			}
-
-			if m.FilePath != "" {
-				mediaFiles = append(mediaFiles, bus.MediaFile{
-					Path:     m.FilePath,
-					MimeType: m.ContentType,
-				})
-			}
-		}
-
-		// Build media tags AFTER the processing loop so transcript fields are populated.
-		mediaTags := buildMediaTags(mediaList)
-		if mediaTags != "" {
-			if content != "" {
-				content = mediaTags + "\n\n" + content
-			} else {
-				content = mediaTags
-			}
-		}
-
-		// Append any extra content accumulated during processing (doc text, video note, etc.)
-		if extraContent != "" {
-			content += extraContent
+	// Build lightweight media tags from message metadata (no download).
+	// Used for pending history recording and bot command handling.
+	// Actual media download + processing is deferred until after mention gating.
+	if tags := lightweightMediaTags(message); tags != "" {
+		if content != "" {
+			content = tags + "\n\n" + content
+		} else {
+			content = tags
 		}
 	}
 
@@ -318,6 +251,11 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 				MessageID: fmt.Sprintf("%d", message.MessageID),
 			}, c.historyLimit)
 
+			// Collect contact even when bot is not mentioned (cache prevents DB spam).
+			if cc := c.ContactCollector(); cc != nil {
+				cc.EnsureContact(ctx, c.Type(), c.Name(), userID, userID, user.FirstName, user.Username, "group")
+			}
+
 			slog.Debug("telegram group message recorded (no mention)",
 				"chat_id", chatID, "sender", senderLabel,
 			)
@@ -338,6 +276,72 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		}
 	}
 
+	// --- Media download (only when bot will process the message) ---
+	// Deferred until after mention + pairing gates to avoid downloading
+	// media for messages that only get recorded in pending history.
+	mediaList := c.resolveMedia(ctx, message)
+	if message.ReplyToMessage != nil && len(mediaList) == 0 {
+		replyMedia := c.resolveMedia(ctx, message.ReplyToMessage)
+		if len(replyMedia) > 0 {
+			mediaList = append(mediaList, replyMedia...)
+			slog.Debug("telegram: resolved media from replied message",
+				"reply_msg_id", message.ReplyToMessage.MessageID,
+				"media_count", len(replyMedia),
+			)
+		}
+	}
+
+	var mediaFiles []bus.MediaFile
+	if len(mediaList) > 0 {
+		var extraContent string
+		for i := range mediaList {
+			m := &mediaList[i]
+			switch m.Type {
+			case "audio", "voice":
+				transcript, sttErr := c.transcribeAudio(ctx, m.FilePath)
+				if sttErr != nil {
+					slog.Warn("telegram: STT transcription failed",
+						"type", m.Type, "error", sttErr)
+				} else {
+					m.Transcript = transcript
+				}
+			case "document":
+				if m.FileName != "" && m.FilePath != "" {
+					docContent, err := extractDocumentContent(m.FilePath, m.FileName)
+					if err != nil {
+						slog.Warn("document extraction failed", "file", m.FileName, "error", err)
+					} else if docContent != "" {
+						extraContent += "\n\n" + docContent
+					}
+				}
+			case "video", "animation":
+				// Handled by read_video tool via MediaRef pipeline.
+			}
+			if m.FilePath != "" {
+				mediaFiles = append(mediaFiles, bus.MediaFile{
+					Path:     m.FilePath,
+					MimeType: m.ContentType,
+				})
+			}
+		}
+
+		// Replace lightweight media tags with full tags (includes transcripts).
+		fullTags := buildMediaTags(mediaList)
+		lightTags := lightweightMediaTags(message)
+		if lightTags != "" && fullTags != "" {
+			content = strings.Replace(content, lightTags, fullTags, 1)
+		} else if fullTags != "" {
+			if content != "" {
+				content = fullTags + "\n\n" + content
+			} else {
+				content = fullTags
+			}
+		}
+		if extraContent != "" {
+			content += extraContent
+		}
+	}
+
 	slog.Debug("telegram message received",
 		"sender_id", senderID,
 		"chat_id", fmt.Sprintf("%d", chatID),
@@ -354,6 +358,9 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		} else {
 			finalContent = annotated
 		}
+	} else {
+		// DM: annotate with sender identity so the agent knows who is messaging.
+		finalContent = fmt.Sprintf("[From: %s]\n%s", senderLabel, content)
 	}
 
 	// Send typing indicator with keepalive + TTL safety net.

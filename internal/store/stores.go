@@ -22,5 +22,8 @@ type Stores struct {
 	BuiltinTools     BuiltinToolStore
 	PendingMessages  PendingMessageStore
 	KnowledgeGraph   KnowledgeGraphStore
+	Contacts         ContactStore
+	Activity         ActivityStore
+	Snapshots        SnapshotStore
 	Party            PartyStore
 }

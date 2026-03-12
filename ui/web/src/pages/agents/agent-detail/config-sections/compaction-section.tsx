@@ -2,37 +2,26 @@ import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import type { CompactionConfig } from "@/types/agent";
-import { ConfigSection, InfoLabel, numOrUndef } from "./config-section";
+import { InfoLabel, numOrUndef } from "./config-section";
 
 interface CompactionSectionProps {
-  enabled: boolean;
   value: CompactionConfig;
-  onToggle: (v: boolean) => void;
   onChange: (v: CompactionConfig) => void;
 }
 
-export function CompactionSection({ enabled, value, onToggle, onChange }: CompactionSectionProps) {
+export function CompactionSection({ value, onChange }: CompactionSectionProps) {
   const { t } = useTranslation("agents");
   const s = "configSections.compaction";
   return (
-    <ConfigSection
-      title={t(`${s}.title`)}
-      description={t(`${s}.description`)}
-      enabled={enabled}
-      onToggle={onToggle}
-    >
+    <section className="space-y-3">
+      <div>
+        <h3 className="text-sm font-medium">{t(`${s}.title`)}</h3>
+        <p className="text-xs text-muted-foreground">{t(`${s}.description`)}</p>
+      </div>
+      <div className="rounded-lg border p-3 space-y-4 sm:p-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <InfoLabel tip="Minimum tokens reserved for the LLM response. Higher values give more room for output but reduce available context for history.">{t(`${s}.reserveTokensFloor`)}</InfoLabel>
-          <Input
-            type="number"
-            placeholder="20000"
-            value={value.reserveTokensFloor ?? ""}
-            onChange={(e) => onChange({ ...value, reserveTokensFloor: numOrUndef(e.target.value) })}
-          />
-        </div>
-        <div className="space-y-2">
-          <InfoLabel tip="Maximum fraction of the context window used for conversation history before compaction triggers (e.g. 0.75 = 75%).">{t(`${s}.maxHistoryShare`)}</InfoLabel>
+          <InfoLabel tip={t(`${s}.maxHistoryShareTip`)}>{t(`${s}.maxHistoryShare`)}</InfoLabel>
           <Input
             type="number"
             step="0.05"
@@ -41,10 +30,8 @@ export function CompactionSection({ enabled, value, onToggle, onChange }: Compac
             onChange={(e) => onChange({ ...value, maxHistoryShare: numOrUndef(e.target.value) })}
           />
         </div>
-      </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <InfoLabel tip="Minimum number of messages in history before compaction can trigger, regardless of token usage.">{t(`${s}.minMessages`)}</InfoLabel>
+          <InfoLabel tip={t(`${s}.minMessagesTip`)}>{t(`${s}.minMessages`)}</InfoLabel>
           <Input
             type="number"
             placeholder="50"
@@ -52,8 +39,10 @@ export function CompactionSection({ enabled, value, onToggle, onChange }: Compac
             onChange={(e) => onChange({ ...value, minMessages: numOrUndef(e.target.value) })}
           />
         </div>
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
-          <InfoLabel tip="Number of recent messages to preserve after compaction. The rest is replaced by a summary.">{t(`${s}.keepLastMessages`)}</InfoLabel>
+          <InfoLabel tip={t(`${s}.keepLastMessagesTip`)}>{t(`${s}.keepLastMessages`)}</InfoLabel>
           <Input
             type="number"
             placeholder="4"
@@ -62,37 +51,16 @@ export function CompactionSection({ enabled, value, onToggle, onChange }: Compac
           />
         </div>
       </div>
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <Switch
-            checked={value.memoryFlush?.enabled ?? false}
-            onCheckedChange={(v) =>
-              onChange({ ...value, memoryFlush: { ...value.memoryFlush, enabled: v } })
-            }
-          />
-          <InfoLabel tip="When enabled, compacted history is also saved to long-term memory for future retrieval.">{t(`${s}.memoryFlush`)}</InfoLabel>
-        </div>
-        {value.memoryFlush?.enabled && (
-          <div className="space-y-2 pl-6">
-            <InfoLabel tip="Token count threshold that triggers memory flush. When summary exceeds this, older memories are flushed to storage.">{t(`${s}.softThreshold`)}</InfoLabel>
-            <Input
-              type="number"
-              placeholder="4000"
-              value={value.memoryFlush?.softThresholdTokens ?? ""}
-              onChange={(e) =>
-                onChange({
-                  ...value,
-                  memoryFlush: {
-                    ...value.memoryFlush,
-                    enabled: true,
-                    softThresholdTokens: numOrUndef(e.target.value),
-                  },
-                })
-              }
-            />
-          </div>
-        )}
+      <div className="flex items-center gap-2">
+        <Switch
+          checked={value.memoryFlush?.enabled ?? true}
+          onCheckedChange={(v) =>
+            onChange({ ...value, memoryFlush: { ...value.memoryFlush, enabled: v } })
+          }
+        />
+        <InfoLabel tip={t(`${s}.memoryFlushTip`)}>{t(`${s}.memoryFlush`)}</InfoLabel>
       </div>
-    </ConfigSection>
+      </div>
+    </section>
   );
 }

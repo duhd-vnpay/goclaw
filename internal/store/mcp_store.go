@@ -96,6 +96,9 @@ type MCPServerStore interface {
 	GrantToUser(ctx context.Context, g *MCPUserGrant) error
 	RevokeFromUser(ctx context.Context, serverID uuid.UUID, userID string) error
 
+	// Counts: agent grant counts per server (for listing UI)
+	CountAgentGrantsByServer(ctx context.Context) (map[uuid.UUID]int, error)
+
 	// Resolution: all accessible MCP servers + tool filters for agent+user
 	ListAccessible(ctx context.Context, agentID uuid.UUID, userID string) ([]MCPAccessInfo, error)
 

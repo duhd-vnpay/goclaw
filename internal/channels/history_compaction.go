@@ -17,12 +17,14 @@ import (
 type CompactionConfig struct {
 	Threshold  int                // trigger compaction when entries exceed this (default 50)
 	KeepRecent int                // keep this many recent raw messages (default 15)
+	MaxTokens  int                // max output tokens for summarization (default 4096)
 	Provider   providers.Provider // LLM provider for summarization
 	Model      string             // model to use for summarization
 }
 
 // MaybeCompact checks if compaction is needed for a history key and triggers it in background.
 // Called from Record() after appending. Thread-safe via sync.Map compaction guard.
+// Uses DB count (not RAM count) to correctly detect threshold after server restarts.
 func (ph *PendingHistory) MaybeCompact(historyKey string, currentCount int, cfg *CompactionConfig) {
 	if ph.store == nil || cfg == nil || cfg.Provider == nil {
 		return
@@ -31,9 +33,18 @@ func (ph *PendingHistory) MaybeCompact(historyKey string, currentCount int, cfg 
 	if threshold <= 0 {
 		threshold = DefaultGroupHistoryLimit
 	}
+
+	// RAM count may be stale after restart (LoadFromDB doesn't warm full history).
+	// If RAM says below threshold, ask DB for the real count.
 	if currentCount <= threshold {
-		return
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		dbCount, err := ph.store.CountByKey(ctx, ph.channelName, historyKey)
+		if err != nil || dbCount <= threshold {
+			return
+		}
 	}
+
 	// Guard: only one compaction per key at a time
 	if _, loaded := ph.compacting.LoadOrStore(historyKey, true); loaded {
 		return
@@ -44,9 +55,12 @@ func (ph *PendingHistory) MaybeCompact(historyKey string, currentCount int, cfg 
 // CompactGroup performs LLM-based compaction on a pending message group.
 // Reused by both auto-compact (channel) and HTTP compact endpoint.
 // Returns the number of entries remaining after compaction.
-func CompactGroup(ctx context.Context, s store.PendingMessageStore, channelName, historyKey string, provider providers.Provider, model string, keepRecent int) (int, error) {
+func CompactGroup(ctx context.Context, s store.PendingMessageStore, channelName, historyKey string, provider providers.Provider, model string, keepRecent, maxTokens int) (int, error) {
 	if keepRecent <= 0 {
 		keepRecent = 15
+	}
+	if maxTokens <= 0 {
+		maxTokens = 4096
 	}
 
 	// Step 1: Read entries from DB
@@ -86,7 +100,7 @@ func CompactGroup(ctx context.Context, s store.PendingMessageStore, channelName,
 			Content: "Summarize these group chat messages concisely, preserving key topics, decisions, names, and important context:\n\n" + sb.String(),
 		}},
 		Model:   model,
-		Options: map[string]any{"max_tokens": 512, "temperature": 0.3},
+		Options: map[string]any{"max_tokens": maxTokens, "temperature": 0.3},
 	})
 	if err != nil {
 		return 0, fmt.Errorf("llm summarize: %w", err)
@@ -123,7 +137,7 @@ func (ph *PendingHistory) runCompaction(historyKey string, cfg *CompactionConfig
 	// Force-flush buffer to ensure DB is consistent
 	ph.flushNow()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
 	// Check threshold from DB (may have been cleared since trigger)
@@ -140,7 +154,7 @@ func (ph *PendingHistory) runCompaction(historyKey string, cfg *CompactionConfig
 		return
 	}
 
-	_, err = CompactGroup(ctx, ph.store, ph.channelName, historyKey, cfg.Provider, cfg.Model, cfg.KeepRecent)
+	_, err = CompactGroup(ctx, ph.store, ph.channelName, historyKey, cfg.Provider, cfg.Model, cfg.KeepRecent, cfg.MaxTokens)
 	if err != nil {
 		slog.Warn("compaction.failed", "channel", ph.channelName, "key", historyKey, "error", err)
 		return

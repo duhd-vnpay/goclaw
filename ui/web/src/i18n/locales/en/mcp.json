@@ -11,6 +11,7 @@
     "name": "Name",
     "transport": "Transport",
     "tools": "Tools",
+    "agents": "Agents",
     "enabled": "Enabled",
     "createdBy": "Created By",
     "actions": "Actions"

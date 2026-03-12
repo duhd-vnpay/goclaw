@@ -17,9 +17,9 @@ export function useBootstrapStatus() {
     if (loading) return { needsSetup: false, currentStep: "complete" as SetupStep };
 
     // A provider is "configured" if enabled + has an API key set (masked as "***")
-    // Claude CLI and ChatGPT OAuth don't require API keys — check type instead
+    // Claude CLI, ChatGPT OAuth, and local Ollama don't require API keys — check type instead
     const hasProvider = providers.some((p) => p.enabled &&
-      (p.api_key === "***" || p.provider_type === "claude_cli" || p.provider_type === "chatgpt_oauth"));
+      (p.api_key === "***" || p.provider_type === "claude_cli" || p.provider_type === "chatgpt_oauth" || p.provider_type === "ollama"));
     const hasAgent = agents.length > 0;
 
     if (!hasProvider) return { needsSetup: true, currentStep: 1 as SetupStep };

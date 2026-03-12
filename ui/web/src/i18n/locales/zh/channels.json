@@ -79,7 +79,7 @@
       "config": "配置",
       "credentials": "凭据",
       "groups": "群组",
-      "writers": "写入权限"
+      "managers": "管理员"
     },
     "general": {
       "name": "名称",
@@ -107,44 +107,48 @@
       "noSchema": "此Channel类型没有配置模式。",
       "saved": "已保存",
       "saveConfig": "保存配置",
-      "saving": "保存中..."
+      "saving": "保存中...",
+      "webhookUrlLabel": "将此URL设置为Lark应用的事件请求URL：",
+      "copyPath": "复制路径"
     },
     "groups": {
       "saved": "已保存",
       "saveGroups": "保存群组",
       "saving": "保存中..."
     },
-    "writers": {
-      "description": "管理允许在群组聊天中写入/编辑文件的用户。",
+    "managers": {
+      "description": "管理群组聊天中具有管理员权限的用户。",
       "groups": "群组",
-      "noWriterGroups": "暂无写入权限群组",
-      "noWriterGroupsHint": "使用下方表单将写入权限添加到群组。",
-      "loadingWriters": "正在加载写入者...",
-      "noWriters": "此群组中没有写入者。",
-      "writersCount": "{{count}} 位写入者",
-      "writersCountPlural": "{{count}} 位写入者",
+      "noManagerGroups": "暂无管理员群组",
+      "noManagerGroupsHint": "使用下方表单将管理员添加到群组。",
+      "loadingManagers": "正在加载管理员...",
+      "noManagers": "此群组中没有管理员。",
+      "managersCount": "{{count}} 位管理员",
+      "managersCountPlural": "{{count}} 位管理员",
+      "searchContacts": "搜索联系人...",
+      "noResults": "未找到联系人",
       "columns": {
         "userId": "用户 ID",
         "name": "名称",
         "username": "用户名"
       },
       "addForm": {
-        "title": "将写入者添加到新群组",
-        "hint": "将写入者添加到上方列表中未出现的群组。",
+        "title": "将管理员添加到新群组",
+        "hint": "将管理员添加到上方列表中未出现的群组。",
         "groupId": "群组 ID *",
         "groupIdPlaceholder": "例如 group:telegram:-100123456",
         "userId": "用户 ID *",
-        "userIdPlaceholder": "例如 12345678",
+        "userIdPlaceholder": "搜索或输入用户 ID",
         "displayName": "显示名称",
         "username": "用户名",
         "optional": "可选",
         "usernameWithout": "可选（不含 @）",
         "adding": "添加中...",
-        "addWriter": "添加写入者",
+        "addManager": "添加管理员",
         "add": "添加",
         "errors": {
           "groupUserRequired": "群组 ID 和用户 ID 为必填项",
-          "failedAdd": "添加写入者失败"
+          "failedAdd": "添加管理员失败"
         }
       }
     }

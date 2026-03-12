@@ -28,6 +28,9 @@ func wireHTTP(stores *store.Stores, token string, msgBus *bus.MessageBus, toolsR
 			summoner = httpapi.NewAgentSummoner(stores.Agents, providerReg, msgBus)
 		}
 		agentsH = httpapi.NewAgentsHandler(stores.Agents, token, msgBus, summoner, isOwner)
+		if stores.Activity != nil {
+			agentsH.SetActivityStore(stores.Activity)
+		}
 	}
 
 	if stores != nil && stores.Skills != nil {
@@ -52,7 +55,7 @@ func wireHTTP(stores *store.Stores, token string, msgBus *bus.MessageBus, toolsR
 	}
 
 	if stores != nil && stores.ChannelInstances != nil {
-		channelInstancesH = httpapi.NewChannelInstancesHandler(stores.ChannelInstances, stores.Agents, token, msgBus)
+		channelInstancesH = httpapi.NewChannelInstancesHandler(stores.ChannelInstances, stores.Agents, stores.Contacts, token, msgBus)
 	}
 
 	if stores != nil && stores.Providers != nil {
@@ -71,7 +74,7 @@ func wireHTTP(stores *store.Stores, token string, msgBus *bus.MessageBus, toolsR
 	}
 
 	if stores != nil && stores.PendingMessages != nil {
-		pendingMessagesH = httpapi.NewPendingMessagesHandler(stores.PendingMessages, token, providerReg)
+		pendingMessagesH = httpapi.NewPendingMessagesHandler(stores.PendingMessages, stores.Agents, token, providerReg)
 	}
 
 	return agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH, delegationsH, builtinToolsH, pendingMessagesH

@@ -38,7 +38,6 @@ export function AgentConfigTab({ agent, onUpdate }: AgentConfigTabProps) {
   const [toolsEnabled, setToolsEnabled] = useState(agent.tools_config != null);
   const [tools, setTools] = useState<ToolPolicyConfig>(agent.tools_config ?? {});
 
-  const [compEnabled, setCompEnabled] = useState(agent.compaction_config != null);
   const [comp, setComp] = useState<CompactionConfig>(agent.compaction_config ?? {});
 
   const [pruneEnabled, setPruneEnabled] = useState(agent.context_pruning != null);
@@ -78,8 +77,10 @@ export function AgentConfigTab({ agent, onUpdate }: AgentConfigTabProps) {
     try {
       const updates: Record<string, unknown> = {
         subagents_config: subEnabled ? sub : null,
-        tools_config: toolsEnabled ? tools : {},
-        compaction_config: compEnabled ? comp : null,
+        tools_config: toolsEnabled
+          ? { profile: tools.profile, allow: tools.allow, deny: tools.deny, alsoAllow: tools.alsoAllow, byProvider: tools.byProvider }
+          : {},
+        compaction_config: comp,
         context_pruning: pruneEnabled ? prune : null,
         sandbox_config: sbEnabled ? sb : null,
         memory_config: memEnabled ? mem : null,
@@ -146,9 +147,7 @@ export function AgentConfigTab({ agent, onUpdate }: AgentConfigTabProps) {
       />
       <div className="space-y-4">
         <CompactionSection
-          enabled={compEnabled}
           value={comp}
-          onToggle={(v: boolean) => { setCompEnabled(v); if (!v) setComp({}); }}
           onChange={setComp}
         />
         <ContextPruningSection

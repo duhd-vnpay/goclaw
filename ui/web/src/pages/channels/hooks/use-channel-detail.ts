@@ -3,13 +3,16 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useHttp } from "@/hooks/use-ws";
 import { queryKeys } from "@/lib/query-keys";
 import type { ChannelInstanceData } from "@/types/channel";
+import type { ChannelContact } from "@/types/contact";
 
-export interface GroupWriterGroupInfo {
+export type { ChannelContact };
+
+export interface GroupManagerGroupInfo {
   group_id: string;
   writer_count: number;
 }
 
-export interface GroupFileWriterData {
+export interface GroupManagerData {
   user_id: string;
   display_name?: string;
   username?: string;
@@ -43,26 +46,26 @@ export function useChannelDetail(instanceId: string | undefined) {
     [instanceId, http, invalidate],
   );
 
-  // Writers API
-  const listWriterGroups = useCallback(
-    async (): Promise<GroupWriterGroupInfo[]> => {
+  // Managers API (backend routes still use /writers paths)
+  const listManagerGroups = useCallback(
+    async (): Promise<GroupManagerGroupInfo[]> => {
       if (!instanceId) return [];
-      const res = await http.get<{ groups: GroupWriterGroupInfo[] }>(`/v1/channels/instances/${instanceId}/writers/groups`);
+      const res = await http.get<{ groups: GroupManagerGroupInfo[] }>(`/v1/channels/instances/${instanceId}/writers/groups`);
       return res.groups ?? [];
     },
     [instanceId, http],
   );
 
-  const listWriters = useCallback(
-    async (groupId: string): Promise<GroupFileWriterData[]> => {
+  const listManagers = useCallback(
+    async (groupId: string): Promise<GroupManagerData[]> => {
       if (!instanceId) return [];
-      const res = await http.get<{ writers: GroupFileWriterData[] }>(`/v1/channels/instances/${instanceId}/writers`, { group_id: groupId });
+      const res = await http.get<{ writers: GroupManagerData[] }>(`/v1/channels/instances/${instanceId}/writers`, { group_id: groupId });
       return res.writers ?? [];
     },
     [instanceId, http],
   );
 
-  const addWriter = useCallback(
+  const addManager = useCallback(
     async (groupId: string, userId: string, displayName?: string, username?: string) => {
       if (!instanceId) return;
       await http.post(`/v1/channels/instances/${instanceId}/writers`, {
@@ -75,7 +78,7 @@ export function useChannelDetail(instanceId: string | undefined) {
     [instanceId, http],
   );
 
-  const removeWriter = useCallback(
+  const removeManager = useCallback(
     async (groupId: string, userId: string) => {
       if (!instanceId) return;
       await http.delete(`/v1/channels/instances/${instanceId}/writers/${userId}?group_id=${encodeURIComponent(groupId)}`);
@@ -83,14 +86,27 @@ export function useChannelDetail(instanceId: string | undefined) {
     [instanceId, http],
   );
 
+  const listContacts = useCallback(
+    async (search: string, channelType?: string): Promise<ChannelContact[]> => {
+      const params: Record<string, string> = {};
+      if (search) params.search = search;
+      if (channelType) params.channel_type = channelType;
+      params.limit = "20";
+      const res = await http.get<{ contacts: ChannelContact[] }>("/v1/contacts", params);
+      return res.contacts ?? [];
+    },
+    [http],
+  );
+
   return {
     instance,
     loading,
     updateInstance,
-    listWriterGroups,
-    listWriters,
-    addWriter,
-    removeWriter,
+    listManagerGroups,
+    listManagers,
+    addManager,
+    removeManager,
+    listContacts,
     refresh: invalidate,
   };
 }

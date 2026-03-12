@@ -11,6 +11,7 @@
     "name": "名称",
     "transport": "传输协议",
     "tools": "工具",
+    "agents": "代理",
     "enabled": "已启用",
     "createdBy": "创建者",
     "actions": "操作"

@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -259,7 +258,6 @@ func (c *Channel) handleImageMessage(msg *zaloMessage) {
 		"chat_id", chatID,
 		"photo_url", photoURL,
 		"has_media", len(media) > 0,
-		"downloaded", len(media) > 0 && !strings.HasPrefix(media[0], "http"),
 	)
 
 	metadata := map[string]string{
@@ -342,6 +340,7 @@ func (c *Channel) sendPairingReply(senderID, chatID string) {
 const maxMediaBytes = 10 * 1024 * 1024 // 10MB
 
 // downloadMedia fetches a photo from a Zalo CDN URL and saves it as a local temp file.
+// Zalo CDN URLs are auth-restricted and expire, so we must download immediately.
 func (c *Channel) downloadMedia(url string) (string, error) {
 	resp, err := c.client.Get(url)
 	if err != nil {
@@ -376,13 +375,12 @@ func (c *Channel) downloadMedia(url string) (string, error) {
 		os.Remove(f.Name())
 		return "", fmt.Errorf("write: %w", err)
 	}
+	if n == 0 {
+		os.Remove(f.Name())
+		return "", fmt.Errorf("empty response")
+	}
 
-	slog.Debug("zalo media downloaded",
-		"url", url[:min(len(url), 80)],
-		"path", filepath.Base(f.Name()),
-		"bytes", n,
-	)
-
+	slog.Debug("zalo media downloaded", "path", f.Name(), "size", n)
 	return f.Name(), nil
 }
 

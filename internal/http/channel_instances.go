@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -16,15 +17,16 @@ import (
 
 // ChannelInstancesHandler handles channel instance CRUD endpoints.
 type ChannelInstancesHandler struct {
-	store      store.ChannelInstanceStore
-	agentStore store.AgentStore
-	token      string
-	msgBus     *bus.MessageBus
+	store        store.ChannelInstanceStore
+	agentStore   store.AgentStore
+	contactStore store.ContactStore
+	token        string
+	msgBus       *bus.MessageBus
 }
 
 // NewChannelInstancesHandler creates a handler for channel instance management endpoints.
-func NewChannelInstancesHandler(s store.ChannelInstanceStore, agentStore store.AgentStore, token string, msgBus *bus.MessageBus) *ChannelInstancesHandler {
-	return &ChannelInstancesHandler{store: s, agentStore: agentStore, token: token, msgBus: msgBus}
+func NewChannelInstancesHandler(s store.ChannelInstanceStore, agentStore store.AgentStore, contactStore store.ContactStore, token string, msgBus *bus.MessageBus) *ChannelInstancesHandler {
+	return &ChannelInstancesHandler{store: s, agentStore: agentStore, contactStore: contactStore, token: token, msgBus: msgBus}
 }
 
 // RegisterRoutes registers all channel instance routes on the given mux.
@@ -34,6 +36,12 @@ func (h *ChannelInstancesHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/channels/instances/{id}", h.auth(h.handleGet))
 	mux.HandleFunc("PUT /v1/channels/instances/{id}", h.auth(h.handleUpdate))
 	mux.HandleFunc("DELETE /v1/channels/instances/{id}", h.auth(h.handleDelete))
+
+	// Channel contacts (global, not per-agent)
+	if h.contactStore != nil {
+		mux.HandleFunc("GET /v1/contacts", h.auth(h.handleListContacts))
+		mux.HandleFunc("GET /v1/contacts/resolve", h.auth(h.handleResolveContacts))
+	}
 
 	// Group file writers (nested under channel instances)
 	if h.agentStore != nil {
@@ -386,6 +394,81 @@ func (h *ChannelInstancesHandler) handleRemoveWriter(w http.ResponseWriter, r *h
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// --- Channel contacts ---
+
+func (h *ChannelInstancesHandler) handleListContacts(w http.ResponseWriter, r *http.Request) {
+	opts := store.ContactListOpts{
+		Limit:  50,
+		Offset: 0,
+	}
+
+	if v := r.URL.Query().Get("search"); v != "" {
+		opts.Search = v
+	}
+	if v := r.URL.Query().Get("channel_type"); v != "" {
+		opts.ChannelType = v
+	}
+	if v := r.URL.Query().Get("peer_kind"); v != "" {
+		opts.PeerKind = v
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			opts.Limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			opts.Offset = n
+		}
+	}
+
+	contacts, err := h.contactStore.ListContacts(r.Context(), opts)
+	if err != nil {
+		slog.Error("contacts.list", "error", err)
+		locale := store.LocaleFromContext(r.Context())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": i18n.T(locale, i18n.MsgFailedToList, "contacts")})
+		return
+	}
+	if contacts == nil {
+		contacts = []store.ChannelContact{}
+	}
+
+	total, countErr := h.contactStore.CountContacts(r.Context(), opts)
+	if countErr != nil {
+		slog.Warn("contacts.count", "error", countErr)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"contacts": contacts,
+		"total":    total,
+		"limit":    opts.Limit,
+		"offset":   opts.Offset,
+	})
+}
+
+func (h *ChannelInstancesHandler) handleResolveContacts(w http.ResponseWriter, r *http.Request) {
+	idsParam := r.URL.Query().Get("ids")
+	if idsParam == "" {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"contacts": map[string]any{}})
+		return
+	}
+
+	ids := strings.Split(idsParam, ",")
+	if len(ids) > 100 {
+		ids = ids[:100]
+	}
+
+	result, err := h.contactStore.GetContactsBySenderIDs(r.Context(), ids)
+	if err != nil {
+		slog.Error("contacts.resolve", "error", err)
+		locale := store.LocaleFromContext(r.Context())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": i18n.T(locale, i18n.MsgFailedToList, "contacts")})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"contacts": result})
 }
 
 // isValidChannelType checks if the channel type is supported.

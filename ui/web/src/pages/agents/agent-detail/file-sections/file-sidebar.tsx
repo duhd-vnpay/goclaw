@@ -54,14 +54,11 @@ export function FileSidebar({
             <button
               key={file.name}
               type="button"
-              onClick={() => !userScoped && onSelect(file.name)}
-              disabled={userScoped}
+              onClick={() => onSelect(file.name)}
               className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors ${
-                userScoped
-                  ? "cursor-not-allowed opacity-50"
-                  : active
-                    ? "bg-background text-foreground shadow-sm cursor-pointer"
-                    : "text-foreground hover:bg-background/60 cursor-pointer"
+                active
+                  ? "bg-background text-foreground shadow-sm cursor-pointer"
+                  : "text-foreground hover:bg-background/60 cursor-pointer"
               }`}
             >
               <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 self-start" />

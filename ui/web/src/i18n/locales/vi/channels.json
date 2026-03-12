@@ -79,7 +79,7 @@
       "config": "Cấu hình",
       "credentials": "Thông tin xác thực",
       "groups": "Nhóm",
-      "writers": "Người viết"
+      "managers": "Quản lý"
     },
     "general": {
       "name": "Tên",
@@ -107,44 +107,48 @@
       "noSchema": "Không có lược đồ cấu hình cho loại channel này.",
       "saved": "Đã lưu",
       "saveConfig": "Lưu cấu hình",
-      "saving": "Đang lưu..."
+      "saving": "Đang lưu...",
+      "webhookUrlLabel": "Đặt URL này làm Event Request URL cho ứng dụng Lark:",
+      "copyPath": "Sao chép đường dẫn"
     },
     "groups": {
       "saved": "Đã lưu",
       "saveGroups": "Lưu nhóm",
       "saving": "Đang lưu..."
     },
-    "writers": {
-      "description": "Quản lý người dùng được phép viết/chỉnh sửa tệp trong cuộc trò chuyện nhóm.",
+    "managers": {
+      "description": "Quản lý người dùng có quyền quản lý trong cuộc trò chuyện nhóm.",
       "groups": "Nhóm",
-      "noWriterGroups": "Không có nhóm người viết",
-      "noWriterGroupsHint": "Dùng biểu mẫu bên dưới để thêm người viết vào nhóm.",
-      "loadingWriters": "Đang tải người viết...",
-      "noWriters": "Không có người viết trong nhóm này.",
-      "writersCount": "{{count}} người viết",
-      "writersCountPlural": "{{count}} người viết",
+      "noManagerGroups": "Không có nhóm quản lý",
+      "noManagerGroupsHint": "Dùng biểu mẫu bên dưới để thêm quản lý viên vào nhóm.",
+      "loadingManagers": "Đang tải quản lý viên...",
+      "noManagers": "Không có quản lý viên trong nhóm này.",
+      "managersCount": "{{count}} quản lý viên",
+      "managersCountPlural": "{{count}} quản lý viên",
+      "searchContacts": "Tìm kiếm liên hệ...",
+      "noResults": "Không tìm thấy liên hệ",
       "columns": {
         "userId": "ID người dùng",
         "name": "Tên",
         "username": "Tên đăng nhập"
       },
       "addForm": {
-        "title": "Thêm người viết vào nhóm mới",
-        "hint": "Thêm người viết vào nhóm chưa xuất hiện trong danh sách trên.",
+        "title": "Thêm quản lý viên vào nhóm mới",
+        "hint": "Thêm quản lý viên vào nhóm chưa xuất hiện trong danh sách trên.",
         "groupId": "ID nhóm *",
         "groupIdPlaceholder": "vd: group:telegram:-100123456",
         "userId": "ID người dùng *",
-        "userIdPlaceholder": "vd: 12345678",
+        "userIdPlaceholder": "Tìm hoặc nhập ID người dùng",
         "displayName": "Tên hiển thị",
         "username": "Tên đăng nhập",
         "optional": "Tùy chọn",
         "usernameWithout": "Tùy chọn (không có @)",
         "adding": "Đang thêm...",
-        "addWriter": "Thêm người viết",
+        "addManager": "Thêm quản lý viên",
         "add": "Thêm",
         "errors": {
           "groupUserRequired": "ID nhóm và ID người dùng là bắt buộc",
-          "failedAdd": "Không thể thêm người viết"
+          "failedAdd": "Không thể thêm quản lý viên"
         }
       }
     }

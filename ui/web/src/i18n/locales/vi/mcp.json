@@ -11,6 +11,7 @@
     "name": "Tên",
     "transport": "Giao thức",
     "tools": "Công cụ",
+    "agents": "Agents",
     "enabled": "Bật",
     "createdBy": "Tạo bởi",
     "actions": "Thao tác"

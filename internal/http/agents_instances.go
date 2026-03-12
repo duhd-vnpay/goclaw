@@ -120,6 +120,12 @@ func (h *AgentsHandler) handleSetInstanceFile(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Ensure user profile exists (creates row if needed, e.g. admin adds contact manually).
+	if err := h.agents.EnsureUserProfile(r.Context(), id, instanceUserID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
 	if err := h.agents.SetUserContextFile(r.Context(), id, instanceUserID, fileName, payload.Content); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

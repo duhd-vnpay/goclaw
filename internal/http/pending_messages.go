@@ -16,12 +16,29 @@ import (
 // PendingMessagesHandler handles pending message HTTP endpoints.
 type PendingMessagesHandler struct {
 	store       store.PendingMessageStore
+	agentStore  store.AgentStore
 	token       string
 	providerReg *providers.Registry
+	keepRecent    int    // global keepRecent from config (0 = use default 15)
+	maxTokens     int    // max output tokens for LLM summarization (0 = use default)
+	cfgProvider   string // config-level provider override (empty = resolve from agent)
+	cfgModel      string // config-level model override (empty = resolve from agent)
 }
 
-func NewPendingMessagesHandler(s store.PendingMessageStore, token string, providerReg *providers.Registry) *PendingMessagesHandler {
-	return &PendingMessagesHandler{store: s, token: token, providerReg: providerReg}
+func NewPendingMessagesHandler(s store.PendingMessageStore, agentStore store.AgentStore, token string, providerReg *providers.Registry) *PendingMessagesHandler {
+	return &PendingMessagesHandler{store: s, agentStore: agentStore, token: token, providerReg: providerReg}
+}
+
+// SetKeepRecent sets the global keepRecent value from config.
+func (h *PendingMessagesHandler) SetKeepRecent(n int) { h.keepRecent = n }
+
+// SetMaxTokens sets the global maxTokens value from config.
+func (h *PendingMessagesHandler) SetMaxTokens(n int) { h.maxTokens = n }
+
+// SetProviderModel sets explicit provider/model from config.
+func (h *PendingMessagesHandler) SetProviderModel(provider, model string) {
+	h.cfgProvider = provider
+	h.cfgModel = model
 }
 
 func (h *PendingMessagesHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -121,8 +138,8 @@ func (h *PendingMessagesHandler) handleCompact(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Resolve an LLM provider for summarization
-	provider := h.resolveProvider()
+	// Resolve an LLM provider for summarization using the default agent's config
+	provider, model := h.resolveProviderAndModel()
 	if provider == nil {
 		// Fallback: hard delete if no provider available
 		slog.Warn("compact.no_provider", "channel", req.ChannelName, "key", req.HistoryKey)
@@ -134,30 +151,71 @@ func (h *PendingMessagesHandler) handleCompact(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
-	defer cancel()
-
-	remaining, err := channels.CompactGroup(ctx, h.store, req.ChannelName, req.HistoryKey, provider, provider.DefaultModel(), 15)
-	if err != nil {
-		slog.Warn("compact.failed", "channel", req.ChannelName, "key", req.HistoryKey, "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	// Run compaction in background so the HTTP response returns immediately.
+	// The long-running LLM call (30-120s) was blocking the response, which
+	// caused browser WebSocket connections to drop (pong timeout).
+	keepRecent := h.keepRecent
+	if keepRecent <= 0 {
+		keepRecent = 15
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "method": "summarized", "remaining": remaining})
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+		defer cancel()
+		remaining, err := channels.CompactGroup(ctx, h.store, req.ChannelName, req.HistoryKey, provider, model, keepRecent, h.maxTokens)
+		if err != nil {
+			slog.Warn("compact.failed", "channel", req.ChannelName, "key", req.HistoryKey, "error", err)
+		} else {
+			slog.Info("compact.done", "channel", req.ChannelName, "key", req.HistoryKey, "remaining", remaining)
+		}
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{"status": "accepted", "method": "summarizing"})
 }
 
-// resolveProvider returns the first available LLM provider, or nil.
-func (h *PendingMessagesHandler) resolveProvider() providers.Provider {
+// resolveProviderAndModel resolves the LLM provider+model for pending message compaction.
+// Priority: config provider/model > default agent's provider/model > first available provider.
+func (h *PendingMessagesHandler) resolveProviderAndModel() (providers.Provider, string) {
 	if h.providerReg == nil {
-		return nil
+		return nil, ""
 	}
-	names := h.providerReg.List()
-	if len(names) == 0 {
-		return nil
+
+	// Config-level provider/model override.
+	if h.cfgProvider != "" {
+		if p, err := h.providerReg.Get(h.cfgProvider); err == nil {
+			model := h.cfgModel
+			if model == "" {
+				model = p.DefaultModel()
+			}
+			if model != "" {
+				return p, model
+			}
+		}
 	}
-	p, err := h.providerReg.Get(names[0])
-	if err != nil {
-		return nil
+
+	// Fallback: default agent's provider+model.
+	if h.agentStore != nil {
+		if ag, err := h.agentStore.GetDefault(context.Background()); err == nil && ag.Provider != "" {
+			if p, err := h.providerReg.Get(ag.Provider); err == nil {
+				model := ag.Model
+				if model == "" {
+					model = p.DefaultModel()
+				}
+				if model != "" {
+					return p, model
+				}
+			}
+		}
 	}
-	return p
+
+	// Fallback: first provider with a valid default model
+	for _, name := range h.providerReg.List() {
+		p, err := h.providerReg.Get(name)
+		if err != nil {
+			continue
+		}
+		if p.DefaultModel() != "" {
+			return p, p.DefaultModel()
+		}
+	}
+	return nil, ""
 }

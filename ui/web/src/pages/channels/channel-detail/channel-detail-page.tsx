@@ -10,7 +10,7 @@ import { ChannelGeneralTab } from "./channel-general-tab";
 import { ChannelCredentialsTab } from "./channel-credentials-tab";
 import { ChannelConfigTab } from "./channel-config-tab";
 import { ChannelGroupsTab } from "./channel-groups-tab";
-import { ChannelWritersTab } from "./channel-writers-tab";
+import { ChannelManagersTab } from "./channel-managers-tab";
 import { DetailPageSkeleton } from "@/components/shared/loading-skeleton";
 import { channelTypeLabels } from "../channels-status-view";
 import { useChannels } from "../hooks/use-channels";
@@ -26,10 +26,11 @@ export function ChannelDetailPage({ instanceId, onBack }: ChannelDetailPageProps
     instance,
     loading,
     updateInstance,
-    listWriterGroups,
-    listWriters,
-    addWriter,
-    removeWriter,
+    listManagerGroups,
+    listManagers,
+    addManager,
+    removeManager,
+    listContacts,
   } = useChannelDetail(instanceId);
   const { agents } = useAgents();
   const { channels } = useChannels();
@@ -95,7 +96,7 @@ export function ChannelDetailPage({ instanceId, onBack }: ChannelDetailPageProps
             <TabsTrigger value="credentials">{t("detail.tabs.credentials")}</TabsTrigger>
             <TabsTrigger value="config">{t("detail.tabs.config")}</TabsTrigger>
             {isTelegram && <TabsTrigger value="groups">{t("detail.tabs.groups")}</TabsTrigger>}
-            <TabsTrigger value="writers">{t("detail.tabs.writers")}</TabsTrigger>
+            <TabsTrigger value="managers">{t("detail.tabs.managers")}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="general" className="mt-4">
@@ -129,12 +130,13 @@ export function ChannelDetailPage({ instanceId, onBack }: ChannelDetailPageProps
             </TabsContent>
           )}
 
-          <TabsContent value="writers" className="mt-4">
-            <ChannelWritersTab
-              listWriterGroups={listWriterGroups}
-              listWriters={listWriters}
-              addWriter={addWriter}
-              removeWriter={removeWriter}
+          <TabsContent value="managers" className="mt-4">
+            <ChannelManagersTab
+              listManagerGroups={listManagerGroups}
+              listManagers={listManagers}
+              addManager={addManager}
+              removeManager={removeManager}
+              listContacts={listContacts}
             />
           </TabsContent>
         </Tabs>

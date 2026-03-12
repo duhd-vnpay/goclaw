@@ -15,6 +15,7 @@ import (
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
+	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
@@ -76,6 +77,12 @@ type ResolverDeps struct {
 
 	// Persistent media storage for cross-turn image/document access
 	MediaStore *media.Store
+
+	// Model pricing for cost tracking
+	ModelPricing map[string]*config.ModelPricing
+
+	// Tracing store for budget enforcement queries
+	TracingStore store.TracingStore
 }
 
 // NewManagedResolver creates a ResolverFunc that builds Loops from DB agent data.
@@ -237,10 +244,12 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 		sandboxEnabled := deps.SandboxEnabled
 		sandboxContainerDir := deps.SandboxContainerDir
 		sandboxWorkspaceAccess := deps.SandboxWorkspaceAccess
+		var sandboxCfgOverride *sandbox.Config
 		if c := ag.ParseSandboxConfig(); c != nil {
 			resolved := c.ToSandboxConfig()
 			sandboxContainerDir = resolved.ContainerWorkdir()
 			sandboxWorkspaceAccess = string(resolved.WorkspaceAccess)
+			sandboxCfgOverride = &resolved
 		}
 
 		// Expand ~ in workspace path and ensure directory exists
@@ -323,7 +332,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			}
 		}
 
-		// Managed mode: filter skills by visibility + agent grants.
+		// Filter skills by visibility + agent grants.
 		// Only public skills and explicitly granted internal skills appear in the system prompt.
 		var skillAllowList []string
 		if deps.SkillAccessStore != nil {
@@ -339,6 +348,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			}
 		}
 
+		restrictVal := ag.RestrictToWorkspace
 		loop := NewLoop(LoopConfig{
 			ID:                     ag.AgentKey,
 			AgentUUID:              ag.ID,
@@ -348,6 +358,10 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			ContextWindow:          contextWindow,
 			MaxIterations:          maxIter,
 			Workspace:              workspace,
+			RestrictToWs:           &restrictVal,
+			SubagentsCfg:           ag.ParseSubagentsConfig(),
+			MemoryCfg:              ag.ParseMemoryConfig(),
+			SandboxCfg:             sandboxCfgOverride,
 			Bus:                    deps.Bus,
 			Sessions:               deps.Sessions,
 			Tools:                  toolsReg,
@@ -375,6 +389,9 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			GroupWriterCache:       deps.GroupWriterCache,
 			TeamStore:              deps.TeamStore,
 			MediaStore:             deps.MediaStore,
+			ModelPricing:           deps.ModelPricing,
+			BudgetMonthlyCents:     derefInt(ag.BudgetMonthlyCents),
+			TracingStore:           deps.TracingStore,
 		})
 
 		slog.Info("resolved agent from DB", "agent", agentKey, "model", ag.Model, "provider", ag.Provider)
@@ -398,5 +415,12 @@ func (r *Router) InvalidateAll() {
 	defer r.mu.Unlock()
 	r.agents = make(map[string]*agentEntry)
 	slog.Debug("invalidated all agent caches")
+}
+
+func derefInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 

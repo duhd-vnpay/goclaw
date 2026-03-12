@@ -55,6 +55,9 @@ type PendingMessageStore interface {
 	// CountAll returns the total number of pending messages across all groups.
 	CountAll(ctx context.Context) (int64, error)
 
+	// CountByKey returns the number of pending messages for a specific channel+historyKey.
+	CountByKey(ctx context.Context, channelName, historyKey string) (int, error)
+
 	// ResolveGroupTitles looks up chat_title from session metadata for each group.
 	// Returns a map of "channel_name:history_key" → title. Used only by the UI layer.
 	ResolveGroupTitles(ctx context.Context, groups []PendingMessageGroup) (map[string]string, error)

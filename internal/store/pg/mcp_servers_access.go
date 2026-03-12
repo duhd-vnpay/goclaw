@@ -86,6 +86,28 @@ func (s *PGMCPServerStore) ListServerGrants(ctx context.Context, serverID uuid.U
 	return result, nil
 }
 
+// --- Counts ---
+
+func (s *PGMCPServerStore) CountAgentGrantsByServer(ctx context.Context) (map[uuid.UUID]int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT server_id, COUNT(*) FROM mcp_agent_grants GROUP BY server_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[uuid.UUID]int)
+	for rows.Next() {
+		var serverID uuid.UUID
+		var count int
+		if err := rows.Scan(&serverID, &count); err != nil {
+			continue
+		}
+		result[serverID] = count
+	}
+	return result, nil
+}
+
 // --- User Grants ---
 
 func (s *PGMCPServerStore) GrantToUser(ctx context.Context, g *store.MCPUserGrant) error {

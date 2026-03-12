@@ -33,9 +33,6 @@ const ConfigPage = lazy(() =>
 const TracesPage = lazy(() =>
   import("@/pages/traces/traces-page").then((m) => ({ default: m.TracesPage })),
 );
-const UsagePage = lazy(() =>
-  import("@/pages/usage/usage-page").then((m) => ({ default: m.UsagePage })),
-);
 const ChannelsPage = lazy(() =>
   import("@/pages/channels/channels-page").then((m) => ({ default: m.ChannelsPage })),
 );
@@ -86,6 +83,15 @@ const MemoryPage = lazy(() =>
 );
 const PartyPage = lazy(() =>
   import("@/pages/party/party-page").then((m) => ({ default: m.PartyPage })),
+);
+const KnowledgeGraphPage = lazy(() =>
+  import("@/pages/knowledge-graph/knowledge-graph-page").then((m) => ({ default: m.KnowledgeGraphPage })),
+);
+const ContactsPage = lazy(() =>
+  import("@/pages/contacts/contacts-page").then((m) => ({ default: m.ContactsPage })),
+);
+const ActivityPage = lazy(() =>
+  import("@/pages/activity/activity-page").then((m) => ({ default: m.ActivityPage })),
 );
 
 function PageLoader() {
@@ -141,9 +147,11 @@ export function AppRoutes() {
           <Route path={ROUTES.TRACE_DETAIL} element={<TracesPage key="detail" />} />
           <Route path={ROUTES.EVENTS} element={<EventsPage />} />
           <Route path={ROUTES.DELEGATIONS} element={<DelegationsPage />} />
-          <Route path={ROUTES.USAGE} element={<UsagePage />} />
+          <Route path={ROUTES.USAGE} element={<Navigate to={ROUTES.OVERVIEW} replace />} />
+          <Route path={ROUTES.ACTIVITY} element={<ActivityPage />} />
           <Route path={ROUTES.CHANNELS} element={<ChannelsPage key="list" />} />
           <Route path={ROUTES.CHANNEL_DETAIL} element={<ChannelsPage key="detail" />} />
+          <Route path={ROUTES.CONTACTS} element={<ContactsPage />} />
           <Route path={ROUTES.APPROVALS} element={<ApprovalsPage />} />
           <Route path={ROUTES.NODES} element={<NodesPage />} />
           <Route path={ROUTES.LOGS} element={<LogsPage />} />
@@ -156,6 +164,7 @@ export function AppRoutes() {
           <Route path={ROUTES.PENDING_MESSAGES} element={<PendingMessagesPage />} />
           <Route path={ROUTES.MEMORY} element={<MemoryPage />} />
           <Route path={ROUTES.PARTY} element={<PartyPage />} />
+          <Route path={ROUTES.KNOWLEDGE_GRAPH} element={<KnowledgeGraphPage />} />
         </Route>
 
         {/* Catch-all → overview */}

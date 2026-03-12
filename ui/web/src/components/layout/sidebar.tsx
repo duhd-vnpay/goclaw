@@ -6,7 +6,6 @@ import {
   Zap,
   Clock,
   Activity,
-  BarChart3,
   Radio,
   Radar,
   Terminal,
@@ -14,16 +13,18 @@ import {
   ShieldCheck,
   Users,
   Link,
-  Wrench,
   Package,
   Plug,
   Volume2,
   Cpu,
   ArrowRightLeft,
+  ClipboardList,
   HardDrive,
   Inbox,
   Brain,
   PartyPopper,
+  Network,
+  Contact,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SidebarGroup } from "./sidebar-group";
@@ -72,38 +73,48 @@ export function Sidebar({ collapsed, onNavItemClick }: SidebarProps) {
         <SidebarGroup label={t("groups.core")} collapsed={collapsed}>
           <SidebarItem to={ROUTES.OVERVIEW} icon={LayoutDashboard} label={t("nav.overview")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.CHAT} icon={MessageSquare} label={t("nav.chat")} collapsed={collapsed} />
-        </SidebarGroup>
-
-        <SidebarGroup label={t("groups.management")} collapsed={collapsed}>
           <SidebarItem to={ROUTES.AGENTS} icon={Bot} label={t("nav.agents")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.TEAMS} icon={Users} label={t("nav.agentTeams")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.PARTY} icon={PartyPopper} label={t("nav.party")} collapsed={collapsed} />
+        </SidebarGroup>
+
+        <SidebarGroup label={t("groups.conversations")} collapsed={collapsed}>
           <SidebarItem to={ROUTES.SESSIONS} icon={History} label={t("nav.sessions")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.PENDING_MESSAGES} icon={Inbox} label={t("nav.pendingMessages")} collapsed={collapsed} />
+          <SidebarItem to={ROUTES.CONTACTS} icon={Contact} label={t("nav.contacts")} collapsed={collapsed} />
+        </SidebarGroup>
+
+        <SidebarGroup label={t("groups.connectivity")} collapsed={collapsed}>
           <SidebarItem to={ROUTES.CHANNELS} icon={Radio} label={t("nav.channels")} collapsed={collapsed} />
+          <SidebarItem to={ROUTES.NODES} icon={Link} label={t("nav.nodes")} collapsed={collapsed} badge={pendingCount} />
+        </SidebarGroup>
+
+        <SidebarGroup label={t("groups.capabilities")} collapsed={collapsed}>
           <SidebarItem to={ROUTES.SKILLS} icon={Zap} label={t("nav.skills")} collapsed={collapsed} />
-          <SidebarItem to={ROUTES.CRON} icon={Clock} label={t("nav.cron")} collapsed={collapsed} />
-          <SidebarItem to={ROUTES.CUSTOM_TOOLS} icon={Wrench} label={t("nav.customTools")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.BUILTIN_TOOLS} icon={Package} label={t("nav.builtinTools")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.MCP} icon={Plug} label={t("nav.mcpServers")} collapsed={collapsed} />
+          <SidebarItem to={ROUTES.TTS} icon={Volume2} label={t("nav.tts")} collapsed={collapsed} />
+          <SidebarItem to={ROUTES.CRON} icon={Clock} label={t("nav.cron")} collapsed={collapsed} />
+        </SidebarGroup>
+
+        <SidebarGroup label={t("groups.data")} collapsed={collapsed}>
           <SidebarItem to={ROUTES.MEMORY} icon={Brain} label={t("nav.memory")} collapsed={collapsed} />
+          <SidebarItem to={ROUTES.KNOWLEDGE_GRAPH} icon={Network} label={t("nav.knowledgeGraph")} collapsed={collapsed} />
+          <SidebarItem to={ROUTES.STORAGE} icon={HardDrive} label={t("nav.storage")} collapsed={collapsed} />
         </SidebarGroup>
 
         <SidebarGroup label={t("groups.monitoring")} collapsed={collapsed}>
           <SidebarItem to={ROUTES.TRACES} icon={Activity} label={t("nav.traces")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.EVENTS} icon={Radar} label={t("nav.realtimeEvents")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.DELEGATIONS} icon={ArrowRightLeft} label={t("nav.delegations")} collapsed={collapsed} />
-          <SidebarItem to={ROUTES.USAGE} icon={BarChart3} label={t("nav.usage")} collapsed={collapsed} />
+          <SidebarItem to={ROUTES.ACTIVITY} icon={ClipboardList} label={t("nav.activity")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.LOGS} icon={Terminal} label={t("nav.logs")} collapsed={collapsed} />
-          <SidebarItem to={ROUTES.STORAGE} icon={HardDrive} label={t("nav.storage")} collapsed={collapsed} />
         </SidebarGroup>
 
         <SidebarGroup label={t("groups.system")} collapsed={collapsed}>
           <SidebarItem to={ROUTES.PROVIDERS} icon={Cpu} label={t("nav.providers")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.CONFIG} icon={Settings} label={t("nav.config")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.APPROVALS} icon={ShieldCheck} label={t("nav.approvals")} collapsed={collapsed} />
-          <SidebarItem to={ROUTES.NODES} icon={Link} label={t("nav.nodes")} collapsed={collapsed} badge={pendingCount} />
-          <SidebarItem to={ROUTES.TTS} icon={Volume2} label={t("nav.tts")} collapsed={collapsed} />
         </SidebarGroup>
       </nav>
 

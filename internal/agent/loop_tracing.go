@@ -31,29 +31,32 @@ func (l *Loop) Model() string { return l.model }
 // IsRunning returns whether the agent is currently processing.
 func (l *Loop) IsRunning() bool { return l.activeRuns.Load() > 0 }
 
-// emitLLMSpan records an LLM call span if tracing is active.
-// When GOCLAW_TRACE_VERBOSE is set, messages are serialized as InputPreview.
-func (l *Loop) emitLLMSpan(ctx context.Context, start time.Time, iteration int, messages []providers.Message, resp *providers.ChatResponse, callErr error) {
-	traceID := tracing.TraceIDFromContext(ctx)
+// ---------------------------------------------------------------------------
+// Two-phase LLM span: start (running) + end (completed/error)
+// ---------------------------------------------------------------------------
+
+// emitLLMSpanStart emits a "running" LLM span before the LLM call begins.
+// Returns the span ID so the caller can later call emitLLMSpanEnd to finalize it.
+// Goroutine-safe: only reads immutable Loop fields and does a channel send.
+func (l *Loop) emitLLMSpanStart(ctx context.Context, start time.Time, iteration int, messages []providers.Message) uuid.UUID {
 	collector := tracing.CollectorFromContext(ctx)
+	traceID := tracing.TraceIDFromContext(ctx)
 	if collector == nil || traceID == uuid.Nil {
-		return
+		return uuid.Nil
 	}
 
-	now := time.Now().UTC()
-	dur := int(now.Sub(start).Milliseconds())
+	spanID := store.GenNewID()
 	span := store.SpanData{
-		TraceID:    traceID,
-		SpanType:   store.SpanTypeLLMCall,
-		Name:       fmt.Sprintf("%s/%s #%d", l.provider.Name(), l.model, iteration),
-		StartTime:  start,
-		EndTime:    &now,
-		DurationMS: dur,
-		Model:      l.model,
-		Provider:   l.provider.Name(),
-		Status:     store.SpanStatusCompleted,
-		Level:      store.SpanLevelDefault,
-		CreatedAt:  now,
+		ID:        spanID,
+		TraceID:   traceID,
+		SpanType:  store.SpanTypeLLMCall,
+		Name:      fmt.Sprintf("%s/%s #%d", l.provider.Name(), l.model, iteration),
+		StartTime: start,
+		Status:    store.SpanStatusRunning,
+		Level:     store.SpanLevelDefault,
+		Model:     l.model,
+		Provider:  l.provider.Name(),
+		CreatedAt: start,
 	}
 	if parentID := tracing.ParentSpanIDFromContext(ctx); parentID != uuid.Nil {
 		span.ParentSpanID = &parentID
@@ -62,10 +65,8 @@ func (l *Loop) emitLLMSpan(ctx context.Context, start time.Time, iteration int, 
 		span.AgentID = &l.agentUUID
 	}
 
-	// Verbose mode: serialize full messages and output.
-	// Strip base64 image data to avoid bloating traces and PostgreSQL encoding issues.
-	verbose := collector.Verbose()
-	if verbose && len(messages) > 0 {
+	// Verbose mode: include input messages (same stripping as emitLLMSpan).
+	if collector.Verbose() && len(messages) > 0 {
 		stripped := make([]providers.Message, len(messages))
 		copy(stripped, messages)
 		for i := range stripped {
@@ -82,13 +83,37 @@ func (l *Loop) emitLLMSpan(ctx context.Context, start time.Time, iteration int, 
 		}
 	}
 
+	collector.EmitSpan(span)
+	return spanID
+}
+
+// emitLLMSpanEnd finalizes a running LLM span with results.
+// Uses EmitSpanUpdate (channel send) — does NOT depend on ctx being alive,
+// so it works correctly even after ctx cancellation or deadline exceeded.
+func (l *Loop) emitLLMSpanEnd(ctx context.Context, spanID uuid.UUID, start time.Time, resp *providers.ChatResponse, callErr error) {
+	if spanID == uuid.Nil {
+		return // tracing disabled — no running span was emitted
+	}
+	collector := tracing.CollectorFromContext(ctx)
+	traceID := tracing.TraceIDFromContext(ctx)
+	if collector == nil || traceID == uuid.Nil {
+		return
+	}
+
+	now := time.Now().UTC()
+	updates := map[string]any{
+		"end_time":    now,
+		"duration_ms": int(now.Sub(start).Milliseconds()),
+		"status":      store.SpanStatusCompleted,
+	}
+
 	if callErr != nil {
-		span.Status = store.SpanStatusError
-		span.Error = callErr.Error()
+		updates["status"] = store.SpanStatusError
+		updates["error"] = callErr.Error()
 	} else if resp != nil {
 		if resp.Usage != nil {
-			span.InputTokens = resp.Usage.PromptTokens
-			span.OutputTokens = resp.Usage.CompletionTokens
+			updates["input_tokens"] = resp.Usage.PromptTokens
+			updates["output_tokens"] = resp.Usage.CompletionTokens
 			hasMeta := resp.Usage.CacheCreationTokens > 0 || resp.Usage.CacheReadTokens > 0 || resp.Usage.ThinkingTokens > 0
 			if hasMeta {
 				meta := map[string]int{}
@@ -102,54 +127,65 @@ func (l *Loop) emitLLMSpan(ctx context.Context, start time.Time, iteration int, 
 					meta["thinking_tokens"] = resp.Usage.ThinkingTokens
 				}
 				if b, err := json.Marshal(meta); err == nil {
-					span.Metadata = b
+					updates["metadata"] = b
 				}
 			}
 		}
-		span.FinishReason = resp.FinishReason
+		// Calculate cost if pricing config is available.
+		if pricing := tracing.LookupPricing(l.modelPricing, l.provider.Name(), l.model); pricing != nil {
+			cost := tracing.CalculateCost(pricing, resp.Usage)
+			if cost > 0 {
+				updates["total_cost"] = cost
+			}
+		}
+		updates["finish_reason"] = resp.FinishReason
+		verbose := collector.Verbose()
 		if verbose {
 			preview := resp.Content
 			if resp.Thinking != "" {
 				preview = "<thinking>\n" + resp.Thinking + "\n</thinking>\n" + resp.Content
 			}
-			span.OutputPreview = truncateStr(preview, 100000)
+			updates["output_preview"] = truncateStr(preview, 100000)
 		} else {
-			span.OutputPreview = truncateStr(resp.Content, 500)
+			updates["output_preview"] = truncateStr(resp.Content, 500)
 		}
 	}
 
-	collector.EmitSpan(span)
+	collector.EmitSpanUpdate(spanID, traceID, updates)
 }
 
-// emitToolSpan records a tool call span if tracing is active.
-// result is the full tool execution result, which may contain Usage from inner LLM calls.
-func (l *Loop) emitToolSpan(ctx context.Context, start time.Time, toolName, toolCallID, input string, result *tools.Result) {
-	traceID := tracing.TraceIDFromContext(ctx)
+// ---------------------------------------------------------------------------
+// Two-phase tool span: start (running) + end (completed/error)
+// ---------------------------------------------------------------------------
+
+// emitToolSpanStart emits a "running" tool span before tool execution begins.
+// Returns the span ID so the caller can later call emitToolSpanEnd to finalize it.
+// Goroutine-safe: only reads immutable Loop fields and does a channel send.
+func (l *Loop) emitToolSpanStart(ctx context.Context, start time.Time, toolName, toolCallID, input string) uuid.UUID {
 	collector := tracing.CollectorFromContext(ctx)
+	traceID := tracing.TraceIDFromContext(ctx)
 	if collector == nil || traceID == uuid.Nil {
-		return
+		return uuid.Nil
 	}
 
-	now := time.Now().UTC()
-	dur := int(now.Sub(start).Milliseconds())
 	previewLimit := 500
 	if collector.Verbose() {
 		previewLimit = 100000
 	}
+
+	spanID := store.GenNewID()
 	span := store.SpanData{
-		TraceID:       traceID,
-		SpanType:      store.SpanTypeToolCall,
-		Name:          toolName,
-		StartTime:     start,
-		EndTime:       &now,
-		DurationMS:    dur,
-		ToolName:      toolName,
-		ToolCallID:    toolCallID,
-		InputPreview:  truncateStr(input, previewLimit),
-		OutputPreview: truncateStr(result.ForLLM, previewLimit),
-		Status:        store.SpanStatusCompleted,
-		Level:         "DEFAULT",
-		CreatedAt:     now,
+		ID:           spanID,
+		TraceID:      traceID,
+		SpanType:     store.SpanTypeToolCall,
+		Name:         toolName,
+		StartTime:    start,
+		ToolName:     toolName,
+		ToolCallID:   toolCallID,
+		InputPreview: truncateStr(input, previewLimit),
+		Status:       store.SpanStatusRunning,
+		Level:        store.SpanLevelDefault,
+		CreatedAt:    start,
 	}
 	if parentID := tracing.ParentSpanIDFromContext(ctx); parentID != uuid.Nil {
 		span.ParentSpanID = &parentID
@@ -157,62 +193,100 @@ func (l *Loop) emitToolSpan(ctx context.Context, start time.Time, toolName, tool
 	if l.agentUUID != uuid.Nil {
 		span.AgentID = &l.agentUUID
 	}
+
+	collector.EmitSpan(span)
+	return spanID
+}
+
+// emitToolSpanEnd finalizes a running tool span with execution results.
+// Uses EmitSpanUpdate (channel send) — safe after ctx cancellation.
+// Goroutine-safe: only does a channel send via EmitSpanUpdate.
+func (l *Loop) emitToolSpanEnd(ctx context.Context, spanID uuid.UUID, start time.Time, result *tools.Result) {
+	if spanID == uuid.Nil {
+		return // tracing disabled
+	}
+	collector := tracing.CollectorFromContext(ctx)
+	traceID := tracing.TraceIDFromContext(ctx)
+	if collector == nil || traceID == uuid.Nil {
+		return
+	}
+
+	now := time.Now().UTC()
+	previewLimit := 500
+	if collector.Verbose() {
+		previewLimit = 100000
+	}
+
+	updates := map[string]any{
+		"end_time":       now,
+		"duration_ms":    int(now.Sub(start).Milliseconds()),
+		"status":         store.SpanStatusCompleted,
+		"output_preview": truncateStr(result.ForLLM, previewLimit),
+	}
+
 	if result.IsError {
-		span.Status = store.SpanStatusError
-		span.Error = truncateStr(result.ForLLM, 200)
+		updates["status"] = store.SpanStatusError
+		updates["error"] = truncateStr(result.ForLLM, 200)
 	}
 
 	// Record token usage from tools that make internal LLM calls (e.g. read_image).
 	if result.Usage != nil {
-		span.InputTokens = result.Usage.PromptTokens
-		span.OutputTokens = result.Usage.CompletionTokens
-		span.Provider = result.Provider
-		span.Model = result.Model
+		updates["input_tokens"] = result.Usage.PromptTokens
+		updates["output_tokens"] = result.Usage.CompletionTokens
+		updates["provider"] = result.Provider
+		updates["model"] = result.Model
 		if result.Usage.CacheCreationTokens > 0 || result.Usage.CacheReadTokens > 0 {
 			meta := map[string]int{
 				"cache_creation_tokens": result.Usage.CacheCreationTokens,
 				"cache_read_tokens":     result.Usage.CacheReadTokens,
 			}
 			if b, err := json.Marshal(meta); err == nil {
-				span.Metadata = b
+				updates["metadata"] = b
+			}
+		}
+		// Calculate cost for tool's internal LLM calls.
+		provider := result.Provider
+		model := result.Model
+		if pricing := tracing.LookupPricing(l.modelPricing, provider, model); pricing != nil {
+			cost := tracing.CalculateCost(pricing, result.Usage)
+			if cost > 0 {
+				updates["total_cost"] = cost
 			}
 		}
 	}
 
-	collector.EmitSpan(span)
+	collector.EmitSpanUpdate(spanID, traceID, updates)
 }
 
-// emitAgentSpan records the root "agent" span that parents all LLM/tool spans in this request.
-func (l *Loop) emitAgentSpan(ctx context.Context, start time.Time, result *RunResult, runErr error) {
-	traceID := tracing.TraceIDFromContext(ctx)
+// ---------------------------------------------------------------------------
+// Two-phase agent span: start (running) + end (completed/error)
+// ---------------------------------------------------------------------------
+
+// emitAgentSpanStart emits a "running" root agent span at the beginning of a run.
+// The span is identified by agentSpanID (pre-generated, same ID used as ParentSpanID
+// for child LLM/tool spans).
+func (l *Loop) emitAgentSpanStart(ctx context.Context, agentSpanID uuid.UUID, start time.Time, inputPreview string) {
 	collector := tracing.CollectorFromContext(ctx)
+	traceID := tracing.TraceIDFromContext(ctx)
 	if collector == nil || traceID == uuid.Nil {
 		return
 	}
 
-	agentSpanID := tracing.ParentSpanIDFromContext(ctx)
-	if agentSpanID == uuid.Nil {
-		return
-	}
-
-	now := time.Now().UTC()
-	dur := int(now.Sub(start).Milliseconds())
 	spanName := l.id
 	span := store.SpanData{
-		ID:         agentSpanID,
-		TraceID:    traceID,
-		SpanType:   store.SpanTypeAgent,
-		Name:       spanName,
-		StartTime:  start,
-		EndTime:    &now,
-		DurationMS: dur,
-		Model:      l.model,
-		Provider:   l.provider.Name(),
-		Status:     store.SpanStatusCompleted,
-		Level:      store.SpanLevelDefault,
-		CreatedAt:  now,
+		ID:           agentSpanID,
+		TraceID:      traceID,
+		SpanType:     store.SpanTypeAgent,
+		Name:         spanName,
+		StartTime:    start,
+		Status:       store.SpanStatusRunning,
+		Level:        store.SpanLevelDefault,
+		Model:        l.model,
+		Provider:     l.provider.Name(),
+		InputPreview: truncateStr(inputPreview, 500),
+		CreatedAt:    start,
 	}
-	// Nest under parent root span if this is an announce run
+	// Nest under parent root span if this is an announce run.
 	if announceParent := tracing.AnnounceParentSpanIDFromContext(ctx); announceParent != uuid.Nil {
 		span.ParentSpanID = &announceParent
 		span.Name = "announce:" + spanName
@@ -220,20 +294,43 @@ func (l *Loop) emitAgentSpan(ctx context.Context, start time.Time, result *RunRe
 	if l.agentUUID != uuid.Nil {
 		span.AgentID = &l.agentUUID
 	}
+
+	collector.EmitSpan(span)
+}
+
+// emitAgentSpanEnd finalizes the running root agent span with results.
+// Uses EmitSpanUpdate (channel send) — safe after ctx cancellation.
+func (l *Loop) emitAgentSpanEnd(ctx context.Context, agentSpanID uuid.UUID, start time.Time, result *RunResult, runErr error) {
+	if agentSpanID == uuid.Nil {
+		return
+	}
+	collector := tracing.CollectorFromContext(ctx)
+	traceID := tracing.TraceIDFromContext(ctx)
+	if collector == nil || traceID == uuid.Nil {
+		return
+	}
+
+	now := time.Now().UTC()
+	updates := map[string]any{
+		"end_time":    now,
+		"duration_ms": int(now.Sub(start).Milliseconds()),
+		"status":      store.SpanStatusCompleted,
+	}
+
 	if runErr != nil {
-		span.Status = store.SpanStatusError
-		span.Error = runErr.Error()
+		updates["status"] = store.SpanStatusError
+		updates["error"] = runErr.Error()
 	} else if result != nil {
 		limit := 500
 		if collector.Verbose() {
 			limit = 100000
 		}
-		span.OutputPreview = truncateStr(result.Content, limit)
+		updates["output_preview"] = truncateStr(result.Content, limit)
 		// Note: token counts are NOT set on agent spans to avoid double-counting
 		// with child llm_call spans. Trace aggregation sums only llm_call spans.
 	}
 
-	collector.EmitSpan(span)
+	collector.EmitSpanUpdate(agentSpanID, traceID, updates)
 }
 
 func truncateStr(s string, maxLen int) string {

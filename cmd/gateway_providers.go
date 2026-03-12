@@ -116,6 +116,24 @@ func registerProviders(registry *providers.Registry, cfg *config.Config) {
 		slog.Info("registered provider", "name", "zai-coding")
 	}
 
+	// Local / self-hosted Ollama — gated on Host, no API key required.
+	// Ollama's OpenAI-compat endpoint accepts any non-empty Bearer value.
+	if cfg.Providers.Ollama.Host != "" {
+		host := cfg.Providers.Ollama.Host
+		registry.Register(providers.NewOpenAIProvider("ollama", "ollama", host+"/v1", "llama3.3"))
+		slog.Info("registered provider", "name", "ollama")
+	}
+
+	// Ollama Cloud — API key required (generate at ollama.com/settings/keys).
+	if cfg.Providers.OllamaCloud.APIKey != "" {
+		base := cfg.Providers.OllamaCloud.APIBase
+		if base == "" {
+			base = "https://ollama.com/v1"
+		}
+		registry.Register(providers.NewOpenAIProvider("ollama-cloud", cfg.Providers.OllamaCloud.APIKey, base, "llama3.3"))
+		slog.Info("registered provider", "name", "ollama-cloud")
+	}
+
 	// Claude CLI provider (subscription-based, no API key needed)
 	if cfg.Providers.ClaudeCLI.CLIPath != "" {
 		cliPath := cfg.Providers.ClaudeCLI.CLIPath
@@ -243,6 +261,17 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 			slog.Info("registered provider from DB", "name", p.Name)
 			continue
 		}
+		// Local Ollama requires no API key — handle before the key guard (same pattern as ClaudeCLI).
+		if p.ProviderType == store.ProviderOllama {
+			host := p.APIBase
+			if host == "" {
+				host = "http://localhost:11434"
+			}
+			registry.Register(providers.NewOpenAIProvider(p.Name, "ollama", host+"/v1", "llama3.3"))
+			slog.Info("registered provider from DB", "name", p.Name)
+			continue
+		}
+
 		if p.APIKey == "" {
 			continue
 		}
@@ -273,6 +302,12 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 				base = "https://api.z.ai/api/coding/paas/v4"
 			}
 			registry.Register(providers.NewOpenAIProvider(p.Name, p.APIKey, base, "glm-5"))
+		case store.ProviderOllamaCloud:
+			base := p.APIBase
+			if base == "" {
+				base = "https://ollama.com/v1"
+			}
+			registry.Register(providers.NewOpenAIProvider(p.Name, p.APIKey, base, "llama3.3"))
 		case store.ProviderSuno:
 			// Suno is a media-only provider (music gen). Register as OpenAI-compat
 			// so credentialProvider interface works for API key/base extraction.
@@ -280,9 +315,12 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 			if base == "" {
 				base = "https://api.sunoapi.org"
 			}
-			registry.Register(providers.NewOpenAIProvider(p.Name, p.APIKey, base, ""))
+			prov := providers.NewOpenAIProvider(p.Name, p.APIKey, base, "")
+			prov.WithProviderType(p.ProviderType)
+			registry.Register(prov)
 		default:
 			prov := providers.NewOpenAIProvider(p.Name, p.APIKey, p.APIBase, "")
+			prov.WithProviderType(p.ProviderType)
 			if p.ProviderType == store.ProviderMiniMax {
 				prov.WithChatPath("/text/chatcompletion_v2")
 			}

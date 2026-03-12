@@ -25,6 +25,7 @@ const KNOWN_PROVIDERS = [
   { key: "minimax", label: "MiniMax", envKey: "GOCLAW_MINIMAX_API_KEY" },
   { key: "cohere", label: "Cohere", envKey: "GOCLAW_COHERE_API_KEY" },
   { key: "perplexity", label: "Perplexity", envKey: "GOCLAW_PERPLEXITY_API_KEY" },
+  { key: "ollama_cloud", label: "Ollama Cloud", envKey: "GOCLAW_OLLAMA_CLOUD_API_KEY" },
 ];
 
 function isSecret(val: unknown): boolean {

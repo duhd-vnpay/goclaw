@@ -14,6 +14,8 @@ interface KeyValueEditorProps {
   keyPlaceholder?: string;
   valuePlaceholder?: string;
   addLabel?: string;
+  /** Return true for keys whose values should be masked (type="password"). */
+  maskValue?: (key: string) => boolean;
 }
 
 function toEntries(obj: Record<string, string>): KeyValuePair[] {
@@ -37,6 +39,7 @@ export function KeyValueEditor({
   keyPlaceholder = "Key",
   valuePlaceholder = "Value",
   addLabel = "Add",
+  maskValue,
 }: KeyValueEditorProps) {
   const [entries, setEntries] = useState<KeyValuePair[]>(() => toEntries(value));
   const internalChange = useRef(false);
@@ -83,6 +86,7 @@ export function KeyValueEditor({
             className="flex-1 font-mono text-sm"
           />
           <Input
+            type={maskValue?.(entry.key) ? "password" : "text"}
             value={entry.value}
             onChange={(e) => updateEntry(idx, { value: e.target.value })}
             placeholder={valuePlaceholder}

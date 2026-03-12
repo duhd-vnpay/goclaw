@@ -150,9 +150,22 @@ func (s *PGPendingMessageStore) ListGroups(ctx context.Context) ([]store.Pending
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT channel_name, history_key,
 		        COUNT(*) AS message_count,
-		        BOOL_OR(is_summary) AS has_summary,
+		        BOOL_OR(is_summary)
+		          AND NOT EXISTS (
+		            SELECT 1 FROM channel_pending_messages n
+		            WHERE n.channel_name = m.channel_name
+		              AND n.history_key  = m.history_key
+		              AND NOT n.is_summary
+		              AND n.created_at > (
+		                SELECT MAX(s.created_at)
+		                FROM channel_pending_messages s
+		                WHERE s.channel_name = m.channel_name
+		                  AND s.history_key  = m.history_key
+		                  AND s.is_summary
+		              )
+		          ) AS has_summary,
 		        MAX(created_at) AS last_activity
-		 FROM channel_pending_messages
+		 FROM channel_pending_messages m
 		 GROUP BY channel_name, history_key
 		 ORDER BY last_activity DESC`,
 	)
@@ -175,6 +188,15 @@ func (s *PGPendingMessageStore) ListGroups(ctx context.Context) ([]store.Pending
 func (s *PGPendingMessageStore) CountAll(ctx context.Context) (int64, error) {
 	var count int64
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM channel_pending_messages`).Scan(&count)
+	return count, err
+}
+
+func (s *PGPendingMessageStore) CountByKey(ctx context.Context, channelName, historyKey string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM channel_pending_messages WHERE channel_name = $1 AND history_key = $2`,
+		channelName, historyKey,
+	).Scan(&count)
 	return count, err
 }
 

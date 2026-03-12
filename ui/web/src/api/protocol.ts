@@ -220,6 +220,14 @@ export const Events = {
   PARTY_SUMMARY_READY: "party.summary.ready",
   PARTY_ARTIFACT: "party.artifact",
   PARTY_CLOSED: "party.closed",
+
+  // Skill dependency check (realtime progress during startup/rescan)
+  SKILL_DEPS_CHECKED: "skill.deps.checked",
+  SKILL_DEPS_COMPLETE: "skill.deps.complete",
+
+  // Skill dependency install (triggered by POST /v1/skills/install-deps)
+  SKILL_DEPS_INSTALLING: "skill.deps.installing",
+  SKILL_DEPS_INSTALLED: "skill.deps.installed",
 } as const;
 
 /** All event names relevant to team debug view */

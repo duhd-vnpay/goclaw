@@ -85,6 +85,11 @@ func (c *Channel) handleMessageEvent(ctx context.Context, event *MessageEvent) {
 				MessageID: messageID,
 			}, c.historyLimit)
 
+			// Collect contact even when bot is not mentioned (cache prevents DB spam).
+			if cc := c.ContactCollector(); cc != nil {
+				cc.EnsureContact(ctx, c.Type(), c.Name(), mc.SenderID, mc.SenderID, senderName, "", "group")
+			}
+
 			slog.Debug("feishu group message recorded (no mention)",
 				"chat_id", mc.ChatID, "sender", senderName,
 			)

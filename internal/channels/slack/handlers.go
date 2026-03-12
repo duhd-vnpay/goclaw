@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -171,6 +172,11 @@ func (c *Channel) handleMessage(ev *slackevents.MessageEvent) {
 				Timestamp: time.Now(),
 				MessageID: ev.TimeStamp,
 			}, c.historyLimit)
+
+			// Collect contact even when bot is not mentioned (cache prevents DB spam).
+			if cc := c.ContactCollector(); cc != nil {
+				cc.EnsureContact(context.Background(), c.Type(), c.Name(), senderID, senderID, displayName, "", "group")
+			}
 
 			slog.Debug("slack group message recorded (no mention)",
 				"channel_id", channelID, "user", displayName)

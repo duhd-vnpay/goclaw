@@ -57,7 +57,7 @@ SCHEDULE TYPES (schedule.kind):
 - "every": Recurring interval
   { "kind": "every", "everyMs": <interval-ms> }
 - "cron": Cron expression
-  { "kind": "cron", "expr": "<5-field cron expression>", "tz": "<optional-timezone>" }
+  { "kind": "cron", "expr": "<5-field cron expression>", "tz": "<optional IANA timezone, e.g. Asia/Ho_Chi_Minh; omit to use gateway default>" }
 
 CRITICAL CONSTRAINTS:
 - name must be a valid slug (lowercase letters, numbers, hyphens only)
@@ -229,6 +229,20 @@ func (t *CronTool) handleAdd(ctx context.Context, args map[string]any, agentID, 
 	deliver, _ := jobObj["deliver"].(bool)
 	channel, _ := jobObj["channel"].(string)
 	to, _ := jobObj["to"].(string)
+
+	// Auto-default deliver=true when the request comes from a real channel
+	// (not CLI/system/subagent). Users chatting on Zalo/Telegram expect
+	// cron results delivered back to the same chat.
+	if !deliver {
+		if ctxChannel := ToolChannelFromCtx(ctx); ctxChannel != "" {
+			switch ctxChannel {
+			case "cli", "system", "subagent", "cron", "delegate":
+				// internal channels — don't auto-deliver
+			default:
+				deliver = true
+			}
+		}
+	}
 
 	// Auto-fill channel and to from context when deliver is requested.
 	// Always prefer context values over LLM-provided values to prevent

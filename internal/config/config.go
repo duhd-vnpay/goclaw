@@ -296,23 +296,33 @@ func (sc *SandboxConfig) ToSandboxConfig() sandbox.Config {
 	return cfg
 }
 
+// ModelPricing defines per-million-token pricing for a model.
+type ModelPricing struct {
+	InputPerMillion       float64 `json:"input_per_million"`
+	OutputPerMillion      float64 `json:"output_per_million"`
+	CacheReadPerMillion   float64 `json:"cache_read_per_million,omitempty"`
+	CacheCreatePerMillion float64 `json:"cache_create_per_million,omitempty"`
+}
+
 // TelemetryConfig configures OpenTelemetry export for traces and spans.
 // When enabled, spans are exported to an OTLP-compatible backend (Jaeger, Tempo, Datadog, etc.)
 // in addition to PostgreSQL storage.
 type TelemetryConfig struct {
-	Enabled     bool              `json:"enabled,omitempty"`      // enable OTLP export (default false)
-	Endpoint    string            `json:"endpoint,omitempty"`     // OTLP endpoint (e.g. "localhost:4317", "https://otel.example.com:4318")
-	Protocol    string            `json:"protocol,omitempty"`     // "grpc" (default) or "http"
-	Insecure    bool              `json:"insecure,omitempty"`     // skip TLS verification (default false, set true for local dev)
-	ServiceName string            `json:"service_name,omitempty"` // OTEL service name (default "goclaw-gateway")
-	Headers     map[string]string `json:"headers,omitempty"`      // extra headers (e.g. auth tokens for cloud backends)
+	Enabled      bool                       `json:"enabled,omitempty"`       // enable OTLP export (default false)
+	Endpoint     string                     `json:"endpoint,omitempty"`      // OTLP endpoint (e.g. "localhost:4317", "https://otel.example.com:4318")
+	Protocol     string                     `json:"protocol,omitempty"`      // "grpc" (default) or "http"
+	Insecure     bool                       `json:"insecure,omitempty"`      // skip TLS verification (default false, set true for local dev)
+	ServiceName  string                     `json:"service_name,omitempty"`  // OTEL service name (default "goclaw-gateway")
+	Headers      map[string]string          `json:"headers,omitempty"`       // extra headers (e.g. auth tokens for cloud backends)
+	ModelPricing map[string]*ModelPricing    `json:"model_pricing,omitempty"` // cost per model, key = "provider/model" or just "model"
 }
 
 // CronConfig configures the cron job system.
 type CronConfig struct {
-	MaxRetries     int    `json:"max_retries,omitempty"`      // max retry attempts on failure (default 3, 0 = no retry)
-	RetryBaseDelay string `json:"retry_base_delay,omitempty"` // initial backoff delay (default "2s", Go duration)
-	RetryMaxDelay  string `json:"retry_max_delay,omitempty"`  // maximum backoff delay (default "30s", Go duration)
+	MaxRetries      int    `json:"max_retries,omitempty"`      // max retry attempts on failure (default 3, 0 = no retry)
+	RetryBaseDelay  string `json:"retry_base_delay,omitempty"` // initial backoff delay (default "2s", Go duration)
+	RetryMaxDelay   string `json:"retry_max_delay,omitempty"`  // maximum backoff delay (default "30s", Go duration)
+	DefaultTimezone string `json:"default_timezone,omitempty"` // IANA timezone for cron expressions when not set per-job (e.g. "Asia/Ho_Chi_Minh")
 }
 
 // ToRetryConfig converts CronConfig to cron.RetryConfig with defaults applied.

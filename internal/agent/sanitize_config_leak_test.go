@@ -75,6 +75,27 @@ Có gì anh hỏi thêm nhé!`,
 			content:   "",
 			agentType: "predefined",
 		},
+		{
+			name: "predefined - config names in fenced code block (architecture docs)",
+			content: "Đây là cấu trúc hệ thống:\n\n```\nagents/\n├── SOUL.md\n├── IDENTITY.md\n├── AGENTS.md\n├── BOOTSTRAP.md\n└── TOOLS.md\n```\n\nAnh cần gì thêm không?",
+			agentType: "predefined",
+		},
+		{
+			name:      "predefined - config names in inline code",
+			content:   "Mỗi agent có các file `SOUL.md`, `IDENTITY.md`, `AGENTS.md` để cấu hình.",
+			agentType: "predefined",
+		},
+		{
+			name: "predefined - mixed: code block + plain text below threshold",
+			content: "Hệ thống dùng:\n\n```\nSOUL.md\nIDENTITY.md\nAGENTS.md\nBOOTSTRAP.md\n```\n\nEm đã update SOUL.md rồi.",
+			agentType: "predefined",
+		},
+		{
+			name: "predefined - plain text leak still triggers",
+			content: "Em load SOUL.md, IDENTITY.md, AGENTS.md vào context.",
+			agentType: "predefined",
+			want:  declineMsg,
+		},
 	}
 
 	for _, tt := range tests {

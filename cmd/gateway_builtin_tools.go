@@ -42,33 +42,33 @@ func builtinToolSeedData() []store.BuiltinToolDef {
 			Requires: []string{"knowledge_graph"},
 		},
 
-		// media
+		// media — seed uses chain format: {"providers":[...]}
 		{Name: "read_image", DisplayName: "Read Image", Description: "Analyze images using a vision-capable LLM provider", Category: "media", Enabled: true,
-			Settings: json.RawMessage(`{"provider":"openrouter","model":"google/gemini-2.5-flash-image"}`),
+			Settings: json.RawMessage(`{"providers":[{"provider":"openrouter","model":"google/gemini-2.5-flash-image","enabled":true,"timeout":120,"max_retries":2}]}`),
 			Requires: []string{"vision_provider"},
 		},
 		{Name: "read_document", DisplayName: "Read Document", Description: "Analyze documents (PDF, Word, Excel, PowerPoint, CSV, etc.) using a document-capable LLM provider", Category: "media", Enabled: true,
-			Settings: json.RawMessage(`{"provider":"gemini","model":"gemini-2.5-flash"}`),
+			Settings: json.RawMessage(`{"providers":[{"provider":"gemini","model":"gemini-2.5-flash","enabled":true,"timeout":120,"max_retries":2}]}`),
 			Requires: []string{"document_provider"},
 		},
 		{Name: "create_image", DisplayName: "Create Image", Description: "Generate images from text prompts using an image generation provider", Category: "media", Enabled: true,
-			Settings: json.RawMessage(`{"provider":"openrouter","model":"google/gemini-2.5-flash-image"}`),
+			Settings: json.RawMessage(`{"providers":[{"provider":"openrouter","model":"google/gemini-2.5-flash-image","enabled":true,"timeout":120,"max_retries":2}]}`),
 			Requires: []string{"image_gen_provider"},
 		},
 		{Name: "read_audio", DisplayName: "Read Audio", Description: "Analyze audio files (speech, music, sounds) using an audio-capable LLM provider", Category: "media", Enabled: true,
-			Settings: json.RawMessage(`{"provider":"gemini","model":"gemini-2.5-flash"}`),
+			Settings: json.RawMessage(`{"providers":[{"provider":"gemini","model":"gemini-2.5-flash","enabled":true,"timeout":120,"max_retries":2}]}`),
 			Requires: []string{"audio_provider"},
 		},
 		{Name: "read_video", DisplayName: "Read Video", Description: "Analyze video files using a video-capable LLM provider", Category: "media", Enabled: true,
-			Settings: json.RawMessage(`{"provider":"gemini","model":"gemini-2.5-flash"}`),
+			Settings: json.RawMessage(`{"providers":[{"provider":"gemini","model":"gemini-2.5-flash","enabled":true,"timeout":120,"max_retries":2}]}`),
 			Requires: []string{"video_provider"},
 		},
 		{Name: "create_video", DisplayName: "Create Video", Description: "Generate videos from text descriptions using AI", Category: "media", Enabled: true,
-			Settings: json.RawMessage(`{"provider":"gemini","model":"veo-3.0-generate-preview"}`),
+			Settings: json.RawMessage(`{"providers":[{"provider":"gemini","model":"veo-3.0-generate-preview","enabled":true,"timeout":120,"max_retries":2}]}`),
 			Requires: []string{"video_gen_provider"},
 		},
 		{Name: "create_audio", DisplayName: "Create Audio", Description: "Generate music or sound effects from text descriptions using AI", Category: "media", Enabled: true,
-			Settings: json.RawMessage(`{"provider":"minimax","model":"music-2.5+"}`),
+			Settings: json.RawMessage(`{"providers":[{"provider":"minimax","model":"music-2.5+","enabled":true,"timeout":120,"max_retries":2}]}`),
 			Requires: []string{"audio_gen_provider"},
 		},
 		{Name: "tts", DisplayName: "Text to Speech", Description: "Convert text to natural-sounding speech audio", Category: "media", Enabled: true,
@@ -104,6 +104,7 @@ func builtinToolSeedData() []store.BuiltinToolDef {
 		// skills
 		{Name: "skill_search", DisplayName: "Skill Search", Description: "Search for available skills by keyword or description to find relevant capabilities", Category: "skills", Enabled: true},
 		{Name: "use_skill", DisplayName: "Use Skill", Description: "Activate a skill to use its specialized capabilities (tracing marker)", Category: "skills", Enabled: true},
+		{Name: "publish_skill", DisplayName: "Publish Skill", Description: "Register a skill directory (created via skill-creator) in the system database, making it discoverable and grantable to agents", Category: "skills", Enabled: true},
 
 		// delegation
 		{Name: "delegate_search", DisplayName: "Delegate Search", Description: "Search for available delegation targets by keyword when there are too many linked agents to list", Category: "delegation", Enabled: true,
@@ -135,6 +136,78 @@ func seedBuiltinTools(ctx context.Context, bts store.BuiltinToolStore) {
 		return
 	}
 	slog.Info("builtin tools seeded", "count", len(seeds))
+}
+
+// mediaToolNames lists media tools whose settings should use chain format.
+var mediaToolNames = map[string]bool{
+	"read_image": true, "read_document": true, "create_image": true,
+	"read_audio": true, "read_video": true, "create_video": true, "create_audio": true,
+}
+
+// migrateBuiltinToolSettings converts legacy flat settings {"provider":"X","model":"Y"}
+// to chain format {"providers":[...]} in the database. Runs once at startup.
+func migrateBuiltinToolSettings(ctx context.Context, bts store.BuiltinToolStore) {
+	all, err := bts.List(ctx)
+	if err != nil {
+		slog.Warn("builtin_tools: failed to list for migration", "error", err)
+		return
+	}
+
+	var migrated int
+	for _, t := range all {
+		if !mediaToolNames[t.Name] {
+			continue
+		}
+		if len(t.Settings) == 0 || string(t.Settings) == "{}" {
+			continue
+		}
+
+		// Detect legacy flat format: has "provider" key but no "providers" key
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(t.Settings, &raw); err != nil {
+			continue
+		}
+		if _, hasProviders := raw["providers"]; hasProviders {
+			continue // already chain format
+		}
+		if _, hasProvider := raw["provider"]; !hasProvider {
+			continue // neither format, skip
+		}
+
+		// Parse legacy flat fields
+		var flat struct {
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+		}
+		if err := json.Unmarshal(t.Settings, &flat); err != nil || flat.Provider == "" {
+			continue
+		}
+
+		// Convert to chain format
+		chain := map[string]any{
+			"providers": []map[string]any{{
+				"provider":    flat.Provider,
+				"model":       flat.Model,
+				"enabled":     true,
+				"timeout":     120,
+				"max_retries": 2,
+			}},
+		}
+		newSettings, err := json.Marshal(chain)
+		if err != nil {
+			continue
+		}
+
+		if err := bts.Update(ctx, t.Name, map[string]any{"settings": json.RawMessage(newSettings)}); err != nil {
+			slog.Warn("builtin_tools: failed to migrate settings", "tool", t.Name, "error", err)
+			continue
+		}
+		migrated++
+	}
+
+	if migrated > 0 {
+		slog.Info("builtin_tools: migrated legacy settings to chain format", "count", migrated)
+	}
 }
 
 // applyBuiltinToolDisables unregisters disabled builtin tools from the registry.

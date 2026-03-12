@@ -56,22 +56,26 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	if req.SenderID != "" {
 		ctx = store.WithSenderID(ctx, req.SenderID)
 	}
-	// Inject per-agent vision/imagegen config for read_image/create_image tools
-	if l.agentToolPolicy != nil {
-		if l.agentToolPolicy.Vision != nil {
-			ctx = tools.WithVisionConfig(ctx, l.agentToolPolicy.Vision)
-		}
-		if l.agentToolPolicy.ImageGen != nil {
-			ctx = tools.WithImageGenConfig(ctx, l.agentToolPolicy.ImageGen)
-		}
-	}
-	// Inject global builtin tool settings (DB-level defaults, lower priority than per-agent)
+	// Inject global builtin tool settings for media tools (provider chain)
 	if l.builtinToolSettings != nil {
 		ctx = tools.WithBuiltinToolSettings(ctx, l.builtinToolSettings)
 	}
 	// Inject channel type into context for tools (e.g. message tool needs it for Zalo group routing)
 	if req.ChannelType != "" {
 		ctx = tools.WithToolChannelType(ctx, req.ChannelType)
+	}
+	// Inject per-agent overrides from DB so tools honor per-agent settings.
+	if l.restrictToWs != nil {
+		ctx = tools.WithRestrictToWorkspace(ctx, *l.restrictToWs)
+	}
+	if l.subagentsCfg != nil {
+		ctx = tools.WithSubagentConfig(ctx, l.subagentsCfg)
+	}
+	if l.memoryCfg != nil {
+		ctx = tools.WithMemoryConfig(ctx, l.memoryCfg)
+	}
+	if l.sandboxCfg != nil {
+		ctx = tools.WithSandboxConfig(ctx, l.sandboxCfg)
 	}
 
 	// Per-user workspace isolation.
@@ -234,6 +238,9 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	}
 	if len(docRefs) > 0 {
 		ctx = tools.WithMediaDocRefs(ctx, docRefs)
+		// Enrich the last user message with persisted file paths so skills can access
+		// documents via exec (e.g. pypdf). Only for current-turn refs (just persisted).
+		l.enrichDocumentPaths(messages, mediaRefs)
 	}
 
 	// 2c. Collect audio MediaRefs (historical + current) for read_audio tool.
@@ -252,6 +259,8 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	}
 	if len(audioRefs) > 0 {
 		ctx = tools.WithMediaAudioRefs(ctx, audioRefs)
+		// Embed media IDs into <media:audio> tags so LLM can reference them.
+		l.enrichAudioIDs(messages, mediaRefs)
 	}
 
 	// 2d. Collect video MediaRefs (historical + current) for read_video tool.
@@ -270,6 +279,8 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	}
 	if len(videoRefs) > 0 {
 		ctx = tools.WithMediaVideoRefs(ctx, videoRefs)
+		// Embed media IDs into <media:video> tags so LLM can reference them.
+		l.enrichVideoIDs(messages, mediaRefs)
 	}
 
 	// 2e. Cross-session recovery: notify team leads about orphaned pending tasks
@@ -369,6 +380,19 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		maxIter = req.MaxIterations
 	}
 
+	// Budget check: query monthly spent once before starting iterations.
+	if l.budgetMonthlyCents > 0 && l.tracingStore != nil && l.agentUUID != uuid.Nil {
+		now := time.Now().UTC()
+		spent, err := l.tracingStore.GetMonthlyAgentCost(ctx, l.agentUUID, now.Year(), now.Month())
+		if err == nil {
+			spentCents := int(spent * 100)
+			if spentCents >= l.budgetMonthlyCents {
+				slog.Warn("agent budget exceeded", "agent", l.id, "spent_cents", spentCents, "budget_cents", l.budgetMonthlyCents)
+				return nil, fmt.Errorf("monthly budget exceeded ($%.2f / $%.2f)", spent, float64(l.budgetMonthlyCents)/100)
+			}
+		}
+	}
+
 	for iteration < maxIter {
 		iteration++
 
@@ -424,6 +448,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		var err error
 
 		llmSpanStart := time.Now().UTC()
+		llmSpanID := l.emitLLMSpanStart(ctx, llmSpanStart, iteration, messages)
 
 		if req.Stream {
 			resp, err = l.provider.ChatStream(ctx, chatReq, func(chunk providers.StreamChunk) {
@@ -449,11 +474,11 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		}
 
 		if err != nil {
-			l.emitLLMSpan(ctx, llmSpanStart, iteration, messages, nil, err)
+			l.emitLLMSpanEnd(ctx, llmSpanID, llmSpanStart, nil, err)
 			return nil, fmt.Errorf("LLM call failed (iteration %d): %w", iteration, err)
 		}
 
-		l.emitLLMSpan(ctx, llmSpanStart, iteration, messages, resp, nil)
+		l.emitLLMSpanEnd(ctx, llmSpanID, llmSpanStart, resp, nil)
 
 		// For non-streaming responses, emit thinking and content as single events
 		if !req.Stream {
@@ -643,6 +668,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			argsHash := loopDetector.record(tc.Name, tc.Arguments)
 
 			toolSpanStart := time.Now().UTC()
+			toolSpanID := l.emitToolSpanStart(ctx, toolSpanStart, tc.Name, tc.ID, string(argsJSON))
 			var result *tools.Result
 			if allowedTools != nil && !allowedTools[tc.Name] {
 				slog.Warn("security.tool_policy_blocked", "agent", l.id, "tool", tc.Name)
@@ -651,7 +677,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				result = l.tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, req.Channel, req.ChatID, req.PeerKind, req.SessionKey, nil)
 			}
 
-			l.emitToolSpan(ctx, toolSpanStart, tc.Name, tc.ID, string(argsJSON), result)
+			l.emitToolSpanEnd(ctx, toolSpanID, toolSpanStart, result)
 
 			// Record result for loop detection.
 			loopDetector.recordResult(argsHash, result.ForLLM)
@@ -763,6 +789,9 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 					argsJSON, _ := json.Marshal(tc.Arguments)
 					slog.Info("tool call", "agent", l.id, "tool", tc.Name, "args_len", len(argsJSON), "parallel", true)
 					spanStart := time.Now().UTC()
+					// Emit running span inside goroutine — goroutine-safe (channel send only).
+					// End is also emitted here to prevent orphans on ctx cancellation.
+					spanID := l.emitToolSpanStart(ctx, spanStart, tc.Name, tc.ID, string(argsJSON))
 					var result *tools.Result
 					if allowedTools != nil && !allowedTools[tc.Name] {
 						slog.Warn("security.tool_policy_blocked", "agent", l.id, "tool", tc.Name)
@@ -770,6 +799,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 					} else {
 						result = l.tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, req.Channel, req.ChatID, req.PeerKind, req.SessionKey, nil)
 					}
+					l.emitToolSpanEnd(ctx, spanID, spanStart, result)
 					resultCh <- indexedResult{idx: idx, tc: tc, result: result, argsJSON: string(argsJSON), spanStart: spanStart}
 				}(i, tc)
 			}
@@ -789,9 +819,9 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			})
 
 			// 5. Process results sequentially: emit events, append messages, save to session
+			// Note: tool span start/end already emitted inside goroutines above.
 			var loopStuck bool
 			for _, r := range collected {
-				l.emitToolSpan(ctx, r.spanStart, r.tc.Name, r.tc.ID, r.argsJSON, r.result)
 
 				// Record for loop detection.
 				argsHash := loopDetector.record(r.tc.Name, r.tc.Arguments)
@@ -881,8 +911,9 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	// 4. Full sanitization pipeline (matching TS extractAssistantText + sanitizeUserFacingText)
 	finalContent = SanitizeAssistantContent(finalContent)
 
-	// 4b. Config leak detection (predefined agents only)
-	finalContent = StripConfigLeak(finalContent, l.agentType)
+	// 4b. Config leak detection — disabled: too many false positives
+	// (e.g. agent explaining public architecture mentioning SOUL.md etc.)
+	// finalContent = StripConfigLeak(finalContent, l.agentType)
 
 	// 5. Handle NO_REPLY: save to session for context but mark as silent.
 	// Matching TS: NO_REPLY is saved (via resolveSilentReplyFallbackText) but

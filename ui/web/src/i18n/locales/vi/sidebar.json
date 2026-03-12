@@ -1,7 +1,10 @@
 {
   "groups": {
     "core": "Chính",
-    "management": "Quản lý",
+    "conversations": "Hội thoại",
+    "connectivity": "Kết nối",
+    "capabilities": "Khả năng",
+    "data": "Dữ liệu",
     "monitoring": "Giám sát",
     "system": "Hệ thống"
   },
@@ -13,12 +16,14 @@
     "sessions": "Session",
     "pendingMessages": "Tin nhắn chờ",
     "channels": "Channel",
+    "contacts": "Liên hệ",
     "skills": "Skill",
     "cron": "Tác vụ định kỳ",
     "customTools": "Công cụ tùy chỉnh",
     "builtinTools": "Công cụ tích hợp",
     "mcpServers": "Máy chủ MCP",
     "memory": "Bộ nhớ",
+    "knowledgeGraph": "Knowledge Graph",
     "traces": "Theo dõi",
     "realtimeEvents": "Sự kiện thời gian thực",
     "delegations": "Ủy quyền",
@@ -28,8 +33,9 @@
     "providers": "Provider",
     "config": "Cấu hình",
     "approvals": "Phê duyệt",
-    "nodes": "Nút",
-    "tts": "Chuyển văn bản thành giọng nói",
-    "party": "Chế độ Party"
+    "nodes": "Nodes",
+    "tts": "TTS",
+    "party": "Chế độ Party",
+    "activity": "Hoạt động"
   }
 }

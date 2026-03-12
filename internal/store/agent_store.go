@@ -39,6 +39,9 @@ type AgentData struct {
 	IsDefault           bool   `json:"is_default"`
 	Status              string `json:"status"`
 
+	// Budget: optional monthly spending limit in cents (nil = unlimited)
+	BudgetMonthlyCents *int `json:"budget_monthly_cents,omitempty"`
+
 	// Per-agent JSONB config (nullable — nil means "use global defaults")
 	ToolsConfig      json.RawMessage `json:"tools_config,omitempty"`
 	SandboxConfig    json.RawMessage `json:"sandbox_config,omitempty"`
@@ -213,6 +216,7 @@ type AgentStore interface {
 
 	// User-agent profiles + instances
 	GetOrCreateUserProfile(ctx context.Context, agentID uuid.UUID, userID, workspace, channel string) (isNew bool, effectiveWorkspace string, err error)
+	EnsureUserProfile(ctx context.Context, agentID uuid.UUID, userID string) error
 	ListUserInstances(ctx context.Context, agentID uuid.UUID) ([]UserInstanceData, error)
 	UpdateUserProfileMetadata(ctx context.Context, agentID uuid.UUID, userID string, metadata map[string]string) error
 

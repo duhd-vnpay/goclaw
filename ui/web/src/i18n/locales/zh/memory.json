@@ -12,7 +12,8 @@
     "agent": "Agent",
     "allAgents": "所有Agent",
     "scope": "范围",
-    "allScope": "全部（全局 + 个人）"
+    "allScope": "全部（全局 + 个人）",
+    "selectAgent": "选择Agent"
   },
   "tabs": {
     "documents": "文档",
@@ -85,6 +86,10 @@
     "path": "路径："
   },
   "kg": {
+    "pageTitle": "Knowledge Graph",
+    "pageDescription": "探索从Agent记忆中提取的实体和关系。",
+    "selectAgentTitle": "选择Agent",
+    "selectAgentDescription": "选择Agent以查看其知识图谱。",
     "emptyTitle": "暂无实体",
     "emptyDescription": "该Agent暂无知识图谱实体。",
     "emptySearchDescription": "没有与您搜索匹配的实体。",

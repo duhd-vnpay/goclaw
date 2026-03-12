@@ -29,6 +29,14 @@ type SpanExporter interface {
 	Shutdown(ctx context.Context) error
 }
 
+// spanUpdate represents a deferred span field update, buffered alongside new
+// spans and applied during the same flush cycle (after batch INSERT).
+type spanUpdate struct {
+	SpanID  uuid.UUID
+	TraceID uuid.UUID
+	Updates map[string]any
+}
+
 // Collector buffers spans in memory and periodically flushes them to the
 // TracingStore in batches. Traces are created synchronously (one per run),
 // while spans are buffered for async batch insert.
@@ -38,9 +46,10 @@ type SpanExporter interface {
 type Collector struct {
 	store store.TracingStore
 
-	spanCh chan store.SpanData
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	spanCh       chan store.SpanData
+	spanUpdateCh chan spanUpdate // deferred span updates (two-phase tracing)
+	stopCh       chan struct{}
+	wg           sync.WaitGroup
 
 	// traces that need aggregate updates on flush
 	dirtyTraces   map[uuid.UUID]struct{}
@@ -62,11 +71,12 @@ func NewCollector(ts store.TracingStore) *Collector {
 		slog.Info("tracing: verbose mode enabled (GOCLAW_TRACE_VERBOSE)")
 	}
 	return &Collector{
-		store:       ts,
-		spanCh:      make(chan store.SpanData, defaultBufferSize),
-		stopCh:      make(chan struct{}),
-		dirtyTraces: make(map[uuid.UUID]struct{}),
-		verbose:     verbose,
+		store:        ts,
+		spanCh:       make(chan store.SpanData, defaultBufferSize),
+		spanUpdateCh: make(chan spanUpdate, defaultBufferSize),
+		stopCh:       make(chan struct{}),
+		dirtyTraces:  make(map[uuid.UUID]struct{}),
+		verbose:      verbose,
 	}
 }
 
@@ -130,6 +140,30 @@ func (c *Collector) EmitSpan(span store.SpanData) {
 		slog.Warn("tracing: span buffer full, dropping span",
 			"span_type", span.SpanType, "name", span.Name)
 	}
+}
+
+// EmitSpanUpdate enqueues a deferred update for an existing span.
+// Used by two-phase tracing: a "running" span is emitted via EmitSpan before
+// execution starts, then updated via EmitSpanUpdate when execution completes.
+// Non-blocking channel send — safe to call even after ctx cancellation.
+func (c *Collector) EmitSpanUpdate(spanID, traceID uuid.UUID, updates map[string]any) {
+	select {
+	case c.spanUpdateCh <- spanUpdate{SpanID: spanID, TraceID: traceID, Updates: updates}:
+		c.markDirty(traceID)
+	default:
+		slog.Warn("tracing: span update buffer full, dropping update",
+			"span_id", spanID)
+	}
+}
+
+// SetTraceStatus updates only the trace status and marks it dirty for re-aggregation.
+// Used by child trace runs (e.g. announce) to toggle the parent trace back to
+// "running" while the child is active, then "completed" when done.
+func (c *Collector) SetTraceStatus(ctx context.Context, traceID uuid.UUID, status string) {
+	if err := c.store.UpdateTrace(ctx, traceID, map[string]any{"status": status}); err != nil {
+		slog.Warn("tracing: failed to set trace status", "trace_id", traceID, "error", err)
+	}
+	c.markDirty(traceID)
 }
 
 // FinishTrace marks a trace as completed and schedules aggregate update.
@@ -202,6 +236,29 @@ done:
 		if c.exporter != nil {
 			c.exporter.ExportSpans(ctx, spans)
 		}
+	}
+
+	// Drain and apply deferred span updates (two-phase tracing).
+	// Must run AFTER batch insert so that "running" spans exist before we UPDATE them.
+	var updates []spanUpdate
+	for {
+		select {
+		case u := <-c.spanUpdateCh:
+			updates = append(updates, u)
+		default:
+			goto doneUpdates
+		}
+	}
+doneUpdates:
+	if len(updates) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, u := range updates {
+			if err := c.store.UpdateSpan(ctx, u.SpanID, u.Updates); err != nil {
+				slog.Warn("tracing: span update failed", "span_id", u.SpanID, "error", err)
+			}
+		}
+		slog.Debug("tracing: applied span updates", "count", len(updates))
 	}
 
 	// Update aggregates for dirty traces

@@ -39,19 +39,37 @@ func makeCronJobHandler(sched *scheduler.Scheduler, msgBus *bus.MessageBus, cfg 
 		// Resolve channel type for system prompt context.
 		channelType := resolveChannelType(channelMgr, channel)
 
+		// Build cron context so the agent knows delivery target and requester.
+		var extraPrompt string
+		if job.Payload.Deliver && job.Payload.Channel != "" && job.Payload.To != "" {
+			extraPrompt = fmt.Sprintf(
+				"[Cron Job]\nThis is scheduled job \"%s\" (ID: %s).\n"+
+					"Requester: user %s on channel \"%s\" (chat %s).\n"+
+					"Your response will be automatically delivered to that chat — just produce the content directly.",
+				job.Name, job.ID, job.UserID, job.Payload.Channel, job.Payload.To,
+			)
+		} else {
+			extraPrompt = fmt.Sprintf(
+				"[Cron Job]\nThis is scheduled job \"%s\" (ID: %s), created by user %s.\n"+
+					"Delivery is not configured — respond normally.",
+				job.Name, job.ID, job.UserID,
+			)
+		}
+
 		// Schedule through cron lane — scheduler handles agent resolution and concurrency
 		outCh := sched.Schedule(context.Background(), scheduler.LaneCron, agent.RunRequest{
-			SessionKey:  sessionKey,
-			Message:     job.Payload.Message,
-			Channel:     channel,
-			ChannelType: channelType,
-			ChatID:      job.Payload.To,
-			PeerKind:    peerKind,
-			UserID:      job.UserID,
-			RunID:       fmt.Sprintf("cron:%s", job.ID),
-			Stream:      false,
-			TraceName:   fmt.Sprintf("Cron [%s] - %s", job.Name, agentID),
-			TraceTags:   []string{"cron"},
+			SessionKey:        sessionKey,
+			Message:           job.Payload.Message,
+			Channel:           channel,
+			ChannelType:       channelType,
+			ChatID:            job.Payload.To,
+			PeerKind:          peerKind,
+			UserID:            job.UserID,
+			RunID:             fmt.Sprintf("cron:%s", job.ID),
+			Stream:            false,
+			ExtraSystemPrompt: extraPrompt,
+			TraceName:         fmt.Sprintf("Cron [%s] - %s", job.Name, agentID),
+			TraceTags:         []string{"cron"},
 		})
 
 		// Block until the scheduled run completes

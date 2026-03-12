@@ -58,6 +58,10 @@ func (c *thinkingCancel) Cancel() {
 func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore, agentStore store.AgentStore, teamStore store.TeamStore, pendingStore store.PendingMessageStore) (*Channel, error) {
 	var opts []telego.BotOption
 
+	if cfg.APIServer != "" {
+		opts = append(opts, telego.WithAPIServer(cfg.APIServer))
+	}
+
 	if cfg.Proxy != "" {
 		proxyURL, parseErr := url.Parse(cfg.Proxy)
 		if parseErr != nil {
@@ -205,6 +209,11 @@ func (c *Channel) StreamEnabled(isGroup bool) bool {
 
 // BlockReplyEnabled returns the per-channel block_reply override (nil = inherit gateway default).
 func (c *Channel) BlockReplyEnabled() *bool { return c.config.BlockReply }
+
+// SetPendingCompaction configures LLM-based auto-compaction for pending messages.
+func (c *Channel) SetPendingCompaction(cfg *channels.CompactionConfig) {
+	c.groupHistory.SetCompactionConfig(cfg)
+}
 
 // Stop shuts down the Telegram bot by cancelling the long polling context
 // and waiting for the polling goroutine to exit.

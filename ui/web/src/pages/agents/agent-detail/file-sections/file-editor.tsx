@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { FILE_DESCRIPTIONS } from "./file-utils";
+import { ContactInsertSearch } from "./contact-insert-search";
 
 interface FileEditorProps {
   fileName: string | null;
@@ -15,6 +16,8 @@ interface FileEditorProps {
   canEdit: boolean;
   onSave: () => void;
   headerActions?: ReactNode;
+  /** Show contact search box for inserting contact snippets into the editor. */
+  contactSearchEnabled?: boolean;
 }
 
 export function FileEditor({
@@ -27,8 +30,37 @@ export function FileEditor({
   canEdit,
   onSave,
   headerActions,
+  contactSearchEnabled,
 }: FileEditorProps) {
   const { t } = useTranslation("agents");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleInsertText = useCallback(
+    (text: string) => {
+      const ta = textareaRef.current;
+      if (!ta) {
+        // Fallback: append at end
+        onChange(content + (content.endsWith("\n") ? "" : "\n") + text);
+        return;
+      }
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const before = content.slice(0, start);
+      const after = content.slice(end);
+      // Add newline prefix if cursor isn't at line start
+      const needNewline = before.length > 0 && !before.endsWith("\n");
+      const inserted = (needNewline ? "\n" : "") + text + "\n";
+      onChange(before + inserted + after);
+      // Restore cursor after inserted text
+      requestAnimationFrame(() => {
+        const pos = start + inserted.length;
+        ta.selectionStart = pos;
+        ta.selectionEnd = pos;
+        ta.focus();
+      });
+    },
+    [content, onChange],
+  );
 
   if (!fileName) {
     return (
@@ -64,12 +96,18 @@ export function FileEditor({
           )}
         </div>
       </div>
+      {contactSearchEnabled && canEdit && (
+        <div className="mb-2">
+          <ContactInsertSearch onInsert={handleInsertText} />
+        </div>
+      )}
       {loading && !content ? (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           {t("files.loading")}
         </div>
       ) : (
         <Textarea
+          ref={textareaRef}
           value={content}
           onChange={(e) => {
             if (!canEdit) return;

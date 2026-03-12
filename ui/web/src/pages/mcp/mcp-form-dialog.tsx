@@ -16,6 +16,15 @@ import { KeyValueEditor } from "@/components/shared/key-value-editor";
 import type { MCPServerData, MCPServerInput } from "./hooks/use-mcp";
 import { slugify, isValidSlug } from "@/lib/slug";
 
+/** Header keys whose values should be masked in the form. */
+const SENSITIVE_HEADER_RE = /^(authorization|x-api-key|api-key|bearer|token|secret|password|credential)/i;
+
+/** Env var keys whose values should be masked in the form. */
+const SENSITIVE_ENV_RE = /^.*(key|secret|token|password|credential).*$/i;
+
+const isSensitiveHeader = (key: string) => SENSITIVE_HEADER_RE.test(key.trim());
+const isSensitiveEnv = (key: string) => SENSITIVE_ENV_RE.test(key.trim());
+
 interface MCPFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -206,6 +215,7 @@ export function MCPFormDialog({ open, onOpenChange, server, onSubmit, onTest }: 
                   keyPlaceholder={t("form.headerKeyPlaceholder")}
                   valuePlaceholder={t("form.headerValuePlaceholder")}
                   addLabel={t("form.addHeader")}
+                  maskValue={isSensitiveHeader}
                 />
               </div>
             </>
@@ -219,6 +229,7 @@ export function MCPFormDialog({ open, onOpenChange, server, onSubmit, onTest }: 
               keyPlaceholder={t("form.envKeyPlaceholder")}
               valuePlaceholder={t("form.envValuePlaceholder")}
               addLabel={t("form.addVariable")}
+              maskValue={isSensitiveEnv}
             />
           </div>
 

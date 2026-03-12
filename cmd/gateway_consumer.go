@@ -26,7 +26,7 @@ import (
 // and routes them through the scheduler/agent loop, then publishes the response back.
 // Also handles subagent announcements: routes them through the parent agent's session
 // (matching TS subagent-announce.ts pattern) so the agent can reformulate for the user.
-func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents *agent.Router, cfg *config.Config, sched *scheduler.Scheduler, channelMgr *channels.Manager, teamStore store.TeamStore, quotaChecker *channels.QuotaChecker, delegateMgr *tools.DelegateManager, sessStore store.SessionStore, agentStore store.AgentStore) {
+func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents *agent.Router, cfg *config.Config, sched *scheduler.Scheduler, channelMgr *channels.Manager, teamStore store.TeamStore, quotaChecker *channels.QuotaChecker, delegateMgr *tools.DelegateManager, sessStore store.SessionStore, agentStore store.AgentStore, contactCollector *store.ContactCollector) {
 	slog.Info("inbound message consumer started")
 
 	// Inbound message deduplication (matching TS src/infra/dedupe.ts + inbound-dedupe.ts).
@@ -110,13 +110,29 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 		}
 
 		// Persist friendly names from channel metadata into session + user profile.
-		if sessionMeta := extractSessionMetadata(msg, peerKind); len(sessionMeta) > 0 {
+		sessionMeta := extractSessionMetadata(msg, peerKind)
+		if len(sessionMeta) > 0 {
 			sessStore.SetSessionMetadata(sessionKey, sessionMeta)
 			if agentStore != nil {
 				if agentUUID, err := uuid.Parse(agentID); err == nil && agentUUID != uuid.Nil {
 					_ = agentStore.UpdateUserProfileMetadata(ctx, agentUUID, userID, sessionMeta)
 				}
 			}
+		}
+
+		// Auto-collect channel contacts for the contact selector.
+		if contactCollector != nil && msg.SenderID != "" {
+			senderNumericID := msg.SenderID
+			if idx := strings.IndexByte(senderNumericID, '|'); idx > 0 {
+				senderNumericID = senderNumericID[:idx]
+			}
+			channelType := channelMgr.ChannelTypeForName(msg.Channel)
+			if channelType == "" {
+				channelType = msg.Channel // fallback to instance name
+			}
+			displayName := sessionMeta["display_name"]
+			username := sessionMeta["username"]
+			contactCollector.EnsureContact(ctx, channelType, msg.Channel, senderNumericID, userID, displayName, username, peerKind)
 		}
 
 		// --- Quota check ---

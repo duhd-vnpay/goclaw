@@ -23,7 +23,6 @@ export function PartyPage() {
     messages,
     personas,
     thinkingPersonas,
-    round,
     mode,
     status,
     loading,

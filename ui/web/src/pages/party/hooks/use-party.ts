@@ -77,7 +77,7 @@ export function useParty() {
       return personaColorMap.current.get(key)!;
     }
     const idx = personaColorMap.current.size % PERSONA_COLORS.length;
-    const color = PERSONA_COLORS[idx];
+    const color = PERSONA_COLORS[idx] ?? "#3b82f6";
     personaColorMap.current.set(key, color);
     return color;
   }, []);

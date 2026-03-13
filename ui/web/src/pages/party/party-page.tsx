@@ -83,6 +83,7 @@ export function PartyPage() {
                 sessions.map((session) => (
                   <button
                     key={session.id}
+                    data-testid="session-item"
                     type="button"
                     onClick={() => setActiveSessionId(session.id)}
                     className={cn(

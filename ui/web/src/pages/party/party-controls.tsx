@@ -89,6 +89,7 @@ export function PartyControls({
           {MODE_OPTIONS.map((opt) => (
             <button
               key={opt.value}
+              data-testid={`mode-${opt.value}`}
               type="button"
               disabled={isClosed}
               onClick={() => setSelectedMode(opt.value)}

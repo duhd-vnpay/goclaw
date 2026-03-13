@@ -25,6 +25,7 @@ export function PersonaSidebar({ personas, thinkingPersonas }: PersonaSidebarPro
           return (
             <div
               key={persona.key}
+              data-testid="persona-item"
               className="flex items-center gap-2 rounded-md px-2 py-1.5"
             >
               {/* Status indicator */}

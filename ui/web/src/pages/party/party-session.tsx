@@ -13,7 +13,7 @@ interface PartySessionProps {
 function RoundHeader({ round, mode, t }: { round: number; mode?: PartyMode; t: (k: string, opts?: Record<string, unknown>) => string }) {
   const modeLabel = mode ? t(`mode.${mode}`) : "";
   return (
-    <div className="flex items-center gap-2 py-3">
+    <div data-testid="round-header" className="flex items-center gap-2 py-3">
       <div className="h-px flex-1 bg-border" />
       <span className="text-xs font-medium text-muted-foreground">
         {t("round", { n: round })} {modeLabel && `[${modeLabel}]`}
@@ -34,6 +34,7 @@ function PersonaMessage({
 
   return (
     <div
+      data-testid="persona-message"
       className={cn(
         "rounded-md border-l-[3px] bg-muted/30 p-3",
         isIntro && "opacity-80",
@@ -66,7 +67,7 @@ function ContextMessage({ message }: { message: PartyMessage }) {
 
 function SummaryMessage({ message }: { message: PartyMessage }) {
   return (
-    <div className="rounded-md border border-primary/20 bg-primary/5 p-4">
+    <div data-testid="summary-message" className="rounded-md border border-primary/20 bg-primary/5 p-4">
       <MarkdownRenderer content={message.content} />
     </div>
   );

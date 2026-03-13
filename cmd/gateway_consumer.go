@@ -94,19 +94,21 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			}
 		}
 
-		// Group-scoped UserID: treat the group as a single "virtual user" for
-		// context files, memory, traces, and seeding. Individual senderID is
-		// preserved in the InboundMessage for pairing/dedup/mention gate.
-		// Format: "group:{channel}:{chatID}" — e.g., "group:telegram:-1002541239372"
-		// For Discord: use guild_id so all channels in the same server share
-		// context files, memory, and seeding (session key stays per-channel).
+		// Group-scoped UserID: context files, memory, traces, and seeding scope.
+		// - Discord guilds: "guild:{guildID}:user:{senderID}" — per-user per-server,
+		//   shared across all channels within the same server. Session key stays per-channel.
+		// - Other platforms: "group:{channel}:{chatID}" — shared by all users in the chat.
+		// Individual senderID is preserved in InboundMessage for pairing/dedup/mention gate.
 		userID := msg.UserID
 		if peerKind == string(sessions.PeerGroup) && msg.ChatID != "" {
-			groupID := msg.ChatID
-			if guildID := msg.Metadata["guild_id"]; guildID != "" {
-				groupID = guildID
+			if guildID := msg.Metadata["guild_id"]; guildID != "" && msg.SenderID != "" {
+				// Discord guild: per-user scope so each member has own profile
+				// across all channels in the same server.
+				userID = fmt.Sprintf("guild:%s:user:%s", guildID, msg.SenderID)
+			} else {
+				groupID := msg.ChatID
+				userID = fmt.Sprintf("group:%s:%s", msg.Channel, groupID)
 			}
-			userID = fmt.Sprintf("group:%s:%s", msg.Channel, groupID)
 		}
 
 		// Persist friendly names from channel metadata into session + user profile.
@@ -241,10 +243,9 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 		}
 
 		// Intent classify fast-path: when agent is busy on DM, classify user intent
-		// to detect status queries, cancel requests, etc. without queueing.
+		// to detect status queries, cancel requests, or steer/new_task for mid-run injection.
 		// Only for DM (maxConcurrent=1) where messages queue behind the active run.
-		intentClassifyEnabled := cfg.Agents.Defaults.IntentClassify == nil || *cfg.Agents.Defaults.IntentClassify
-		if intentClassifyEnabled && maxConcurrent == 1 && agents.IsSessionBusy(sessionKey) {
+		if maxConcurrent == 1 && agents.IsSessionBusy(sessionKey) {
 			if loop, ok := agentLoop.(*agent.Loop); ok && loop.Provider() != nil {
 				locale := msg.Metadata["locale"]
 				if locale == "" {
@@ -275,8 +276,26 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 						})
 					}
 					return
-				default:
-					// steer / new_task → queue as normal
+				case agent.IntentSteer, agent.IntentNewTask:
+					// Mid-run injection: inject into the running loop instead of queueing.
+					injected := agents.InjectMessage(sessionKey, agent.InjectedMessage{
+						Content: msg.Content,
+						UserID:  userID,
+					})
+					if injected {
+						slog.Info("inbound: injected mid-run message",
+							"intent", string(intent), "session", sessionKey)
+						msgBus.PublishOutbound(bus.OutboundMessage{
+							Channel:  msg.Channel,
+							ChatID:   msg.ChatID,
+							Content:  i18n.T(locale, i18n.MsgInjectedAck),
+							Metadata: outMeta,
+						})
+						return
+					}
+					// Fallback: injection failed (channel full) → fall through to scheduler queue
+					slog.Info("inbound: injection failed, queueing as normal",
+						"intent", string(intent), "session", sessionKey)
 				}
 			}
 		}

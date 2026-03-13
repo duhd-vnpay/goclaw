@@ -22,20 +22,20 @@ const TEAM_PRESETS = [
 ] as const;
 
 const ALL_PERSONAS = [
-  { key: "product_manager", emoji: "\ud83d\udcca", label: "Product Manager" },
-  { key: "tech_lead", emoji: "\ud83d\udd27", label: "Tech Lead" },
-  { key: "security_analyst", emoji: "\ud83d\udd12", label: "Security Analyst" },
-  { key: "qa_engineer", emoji: "\ud83e\uddea", label: "QA Engineer" },
-  { key: "devops_engineer", emoji: "\u2699\ufe0f", label: "DevOps Engineer" },
-  { key: "ux_designer", emoji: "\ud83c\udfa8", label: "UX Designer" },
-  { key: "backend_dev", emoji: "\ud83d\udda5\ufe0f", label: "Backend Dev" },
-  { key: "frontend_dev", emoji: "\ud83c\udf10", label: "Frontend Dev" },
-  { key: "data_analyst", emoji: "\ud83d\udcc8", label: "Data Analyst" },
-  { key: "compliance_officer", emoji: "\ud83d\udccb", label: "Compliance Officer" },
-  { key: "scrum_master", emoji: "\ud83c\udfc3", label: "Scrum Master" },
-  { key: "architect", emoji: "\ud83c\udfd7\ufe0f", label: "Architect" },
-  { key: "dba", emoji: "\ud83d\uddc4\ufe0f", label: "DBA" },
-  { key: "business_analyst", emoji: "\ud83d\udcbc", label: "Business Analyst" },
+  { key: "tony-stark-persona", emoji: "\ud83d\udcca", label: "Product Manager" },
+  { key: "morpheus-persona", emoji: "\ud83d\udd27", label: "Tech Lead" },
+  { key: "batman-persona", emoji: "\ud83d\udd12", label: "Security Analyst" },
+  { key: "columbo-persona", emoji: "\ud83e\uddea", label: "QA Engineer" },
+  { key: "scotty-persona", emoji: "\u2699\ufe0f", label: "DevOps Engineer" },
+  { key: "edna-mode-persona", emoji: "\ud83c\udfa8", label: "UX Designer" },
+  { key: "spider-man-persona", emoji: "\ud83c\udf10", label: "Frontend Dev" },
+  { key: "ethan-hunt-persona", emoji: "\ud83d\udcf1", label: "Mobile Dev" },
+  { key: "sherlock-persona", emoji: "\ud83d\udcbc", label: "Business Analyst" },
+  { key: "judge-dredd-persona", emoji: "\ud83d\udccb", label: "Compliance Officer" },
+  { key: "gandalf-persona", emoji: "\ud83c\udfc3", label: "Scrum Master" },
+  { key: "neo-persona", emoji: "\ud83c\udfd7\ufe0f", label: "Architect" },
+  { key: "spock-persona", emoji: "\ud83d\uddc4\ufe0f", label: "DBA" },
+  { key: "nick-fury-persona", emoji: "\ud83d\udc54", label: "Executive" },
 ] as const;
 
 interface PartyStartDialogProps {

@@ -32,7 +32,7 @@ export function PartyPage() {
     askQuestion,
     getSummary,
     exitParty,
-    setActiveSessionId,
+    selectSession,
     getPersonaColor,
   } = useParty();
 
@@ -85,7 +85,7 @@ export function PartyPage() {
                     key={session.id}
                     data-testid="session-item"
                     type="button"
-                    onClick={() => setActiveSessionId(session.id)}
+                    onClick={() => selectSession(session)}
                     className={cn(
                       "w-full rounded-md px-3 py-2 text-left transition-colors cursor-pointer",
                       activeSessionId === session.id

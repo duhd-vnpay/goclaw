@@ -54,6 +54,34 @@ const PERSONA_COLORS = [
   "#e11d48", "#84cc16", "#a855f7", "#0ea5e9",
 ];
 
+// Map backend status to frontend display status
+function mapStatus(backendStatus: string): "active" | "closed" {
+  return backendStatus === "closed" ? "closed" : "active";
+}
+
+// Transform backend session (snake_case) to frontend PartySession
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function transformSession(raw: any): PartySession {
+  const personaKeys: string[] = Array.isArray(raw.personas)
+    ? raw.personas
+    : [];
+  return {
+    id: raw.id,
+    topic: raw.topic ?? "",
+    status: mapStatus(raw.status ?? ""),
+    personas: personaKeys.map((k: string) => ({
+      key: k,
+      emoji: "",
+      name: k,
+      role: "",
+      color: "",
+    })),
+    round: raw.round ?? 0,
+    mode: raw.mode ?? "standard",
+    createdAt: raw.created_at ?? raw.createdAt ?? "",
+  };
+}
+
 export function useParty() {
   const ws = useWs();
   const connected = useAuthStore((s) => s.connected);
@@ -88,17 +116,23 @@ export function useParty() {
   }, []);
 
   // --- Event handlers ---
+  // Backend sends snake_case field names (Go json tags)
 
   const handlePartyStarted = useCallback((payload: unknown) => {
+    // Backend: { session_id, topic, personas: [{ agent_key, display_name, emoji, movie_ref }] }
     const p = payload as {
-      sessionId: string;
+      session_id: string;
       topic: string;
-      personas: Array<{ key: string; emoji: string; name: string; role: string }>;
+      personas: Array<{ agent_key: string; display_name: string; emoji: string; movie_ref: string }>;
     };
-    setActiveSessionId(p.sessionId);
-    const enriched = p.personas.map((pe) => ({
-      ...pe,
-      color: getPersonaColor(pe.key),
+    const sessionId = p.session_id;
+    setActiveSessionId(sessionId);
+    const enriched: PersonaInfo[] = (p.personas ?? []).map((pe) => ({
+      key: pe.agent_key,
+      emoji: pe.emoji ?? "",
+      name: pe.display_name ?? pe.agent_key,
+      role: pe.movie_ref ?? "",
+      color: getPersonaColor(pe.agent_key),
     }));
     setPersonas(enriched);
     setRound(0);
@@ -108,16 +142,31 @@ export function useParty() {
     setMessages([]);
     personaColorMap.current.clear();
     enriched.forEach((pe) => personaColorMap.current.set(pe.key, pe.color));
+
+    // Add new session to sessions list for sidebar
+    setSessions((prev) => [
+      {
+        id: sessionId,
+        topic: p.topic ?? "",
+        status: "active",
+        personas: enriched,
+        round: 0,
+        mode: "standard",
+        createdAt: new Date().toISOString(),
+      },
+      ...prev,
+    ]);
   }, [getPersonaColor]);
 
   const handlePersonaIntro = useCallback((payload: unknown) => {
-    const p = payload as { personaKey: string; emoji: string; name: string; intro: string };
+    // Backend: { session_id, persona, emoji, content }
+    const p = payload as { persona: string; emoji: string; content: string };
     addMessage({
       type: "intro",
-      personaKey: p.personaKey,
-      personaEmoji: p.emoji,
-      personaName: p.name,
-      content: p.intro,
+      personaKey: p.persona,
+      personaEmoji: p.emoji ?? "",
+      personaName: p.persona,
+      content: p.content ?? "",
     });
   }, [addMessage]);
 
@@ -134,24 +183,25 @@ export function useParty() {
   }, [addMessage]);
 
   const handlePersonaThinking = useCallback((payload: unknown) => {
-    const p = payload as { personaKey: string };
-    setThinkingPersonas((prev) => new Set(prev).add(p.personaKey));
+    // Backend: { session_id, persona, emoji }
+    const p = payload as { persona: string };
+    setThinkingPersonas((prev) => new Set(prev).add(p.persona));
   }, []);
 
   const handlePersonaSpoke = useCallback((payload: unknown) => {
-    const p = payload as { personaKey: string; emoji: string; name: string; message: string; round: number };
+    // Backend: { session_id, persona, emoji, content }
+    const p = payload as { persona: string; emoji: string; content: string };
     setThinkingPersonas((prev) => {
       const next = new Set(prev);
-      next.delete(p.personaKey);
+      next.delete(p.persona);
       return next;
     });
     addMessage({
       type: "spoke",
-      personaKey: p.personaKey,
-      personaEmoji: p.emoji,
-      personaName: p.name,
-      content: p.message,
-      round: p.round,
+      personaKey: p.persona,
+      personaEmoji: p.emoji ?? "",
+      personaName: p.persona,
+      content: p.content ?? "",
     });
   }, [addMessage]);
 
@@ -170,11 +220,13 @@ export function useParty() {
   }, [addMessage]);
 
   const handleSummaryReady = useCallback((payload: unknown) => {
-    const p = payload as PartySummary;
-    setSummary(p);
+    // Backend: { session_id, summary: { markdown, ... } }
+    const raw = payload as { summary?: PartySummary; markdown?: string };
+    const s: PartySummary = raw.summary ?? raw as PartySummary;
+    setSummary(s);
     addMessage({
       type: "summary",
-      content: p.markdown ?? "",
+      content: s.markdown ?? "",
     });
   }, [addMessage]);
 
@@ -186,9 +238,16 @@ export function useParty() {
     });
   }, [addMessage]);
 
-  const handlePartyClosed = useCallback((_payload: unknown) => {
+  const handlePartyClosed = useCallback((payload: unknown) => {
+    const p = payload as { session_id?: string };
     setStatus("closed");
     setThinkingPersonas(new Set());
+    // Update session status in the list
+    if (p.session_id) {
+      setSessions((prev) =>
+        prev.map((s) => (s.id === p.session_id ? { ...s, status: "closed" as const } : s)),
+      );
+    }
   }, []);
 
   // --- Subscribe to events ---
@@ -204,13 +263,15 @@ export function useParty() {
   useWsEvent(Events.PARTY_CLOSED, handlePartyClosed);
 
   // --- RPC calls ---
+  // Backend expects snake_case field names (Go json tags)
 
   const listSessions = useCallback(async () => {
     if (!connected) return;
     setLoading(true);
     try {
-      const res = await ws.call<{ sessions: PartySession[] }>(Methods.PARTY_LIST);
-      setSessions(res.sessions ?? []);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await ws.call<{ sessions: any[] }>(Methods.PARTY_LIST, {});
+      setSessions((res.sessions ?? []).map(transformSession));
     } catch {
       // ignore
     } finally {
@@ -225,8 +286,8 @@ export function useParty() {
       try {
         await ws.call(Methods.PARTY_START, {
           topic,
-          teamPreset: teamPreset ?? undefined,
-          personaKeys: personaKeys ?? undefined,
+          team_preset: teamPreset ?? undefined,
+          personas: personaKeys ?? undefined,
         });
       } catch {
         // ignore
@@ -240,7 +301,7 @@ export function useParty() {
   const runRound = useCallback(
     async (sessionId: string, roundMode?: PartyMode) => {
       await ws.call(Methods.PARTY_ROUND, {
-        sessionId,
+        session_id: sessionId,
         mode: roundMode ?? undefined,
       });
     },
@@ -249,30 +310,50 @@ export function useParty() {
 
   const askQuestion = useCallback(
     async (sessionId: string, text: string) => {
-      await ws.call(Methods.PARTY_QUESTION, { sessionId, text });
+      await ws.call(Methods.PARTY_QUESTION, { session_id: sessionId, text });
     },
     [ws],
   );
 
   const addContext = useCallback(
     async (sessionId: string, type: string, name?: string, content?: string) => {
-      await ws.call(Methods.PARTY_ADD_CONTEXT, { sessionId, type, name, content });
+      await ws.call(Methods.PARTY_ADD_CONTEXT, { session_id: sessionId, type, name, content });
     },
     [ws],
   );
 
   const getSummary = useCallback(
     async (sessionId: string) => {
-      await ws.call(Methods.PARTY_SUMMARY, { sessionId });
+      await ws.call(Methods.PARTY_SUMMARY, { session_id: sessionId });
     },
     [ws],
   );
 
   const exitParty = useCallback(
     async (sessionId: string) => {
-      await ws.call(Methods.PARTY_EXIT, { sessionId });
+      await ws.call(Methods.PARTY_EXIT, { session_id: sessionId });
     },
     [ws],
+  );
+
+  // Activate an existing session from the list (hydrates all state)
+  const selectSession = useCallback(
+    (session: PartySession) => {
+      setActiveSessionId(session.id);
+      const enriched = session.personas.map((pe) => ({
+        ...pe,
+        color: getPersonaColor(pe.key),
+      }));
+      setPersonas(enriched);
+      setRound(session.round);
+      setMode(session.mode);
+      setStatus(session.status === "closed" ? "closed" : "active");
+      setSummary(null);
+      setMessages([]);
+      personaColorMap.current.clear();
+      enriched.forEach((pe) => personaColorMap.current.set(pe.key, pe.color));
+    },
+    [getPersonaColor],
   );
 
   return {
@@ -296,6 +377,7 @@ export function useParty() {
     addContext,
     getSummary,
     exitParty,
+    selectSession,
     setActiveSessionId,
     getPersonaColor,
   };

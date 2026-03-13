@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 
 	"github.com/google/uuid"
 
@@ -45,15 +46,37 @@ func (m *PartyMethods) Register(router *gateway.MethodRouter) {
 	router.Register(protocol.MethodPartyList, m.handleList)
 }
 
-// getEngine returns a party engine using the first available provider.
+// getEngine returns a party engine using the best available provider.
+// Prefers providers with a non-empty DefaultModel; breaks ties alphabetically
+// to avoid non-determinism from Go map iteration order.
 func (m *PartyMethods) getEngine() (*party.Engine, error) {
 	names := m.providerReg.List()
 	if len(names) == 0 {
 		return nil, fmt.Errorf("no LLM providers available")
 	}
-	provider, err := m.providerReg.Get(names[0])
+
+	// Pick the best provider: prefer one with DefaultModel set.
+	var bestName string
+	for _, name := range names {
+		p, err := m.providerReg.Get(name)
+		if err != nil {
+			continue
+		}
+		if p.DefaultModel() != "" {
+			if bestName == "" || name < bestName {
+				bestName = name
+			}
+		}
+	}
+	// Fallback: alphabetically first provider.
+	if bestName == "" {
+		sort.Strings(names)
+		bestName = names[0]
+	}
+
+	provider, err := m.providerReg.Get(bestName)
 	if err != nil {
-		return nil, fmt.Errorf("provider %s: %w", names[0], err)
+		return nil, fmt.Errorf("provider %s: %w", bestName, err)
 	}
 	return party.NewEngine(m.partyStore, m.agentStore, provider), nil
 }
@@ -236,6 +259,7 @@ func (m *PartyMethods) handleRound(ctx context.Context, client *gateway.Client, 
 		result, err = engine.RunStandardRound(ctx, sess, personas, emit)
 	}
 	if err != nil {
+		slog.Error("party: round failed", "session", sess.ID, "round", sess.Round, "mode", mode, "error", err)
 		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, err.Error()))
 		return
 	}

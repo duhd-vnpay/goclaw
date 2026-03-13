@@ -317,7 +317,8 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 			}
 			registry.Register(providers.NewOpenAIProvider(p.Name, p.APIKey, base, ""))
 		default:
-			prov := providers.NewOpenAIProvider(p.Name, p.APIKey, p.APIBase, "")
+			defaultModel := extractDefaultModel(p.Settings)
+			prov := providers.NewOpenAIProvider(p.Name, p.APIKey, p.APIBase, defaultModel)
 			if p.ProviderType == store.ProviderMiniMax {
 				prov.WithChatPath("/text/chatcompletion_v2")
 			}
@@ -325,4 +326,18 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 		}
 		slog.Info("registered provider from DB", "name", p.Name)
 	}
+}
+
+// extractDefaultModel reads default_model from a provider's settings JSONB.
+func extractDefaultModel(settings json.RawMessage) string {
+	if len(settings) == 0 {
+		return ""
+	}
+	var s struct {
+		DefaultModel string `json:"default_model"`
+	}
+	if json.Unmarshal(settings, &s) == nil {
+		return s.DefaultModel
+	}
+	return ""
 }

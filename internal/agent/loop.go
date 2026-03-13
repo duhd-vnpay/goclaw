@@ -430,7 +430,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			Tools:    toolDefs,
 			Model:    l.model,
 			Options: map[string]any{
-				providers.OptMaxTokens:   8192,
+				providers.OptMaxTokens:   l.maxTokens,
 				providers.OptTemperature: 0.7,
 				providers.OptSessionKey:  req.SessionKey,
 				providers.OptAgentID:     l.agentUUID.String(),
@@ -504,6 +504,28 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 					Payload: map[string]string{"content": resp.Content},
 				})
 			}
+		}
+
+		// Truncation guard: if response was cut off (max_tokens reached) and has tool calls,
+		// the tool call arguments are likely incomplete/malformed. Skip execution and ask
+		// the LLM to re-issue with complete arguments or break into smaller parts.
+		if resp.FinishReason == "length" && len(resp.ToolCalls) > 0 {
+			slog.Warn("truncated tool calls detected",
+				"agent", l.id, "iteration", iteration,
+				"tool_calls", len(resp.ToolCalls), "max_tokens", l.maxTokens)
+			messages = append(messages,
+				providers.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls,
+					Thinking: resp.Thinking, RawAssistantContent: resp.RawAssistantContent},
+				providers.Message{
+					Role:    "user",
+					Content: "[System] Your response was truncated (max_tokens reached). The last tool call had incomplete arguments. Do NOT re-issue the same large tool call. Instead, break your work into smaller steps or respond with text only.",
+				},
+			)
+			pendingMsgs = append(pendingMsgs,
+				providers.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls},
+				providers.Message{Role: "user", Content: "[System] Response truncated — tool call skipped."},
+			)
+			continue
 		}
 
 		if resp.Usage != nil {

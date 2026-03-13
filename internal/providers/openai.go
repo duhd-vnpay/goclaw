@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -206,7 +207,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 	for _, idx := range indices {
 		acc := accumulators[idx]
 		args := make(map[string]any)
-		_ = json.Unmarshal([]byte(acc.rawArgs), &args)
+		if err := json.Unmarshal([]byte(acc.rawArgs), &args); err != nil && acc.rawArgs != "" {
+			slog.Warn("truncated tool call arguments (stream)",
+				"tool", acc.Name, "error", err, "raw_len", len(acc.rawArgs))
+		}
 		acc.Arguments = args
 		if acc.thoughtSig != "" {
 			acc.Metadata = map[string]string{"thought_signature": acc.thoughtSig}
@@ -387,7 +391,10 @@ func (p *OpenAIProvider) parseResponse(resp *openAIResponse) *ChatResponse {
 
 		for _, tc := range msg.ToolCalls {
 			args := make(map[string]any)
-			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil && tc.Function.Arguments != "" {
+				slog.Warn("truncated tool call arguments (non-stream)",
+					"tool", tc.Function.Name, "error", err, "raw_len", len(tc.Function.Arguments))
+			}
 			call := ToolCall{
 				ID:        tc.ID,
 				Name:      strings.TrimSpace(tc.Function.Name),

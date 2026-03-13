@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -98,7 +99,10 @@ func (p *CodexProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk
 			continue
 		}
 		args := make(map[string]any)
-		_ = json.Unmarshal([]byte(acc.rawArgs), &args)
+		if err := json.Unmarshal([]byte(acc.rawArgs), &args); err != nil && acc.rawArgs != "" {
+			slog.Warn("truncated tool call arguments (codex stream)",
+				"tool", acc.name, "error", err, "raw_len", len(acc.rawArgs))
+		}
 		result.ToolCalls = append(result.ToolCalls, ToolCall{
 			ID:        acc.callID,
 			Name:      acc.name,

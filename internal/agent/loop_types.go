@@ -46,6 +46,7 @@ type Loop struct {
 	contextWindow int
 	maxIterations int
 	maxToolCalls  int
+	maxTokens     int
 	workspace        string
 	workspaceSharing *store.WorkspaceSharingConfig
 
@@ -154,6 +155,7 @@ type LoopConfig struct {
 	ContextWindow   int
 	MaxIterations   int
 	MaxToolCalls    int
+	MaxTokens       int
 	Workspace        string
 	WorkspaceSharing *store.WorkspaceSharingConfig
 
@@ -263,6 +265,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		contextWindow:          cfg.ContextWindow,
 		maxIterations:          cfg.MaxIterations,
 		maxToolCalls:           cfg.MaxToolCalls,
+		maxTokens:              cfg.MaxTokens,
 		workspace:              cfg.Workspace,
 		workspaceSharing:       cfg.WorkspaceSharing,
 		restrictToWs:           cfg.RestrictToWs,

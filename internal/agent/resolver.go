@@ -231,6 +231,10 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 		if maxIter <= 0 {
 			maxIter = 20
 		}
+		maxTokens := ag.ParseMaxTokens()
+		if maxTokens <= 0 {
+			maxTokens = 8192
+		}
 
 		// Per-agent config overrides (fallback to global defaults from config.json)
 		compactionCfg := deps.CompactionCfg
@@ -357,6 +361,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			Model:                  ag.Model,
 			ContextWindow:          contextWindow,
 			MaxIterations:          maxIter,
+			MaxTokens:              maxTokens,
 			Workspace:              workspace,
 			RestrictToWs:           &restrictVal,
 			SubagentsCfg:           ag.ParseSubagentsConfig(),

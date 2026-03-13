@@ -36,6 +36,11 @@ export interface PartySession {
   round: number;
   mode: PartyMode;
   createdAt: string;
+  // Preserved from backend for session restore
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  _history?: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  _summary?: any;
 }
 
 export interface PartySummary {
@@ -79,7 +84,57 @@ function transformSession(raw: any): PartySession {
     round: raw.round ?? 0,
     mode: raw.mode ?? "standard",
     createdAt: raw.created_at ?? raw.createdAt ?? "",
+    _history: Array.isArray(raw.history) ? raw.history : undefined,
+    _summary: raw.summary ?? undefined,
   };
+}
+
+// Hydrate PartyMessage[] from backend history (RoundResult[]) and summary
+function hydrateMessages(
+  history: any[] | undefined, // eslint-disable-line @typescript-eslint/no-explicit-any
+  summary: any | undefined, // eslint-disable-line @typescript-eslint/no-explicit-any
+  startId: number,
+): { msgs: PartyMessage[]; nextId: number } {
+  let id = startId;
+  const msgs: PartyMessage[] = [];
+  if (!history) return { msgs, nextId: id };
+
+  for (const round of history) {
+    // Round header
+    msgs.push({
+      id: `pm-${++id}`,
+      type: "round_header",
+      content: "",
+      round: round.round,
+      mode: round.mode as PartyMode,
+      timestamp: Date.now(),
+    });
+    // Persona messages
+    for (const m of round.messages ?? []) {
+      msgs.push({
+        id: `pm-${++id}`,
+        type: "spoke",
+        personaKey: m.persona_key,
+        personaEmoji: m.emoji ?? "",
+        personaName: m.display_name ?? m.persona_key,
+        content: m.content ?? "",
+        round: round.round,
+        timestamp: Date.now(),
+      });
+    }
+  }
+
+  // Summary (if exists and has markdown)
+  if (summary && typeof summary === "object" && summary.markdown) {
+    msgs.push({
+      id: `pm-${++id}`,
+      type: "summary",
+      content: summary.markdown,
+      timestamp: Date.now(),
+    });
+  }
+
+  return { msgs, nextId: id };
 }
 
 export function useParty() {
@@ -336,7 +391,7 @@ export function useParty() {
     [ws],
   );
 
-  // Activate an existing session from the list (hydrates all state)
+  // Activate an existing session from the list (hydrates all state including history)
   const selectSession = useCallback(
     (session: PartySession) => {
       setActiveSessionId(session.id);
@@ -348,10 +403,24 @@ export function useParty() {
       setRound(session.round);
       setMode(session.mode);
       setStatus(session.status === "closed" ? "closed" : "active");
-      setSummary(null);
-      setMessages([]);
       personaColorMap.current.clear();
       enriched.forEach((pe) => personaColorMap.current.set(pe.key, pe.color));
+
+      // Hydrate messages from stored history
+      const { msgs: restored, nextId } = hydrateMessages(session._history, session._summary, msgIdCounter.current);
+      if (restored.length > 0) {
+        msgIdCounter.current = nextId;
+        setMessages(restored);
+        // Restore summary state
+        if (session._summary && typeof session._summary === "object" && session._summary.markdown) {
+          setSummary(session._summary as PartySummary);
+        } else {
+          setSummary(null);
+        }
+      } else {
+        setMessages([]);
+        setSummary(null);
+      }
     },
     [getPersonaColor],
   );

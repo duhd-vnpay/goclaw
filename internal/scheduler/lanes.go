@@ -92,6 +92,9 @@ func (l *Lane) Submit(ctx context.Context, fn func()) error {
 
 		go func() {
 			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("panic in lane worker", "lane", l.name, "panic", r)
+				}
 				l.active.Add(-1)
 				l.wg.Done()
 				l.sem <- token // return token

@@ -141,4 +141,7 @@ type TracingStore interface {
 	// Cost aggregation
 	GetMonthlyAgentCost(ctx context.Context, agentID uuid.UUID, year int, month time.Month) (float64, error)
 	GetCostSummary(ctx context.Context, opts CostSummaryOpts) ([]CostSummaryRow, error)
+
+	// Maintenance
+	SweepOrphanTraces(ctx context.Context, maxAge time.Duration) (int, error)
 }

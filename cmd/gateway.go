@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -304,6 +305,18 @@ func runGateway() {
 				slog.Warn("snapshot backfill failed", "error", err)
 			} else if count > 0 {
 				slog.Info("snapshot backfill complete", "hours", count)
+			}
+		}()
+	}
+
+	// Sweep orphan traces left by previous crashes (running > 1h)
+	if pgStores.Tracing != nil {
+		go func() {
+			n, err := pgStores.Tracing.SweepOrphanTraces(context.Background(), time.Hour)
+			if err != nil {
+				slog.Warn("orphan trace sweep failed", "error", err)
+			} else if n > 0 {
+				slog.Info("orphan trace sweep complete", "swept", n)
 			}
 		}()
 	}

@@ -93,6 +93,9 @@ const ContactsPage = lazy(() =>
 const ActivityPage = lazy(() =>
   import("@/pages/activity/activity-page").then((m) => ({ default: m.ActivityPage })),
 );
+const ProjectsPage = lazy(() =>
+  import("@/pages/projects/projects-page").then((m) => ({ default: m.ProjectsPage })),
+);
 
 function PageLoader() {
   return (
@@ -165,6 +168,7 @@ export function AppRoutes() {
           <Route path={ROUTES.MEMORY} element={<MemoryPage />} />
           <Route path={ROUTES.PARTY} element={<PartyPage />} />
           <Route path={ROUTES.KNOWLEDGE_GRAPH} element={<KnowledgeGraphPage />} />
+          <Route path={ROUTES.PROJECTS} element={<ProjectsPage />} />
         </Route>
 
         {/* Catch-all → overview */}

@@ -36,6 +36,7 @@ export const ROUTES = {
   MEMORY: "/memory",
   KNOWLEDGE_GRAPH: "/knowledge-graph",
   ACTIVITY: "/activity",
+  PROJECTS: "/projects",
   SETUP: "/setup",
 } as const;
 

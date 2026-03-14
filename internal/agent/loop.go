@@ -377,7 +377,8 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	// If the LLM creates tasks but forgets to spawn, inject a reminder.
 	var teamTaskCreates int  // count of team_tasks action=create calls
 	var teamTaskSpawns int   // count of spawn calls with team_task_id
-	var teamTaskRetried bool // only retry once to prevent infinite loops
+	var teamTaskRetried bool    // only retry once to prevent infinite loops
+	var interruptRetried bool   // only retry interrupted streams once
 
 	// Inject retry hook so channels can update placeholder on LLM retries.
 	ctx = providers.WithRetryHook(ctx, func(attempt, maxAttempts int, err error) {
@@ -537,6 +538,28 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				providers.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls},
 				providers.Message{Role: "user", Content: "[System] Response truncated — tool call skipped."},
 			)
+			continue
+		}
+
+		// Interrupted stream guard: if the provider detected premature SSE termination
+		// (connection dropped before message_stop/[DONE]), retry once with the same context.
+		// The partial content is discarded since it may be incomplete/cut off mid-sentence.
+		if resp.FinishReason == "interrupted" && !interruptRetried {
+			interruptRetried = true
+			slog.Warn("interrupted stream detected, retrying",
+				"agent", l.id, "iteration", iteration,
+				"content_len", len(resp.Content))
+			// Emit retry event so channels can update placeholder.
+			emitRun(AgentEvent{
+				Type:    protocol.AgentEventRunRetrying,
+				AgentID: l.id,
+				RunID:   req.RunID,
+				Payload: map[string]string{
+					"attempt": "1", "maxAttempts": "1",
+					"error": "SSE stream interrupted before completion",
+				},
+			})
+			iteration-- // don't count the failed attempt
 			continue
 		}
 

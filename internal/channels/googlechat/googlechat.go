@@ -58,6 +58,11 @@ type Channel struct {
 	driveFiles   []driveFileRecord
 	driveFilesMu sync.Mutex
 
+	// Streaming
+	dmStream    bool
+	groupStream bool
+	streams     sync.Map // chatID → *chatStream
+
 	// Lifecycle
 	pullCancel    context.CancelFunc
 	pullDone      chan struct{}
@@ -121,6 +126,15 @@ func New(cfg config.GoogleChatConfig, msgBus *bus.MessageBus, pendingStore store
 		historyLimit = cfg.HistoryLimit
 	}
 
+	dmStream := true // default: enable streaming for DMs
+	if cfg.DMStream != nil {
+		dmStream = *cfg.DMStream
+	}
+	groupStream := false // default: disable streaming for groups
+	if cfg.GroupStream != nil {
+		groupStream = *cfg.GroupStream
+	}
+
 	ch := &Channel{
 		BaseChannel:       channels.NewBaseChannel(channels.TypeGoogleChat, msgBus, cfg.AllowFrom),
 		auth:              auth,
@@ -142,6 +156,8 @@ func New(cfg config.GoogleChatConfig, msgBus *bus.MessageBus, pendingStore store
 		httpClient:        &http.Client{Timeout: 30 * time.Second},
 		dedup:             newDedupCache(dedupTTL),
 		historyLimit:      historyLimit,
+		dmStream:          dmStream,
+		groupStream:       groupStream,
 		groupHistory:      channels.MakeHistory("google_chat", pendingStore),
 	}
 

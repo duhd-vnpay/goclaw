@@ -86,6 +86,14 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		ctx = tools.WithWorkspaceChatID(ctx, req.WorkspaceChatID)
 	}
 
+	// Project scope propagation (message arrival → delegation chain).
+	if req.ProjectID != "" {
+		ctx = tools.WithToolProjectID(ctx, req.ProjectID)
+	}
+	if req.ProjectOverrides != nil {
+		ctx = tools.WithToolProjectOverrides(ctx, req.ProjectOverrides)
+	}
+
 	// Per-user workspace isolation.
 	// Workspace path comes from user_agent_profiles (includes channel segment
 	// for cross-channel isolation). Cached in userWorkspaces to avoid repeated DB queries.

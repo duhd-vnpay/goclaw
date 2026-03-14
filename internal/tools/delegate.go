@@ -47,6 +47,10 @@ type DelegationTask struct {
 	TeamID     uuid.UUID `json:"-"` // from link.TeamID (for delegation history)
 	TeamTaskID uuid.UUID `json:"-"`
 
+	// Project scope propagation (message arrival → delegation chain)
+	ProjectID        string                      `json:"-"`
+	ProjectOverrides map[string]map[string]string `json:"-"`
+
 	// Activity tracking (updated via UpdateActivity on agent.activity events)
 	LastActivity string       `json:"-"` // "thinking", "tool_exec", "compacting"
 	LastTool     string       `json:"-"` // current tool name (when LastActivity == "tool_exec")

@@ -28,7 +28,7 @@ import (
 // and routes them through the scheduler/agent loop, then publishes the response back.
 // Also handles subagent announcements: routes them through the parent agent's session
 // (matching TS subagent-announce.ts pattern) so the agent can reformulate for the user.
-func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents *agent.Router, cfg *config.Config, sched *scheduler.Scheduler, channelMgr *channels.Manager, teamStore store.TeamStore, quotaChecker *channels.QuotaChecker, delegateMgr *tools.DelegateManager, sessStore store.SessionStore, agentStore store.AgentStore, contactCollector *store.ContactCollector) {
+func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents *agent.Router, cfg *config.Config, sched *scheduler.Scheduler, channelMgr *channels.Manager, teamStore store.TeamStore, quotaChecker *channels.QuotaChecker, delegateMgr *tools.DelegateManager, sessStore store.SessionStore, agentStore store.AgentStore, contactCollector *store.ContactCollector, projectStore store.ProjectStore) {
 	slog.Info("inbound message consumer started")
 
 	// Inbound message deduplication (matching TS src/infra/dedupe.ts + inbound-dedupe.ts).
@@ -64,7 +64,11 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			}
 		}
 
-		agentLoop, err := agents.Get(agentID)
+		// Resolve project for this chat (nil projectStore = backward compatible)
+		channelType := resolveChannelType(channelMgr, msg.Channel)
+		projectID, projectOverrides := resolveProjectOverrides(ctx, projectStore, channelType, msg.ChatID)
+
+		agentLoop, err := agents.GetForProject(agentID, projectID, projectOverrides)
 		if err != nil {
 			slog.Warn("inbound: agent not found", "agent", agentID, "channel", msg.Channel)
 			return
@@ -321,7 +325,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			Media:             reqMedia,
 			ForwardMedia:      fwdMedia,
 			Channel:           msg.Channel,
-			ChannelType:       resolveChannelType(channelMgr, msg.Channel),
+			ChannelType:       channelType,
 			ChatID:            msg.ChatID,
 			PeerKind:          peerKind,
 			LocalKey:          msg.Metadata["local_key"],
@@ -333,6 +337,8 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			ToolAllow:         msg.ToolAllow,
 			ExtraSystemPrompt: extraPrompt,
 			SkillFilter:       skillFilter,
+			ProjectID:         projectID,
+			ProjectOverrides:  projectOverrides,
 		}, scheduler.ScheduleOpts{
 			MaxConcurrent: maxConcurrent,
 		})
@@ -456,6 +462,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			origPeerKind := msg.Metadata["origin_peer_kind"]
 			origLocalKey := msg.Metadata["origin_local_key"]
 			origChannelType := resolveChannelType(channelMgr, origChannel)
+			saProjectID, saProjectOverrides := resolveProjectOverrides(ctx, projectStore, origChannelType, msg.ChatID)
 			parentAgent := msg.Metadata["parent_agent"]
 			if parentAgent == "" {
 				parentAgent = "default"
@@ -529,6 +536,8 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 				Stream:           false,
 				ParentTraceID:    parentTraceID,
 				ParentRootSpanID: parentRootSpanID,
+				ProjectID:        saProjectID,
+				ProjectOverrides: saProjectOverrides,
 			}
 			// Handle announce asynchronously with per-session serialization.
 			// The mutex ensures concurrent announces for the same session wait for
@@ -590,6 +599,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			origPeerKind := msg.Metadata["origin_peer_kind"]
 			origLocalKey := msg.Metadata["origin_local_key"]
 			origChannelType := resolveChannelType(channelMgr, origChannel)
+			dlgProjectID, dlgProjectOverrides := resolveProjectOverrides(ctx, projectStore, origChannelType, msg.ChatID)
 			parentAgent := msg.Metadata["parent_agent"]
 			if parentAgent == "" {
 				parentAgent = "default"
@@ -660,6 +670,8 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 				Stream:           false,
 				ParentTraceID:    parentTraceID,
 				ParentRootSpanID: parentRootSpanID,
+				ProjectID:        dlgProjectID,
+				ProjectOverrides: dlgProjectOverrides,
 			}
 
 			// Same per-session serialization as subagent announce above.
@@ -714,6 +726,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			origPeerKind := msg.Metadata["origin_peer_kind"]
 			origLocalKey := msg.Metadata["origin_local_key"]
 			origChannelType := resolveChannelType(channelMgr, origChannel)
+			hoProjectID, hoProjectOverrides := resolveProjectOverrides(ctx, projectStore, origChannelType, msg.ChatID)
 			targetAgent := msg.AgentID
 			if targetAgent == "" {
 				targetAgent = cfg.ResolveDefaultAgentID()
@@ -744,16 +757,18 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			outMeta := buildAnnounceOutMeta(origLocalKey)
 
 			outCh := sched.Schedule(ctx, scheduler.LaneDelegate, agent.RunRequest{
-				SessionKey:  sessionKey,
-				Message:     msg.Content,
-				Channel:     origChannel,
-				ChannelType: origChannelType,
-				ChatID:      msg.ChatID,
-				PeerKind:    origPeerKind,
-				LocalKey:    origLocalKey,
-				UserID:      announceUserID,
-				RunID:       fmt.Sprintf("handoff-%s", msg.Metadata["handoff_id"]),
-				Stream:      false,
+				SessionKey:       sessionKey,
+				Message:          msg.Content,
+				Channel:          origChannel,
+				ChannelType:      origChannelType,
+				ChatID:           msg.ChatID,
+				PeerKind:         origPeerKind,
+				LocalKey:         origLocalKey,
+				UserID:           announceUserID,
+				RunID:            fmt.Sprintf("handoff-%s", msg.Metadata["handoff_id"]),
+				Stream:           false,
+				ProjectID:        hoProjectID,
+				ProjectOverrides: hoProjectOverrides,
 			})
 
 			go func(origCh, chatID string, meta map[string]string) {
@@ -784,6 +799,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			origPeerKind := msg.Metadata["origin_peer_kind"]
 			origLocalKey := msg.Metadata["origin_local_key"]
 			origChannelType := resolveChannelType(channelMgr, origChannel)
+			tmProjectID, tmProjectOverrides := resolveProjectOverrides(ctx, projectStore, origChannelType, msg.ChatID)
 			targetAgent := msg.AgentID // team_message sets AgentID to the target agent key
 			if targetAgent == "" {
 				targetAgent = cfg.ResolveDefaultAgentID()
@@ -820,16 +836,18 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			outMeta := buildAnnounceOutMeta(origLocalKey)
 
 			outCh := sched.Schedule(ctx, scheduler.LaneDelegate, agent.RunRequest{
-				SessionKey:  sessionKey,
-				Message:     msg.Content,
-				Channel:     origChannel,
-				ChannelType: origChannelType,
-				ChatID:      msg.ChatID,
-				PeerKind:    origPeerKind,
-				LocalKey:    origLocalKey,
-				UserID:      announceUserID,
-				RunID:       fmt.Sprintf("teammate-%s-%s", msg.Metadata["from_agent"], msg.Metadata["to_agent"]),
-				Stream:      false,
+				SessionKey:       sessionKey,
+				Message:          msg.Content,
+				Channel:          origChannel,
+				ChannelType:      origChannelType,
+				ChatID:           msg.ChatID,
+				PeerKind:         origPeerKind,
+				LocalKey:         origLocalKey,
+				UserID:           announceUserID,
+				RunID:            fmt.Sprintf("teammate-%s-%s", msg.Metadata["from_agent"], msg.Metadata["to_agent"]),
+				Stream:           false,
+				ProjectID:        tmProjectID,
+				ProjectOverrides: tmProjectOverrides,
 			})
 
 			go func(origCh, chatID, senderID string, meta, inMeta map[string]string) {

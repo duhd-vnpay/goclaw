@@ -385,7 +385,7 @@ func wireExtras(
 	// avoiding import cycle between tools and agent packages.
 	if stores.AgentLinks != nil && stores.Agents != nil {
 		runAgentFn := func(ctx context.Context, agentKey string, req tools.DelegateRunRequest) (*tools.DelegateRunResult, error) {
-			loop, err := agentRouter.Get(agentKey)
+			loop, err := agentRouter.GetForProject(agentKey, req.ProjectID, req.ProjectOverrides)
 			if err != nil {
 				return nil, err
 			}
@@ -408,6 +408,8 @@ func wireExtras(
 				ParentAgentID:     req.ParentAgentID,
 				WorkspaceChannel:  req.WorkspaceChannel,
 				WorkspaceChatID:   req.WorkspaceChatID,
+				ProjectID:         req.ProjectID,
+				ProjectOverrides:  req.ProjectOverrides,
 			})
 			if err != nil {
 				return nil, err

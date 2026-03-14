@@ -221,6 +221,34 @@ func WorkspaceChatIDFromCtx(ctx context.Context) string {
 	return v
 }
 
+// --- Project context propagation (message arrival → delegation chain) ---
+
+const (
+	ctxProjectID        toolContextKey = "tool_project_id"
+	ctxProjectOverrides toolContextKey = "tool_project_overrides"
+)
+
+// WithToolProjectID injects the resolved project UUID into context.
+// Used by delegation tools to propagate project scope through the delegation chain.
+func WithToolProjectID(ctx context.Context, projectID string) context.Context {
+	return context.WithValue(ctx, ctxProjectID, projectID)
+}
+
+func ToolProjectIDFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(ctxProjectID).(string)
+	return v
+}
+
+// WithToolProjectOverrides injects project MCP env overrides into context.
+func WithToolProjectOverrides(ctx context.Context, overrides map[string]map[string]string) context.Context {
+	return context.WithValue(ctx, ctxProjectOverrides, overrides)
+}
+
+func ToolProjectOverridesFromCtx(ctx context.Context) map[string]map[string]string {
+	v, _ := ctx.Value(ctxProjectOverrides).(map[string]map[string]string)
+	return v
+}
+
 // --- Per-agent sandbox config override ---
 
 const ctxSandboxCfg toolContextKey = "tool_sandbox_config"

@@ -187,6 +187,8 @@ func (dm *DelegateManager) prepareDelegation(ctx context.Context, opts DelegateO
 		OriginTraceID:    tracing.TraceIDFromContext(ctx),
 		OriginRootSpanID: tracing.ParentSpanIDFromContext(ctx),
 		TeamTaskID:       opts.TeamTaskID,
+		ProjectID:        ToolProjectIDFromCtx(ctx),
+		ProjectOverrides: ToolProjectOverridesFromCtx(ctx),
 	}
 
 	// Carry team_id from the link (for delegation history filtering by team)
@@ -398,6 +400,10 @@ func (dm *DelegateManager) buildRunRequest(task *DelegationTask, message string)
 		TeamTaskID:    func() string { if task.TeamTaskID != uuid.Nil { return task.TeamTaskID.String() }; return "" }(),
 		ParentAgentID: task.SourceAgentKey,
 	}
+
+	// Propagate project scope so delegate agents use the same MCP env overrides.
+	req.ProjectID = task.ProjectID
+	req.ProjectOverrides = task.ProjectOverrides
 
 	// Propagate workspace scope to delegate so workspace tools write to the
 	// origin user's workspace, not the "delegate" channel. Scope = userID.

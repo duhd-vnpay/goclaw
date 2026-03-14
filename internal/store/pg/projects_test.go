@@ -26,7 +26,7 @@ func TestSecretKeyPattern(t *testing.T) {
 		{"PROJECT_PATH", false},
 		{"BOARD_ID", false},
 		{"WORKSPACE_DIR", false},
-		{"TOKENIZER_TYPE", true}, // contains "TOKEN" — will match
+		{"TOKENIZER_TYPE", false}, // contains "TOKEN" substring but not at word boundary
 	}
 
 	for _, tt := range tests {

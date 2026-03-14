@@ -11,7 +11,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
-var secretKeyPattern = regexp.MustCompile(`(?i)(TOKEN|SECRET|PASSWORD|API_KEY)`)
+var secretKeyPattern = regexp.MustCompile(`(?i)(^|_)(TOKEN|SECRET|PASSWORD|API_KEY)($|_)`)
 
 // PGProjectStore implements store.ProjectStore backed by Postgres.
 type PGProjectStore struct {

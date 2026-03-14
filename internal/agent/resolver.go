@@ -296,7 +296,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			mcpOpts = append(mcpOpts, mcpbridge.WithPool(deps.MCPPool))
 		}
 		mcpMgr := mcpbridge.NewManager(toolsReg, mcpOpts...)
-			if err := mcpMgr.LoadForAgent(ctx, ag.ID, ""); err != nil {
+			if err := mcpMgr.LoadForAgent(ctx, ag.ID, "", "", nil); err != nil {
 				slog.Warn("failed to load MCP servers for agent", "agent", agentKey, "error", err)
 			} else if mcpMgr.IsSearchMode() {
 				// Search mode: too many tools — register mcp_tool_search meta-tool

@@ -117,6 +117,9 @@ type DelegateRunRequest struct {
 	// Workspace scope propagation (set by delegation, read by workspace tools)
 	WorkspaceChannel string
 	WorkspaceChatID  string
+
+	ProjectID        string                       `json:"project_id,omitempty"`
+	ProjectOverrides map[string]map[string]string  `json:"project_overrides,omitempty"`
 }
 
 // DelegateRunResult is the result from AgentRunFunc.

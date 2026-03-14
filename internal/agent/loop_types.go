@@ -351,6 +351,10 @@ type RunRequest struct {
 	// Workspace scope propagation (set by delegation, read by workspace tools)
 	WorkspaceChannel string
 	WorkspaceChatID  string
+
+	// Project-scoped MCP env overrides (resolved at message arrival)
+	ProjectID        string                       // resolved project UUID (empty = no project)
+	ProjectOverrides map[string]map[string]string  // {serverName: {envKey: envVal}}
 }
 
 // RunResult is the output of a completed agent run.

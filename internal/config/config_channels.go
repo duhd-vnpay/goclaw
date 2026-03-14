@@ -200,6 +200,8 @@ type GoogleChatConfig struct {
 	FileRetentionDays  int                 `json:"fileRetentionDays,omitempty"`   // auto-delete Drive files (0 = keep forever)
 	DrivePermission    string              `json:"drivePermission,omitempty"`     // "domain" (default) | "anyone"
 	DriveDomain        string              `json:"driveDomain,omitempty"`         // domain for "domain" permission (default "vnpay.vn")
+	DMStream           *bool               `json:"dm_stream,omitempty"`           // enable streaming for DMs (default true)
+	GroupStream        *bool               `json:"group_stream,omitempty"`        // enable streaming for groups (default false)
 	BlockReply         *bool               `json:"block_reply,omitempty"`
 }
 

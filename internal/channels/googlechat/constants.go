@@ -23,4 +23,5 @@ const (
 	retrySendMaxAttempts         = 5
 	retrySendBaseDelay           = 1 * time.Second
 	retrySendMaxDelay            = 30 * time.Second
+	defaultStreamThrottle        = 1500 * time.Millisecond
 )

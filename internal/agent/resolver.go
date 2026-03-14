@@ -88,7 +88,7 @@ type ResolverDeps struct {
 // NewManagedResolver creates a ResolverFunc that builds Loops from DB agent data.
 // Agents are defined in Postgres, not config.json.
 func NewManagedResolver(deps ResolverDeps) ResolverFunc {
-	return func(agentKey string) (Agent, error) {
+	return func(agentKey string, opts ResolveOpts) (Agent, error) {
 		ctx := context.Background()
 
 		// Support lookup by UUID (e.g. from cron jobs that store agent_id as UUID)
@@ -189,7 +189,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 						hasTeam = true
 						contextFiles = append(contextFiles, bootstrap.ContextFile{
 							Path:    bootstrap.TeamFile,
-							Content: buildTeamMD(team, members, ag.ID),
+							Content: buildTeamMD(team, members, ag.ID, tools.IsTeamV2(team)),
 						})
 						// Detect lead role for tool policy
 						for _, m := range members {
@@ -296,7 +296,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			mcpOpts = append(mcpOpts, mcpbridge.WithPool(deps.MCPPool))
 		}
 		mcpMgr := mcpbridge.NewManager(toolsReg, mcpOpts...)
-			if err := mcpMgr.LoadForAgent(ctx, ag.ID, ""); err != nil {
+			if err := mcpMgr.LoadForAgent(ctx, ag.ID, "", opts.ProjectID, opts.ProjectOverrides); err != nil {
 				slog.Warn("failed to load MCP servers for agent", "agent", agentKey, "error", err)
 			} else if mcpMgr.IsSearchMode() {
 				// Search mode: too many tools — register mcp_tool_search meta-tool
@@ -371,7 +371,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			Sessions:               deps.Sessions,
 			Tools:                  toolsReg,
 			ToolPolicy:             deps.ToolPolicy,
-			AgentToolPolicy:        agentToolPolicyForTeam(agentToolPolicyWithMCP(ag.ParseToolsConfig(), hasMCPTools), isTeamLead),
+			AgentToolPolicy:        agentToolPolicyForTeam(agentToolPolicyWithWorkspace(agentToolPolicyWithMCP(ag.ParseToolsConfig(), hasMCPTools), hasTeam), isTeamLead),
 			SkillsLoader:           deps.Skills,
 			SkillAllowList:         skillAllowList,
 			HasMemory:              hasMemory,

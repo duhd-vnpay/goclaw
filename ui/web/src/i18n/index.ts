@@ -33,6 +33,7 @@ import enPendingMessages from "./locales/en/pending-messages.json";
 import enParty from "./locales/en/party.json";
 import enContacts from "./locales/en/contacts.json";
 import enActivity from "./locales/en/activity.json";
+import enProjects from "./locales/en/projects.json";
 
 // --- VI namespaces ---
 import viCommon from "./locales/vi/common.json";
@@ -66,6 +67,7 @@ import viPendingMessages from "./locales/vi/pending-messages.json";
 import viParty from "./locales/vi/party.json";
 import viContacts from "./locales/vi/contacts.json";
 import viActivity from "./locales/vi/activity.json";
+import viProjects from "./locales/vi/projects.json";
 
 // --- ZH namespaces ---
 import zhCommon from "./locales/zh/common.json";
@@ -99,6 +101,7 @@ import zhPendingMessages from "./locales/zh/pending-messages.json";
 import zhParty from "./locales/zh/party.json";
 import zhContacts from "./locales/zh/contacts.json";
 import zhActivity from "./locales/zh/activity.json";
+import zhProjects from "./locales/zh/projects.json";
 
 const STORAGE_KEY = "goclaw:language";
 
@@ -116,7 +119,7 @@ const ns = [
   "agents", "teams", "sessions", "skills", "cron", "config",
   "channels", "providers", "traces", "events", "delegations",
   "usage", "approvals", "nodes", "logs", "tools", "mcp", "tts",
-  "setup", "memory", "storage", "pending-messages", "party", "contacts", "activity",
+  "setup", "memory", "storage", "pending-messages", "party", "contacts", "activity", "projects",
 ] as const;
 
 i18n.use(initReactI18next).init({
@@ -130,7 +133,7 @@ i18n.use(initReactI18next).init({
       approvals: enApprovals, nodes: enNodes, logs: enLogs, tools: enTools,
       mcp: enMcp, tts: enTts, setup: enSetup, memory: enMemory, storage: enStorage,
       "pending-messages": enPendingMessages,
-      party: enParty, contacts: enContacts, activity: enActivity,
+      party: enParty, contacts: enContacts, activity: enActivity, projects: enProjects,
     },
     vi: {
       common: viCommon, sidebar: viSidebar, topbar: viTopbar, login: viLogin,
@@ -141,7 +144,7 @@ i18n.use(initReactI18next).init({
       approvals: viApprovals, nodes: viNodes, logs: viLogs, tools: viTools,
       mcp: viMcp, tts: viTts, setup: viSetup, memory: viMemory, storage: viStorage,
       "pending-messages": viPendingMessages,
-      party: viParty, contacts: viContacts, activity: viActivity,
+      party: viParty, contacts: viContacts, activity: viActivity, projects: viProjects,
     },
     zh: {
       common: zhCommon, sidebar: zhSidebar, topbar: zhTopbar, login: zhLogin,
@@ -152,7 +155,7 @@ i18n.use(initReactI18next).init({
       approvals: zhApprovals, nodes: zhNodes, logs: zhLogs, tools: zhTools,
       mcp: zhMcp, tts: zhTts, setup: zhSetup, memory: zhMemory, storage: zhStorage,
       "pending-messages": zhPendingMessages,
-      party: zhParty, contacts: zhContacts, activity: zhActivity,
+      party: zhParty, contacts: zhContacts, activity: zhActivity, projects: zhProjects,
     },
   },
   ns: [...ns],

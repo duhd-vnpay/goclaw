@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
 	"github.com/nextlevelbuilder/goclaw/internal/sessions"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
@@ -26,7 +28,7 @@ import (
 // and routes them through the scheduler/agent loop, then publishes the response back.
 // Also handles subagent announcements: routes them through the parent agent's session
 // (matching TS subagent-announce.ts pattern) so the agent can reformulate for the user.
-func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents *agent.Router, cfg *config.Config, sched *scheduler.Scheduler, channelMgr *channels.Manager, teamStore store.TeamStore, quotaChecker *channels.QuotaChecker, delegateMgr *tools.DelegateManager, sessStore store.SessionStore, agentStore store.AgentStore, contactCollector *store.ContactCollector) {
+func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents *agent.Router, cfg *config.Config, sched *scheduler.Scheduler, channelMgr *channels.Manager, teamStore store.TeamStore, quotaChecker *channels.QuotaChecker, delegateMgr *tools.DelegateManager, sessStore store.SessionStore, agentStore store.AgentStore, contactCollector *store.ContactCollector, projectStore store.ProjectStore) {
 	slog.Info("inbound message consumer started")
 
 	// Inbound message deduplication (matching TS src/infra/dedupe.ts + inbound-dedupe.ts).
@@ -62,7 +64,11 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			}
 		}
 
-		agentLoop, err := agents.Get(agentID)
+		// Resolve project for this chat (nil projectStore = backward compatible)
+		channelType := resolveChannelType(channelMgr, msg.Channel)
+		projectID, projectOverrides := resolveProjectOverrides(ctx, projectStore, channelType, msg.ChatID)
+
+		agentLoop, err := agents.GetForProject(agentID, projectID, projectOverrides)
 		if err != nil {
 			slog.Warn("inbound: agent not found", "agent", agentID, "channel", msg.Channel)
 			return
@@ -157,6 +163,18 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 				return
 			}
 			quotaChecker.Increment(userID)
+		}
+
+		// Auto-clear followup reminders when user sends a message on a real channel.
+		// Fire-and-forget: don't block message processing.
+		if teamStore != nil && msg.Channel != tools.ChannelSystem && msg.Channel != tools.ChannelDelegate && msg.Channel != tools.ChannelDashboard {
+			go func(ch, cid string) {
+				if n, err := teamStore.ClearFollowupByScope(ctx, ch, cid); err != nil {
+					slog.Warn("auto-clear followup failed", "channel", ch, "chat_id", cid, "error", err)
+				} else if n > 0 {
+					slog.Info("auto-clear followup: cleared", "channel", ch, "chat_id", cid, "count", n)
+				}
+			}(msg.Channel, msg.ChatID)
 		}
 
 		slog.Info("inbound: scheduling message (main lane)",
@@ -307,7 +325,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			Media:             reqMedia,
 			ForwardMedia:      fwdMedia,
 			Channel:           msg.Channel,
-			ChannelType:       resolveChannelType(channelMgr, msg.Channel),
+			ChannelType:       channelType,
 			ChatID:            msg.ChatID,
 			PeerKind:          peerKind,
 			LocalKey:          msg.Metadata["local_key"],
@@ -319,12 +337,14 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			ToolAllow:         msg.ToolAllow,
 			ExtraSystemPrompt: extraPrompt,
 			SkillFilter:       skillFilter,
+			ProjectID:         projectID,
+			ProjectOverrides:  projectOverrides,
 		}, scheduler.ScheduleOpts{
 			MaxConcurrent: maxConcurrent,
 		})
 
 		// Handle result asynchronously to not block the flush callback.
-		go func(channel, chatID, session, rID string, meta map[string]string, blockReplyEnabled bool) {
+		go func(agentKey, channel, chatID, session, rID string, meta map[string]string, blockReplyEnabled bool) {
 			outcome := <-outCh
 
 			// Clean up run tracking (in case HandleAgentEvent didn't fire for terminal events)
@@ -398,7 +418,12 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			appendMediaToOutbound(&outMsg, outcome.Result.Media)
 
 			msgBus.PublishOutbound(outMsg)
-		}(msg.Channel, msg.ChatID, sessionKey, runID, outMeta, blockReply)
+
+			// Auto-set followup when lead agent replies on a real channel with in_progress tasks.
+			if teamStore != nil && channel != tools.ChannelSystem && channel != tools.ChannelDelegate && channel != tools.ChannelDashboard {
+				go autoSetFollowup(ctx, teamStore, agentStore, agentKey, channel, chatID, outcome.Result.Content)
+			}
+		}(agentID, msg.Channel, msg.ChatID, sessionKey, runID, outMeta, blockReply)
 	}
 
 	// Inbound debounce: merge rapid messages from the same sender before processing.
@@ -432,11 +457,12 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 		}
 
 		// --- Subagent announce: bypass debounce, inject into parent agent session ---
-		if msg.Channel == "system" && strings.HasPrefix(msg.SenderID, "subagent:") {
+		if msg.Channel == tools.ChannelSystem && strings.HasPrefix(msg.SenderID, "subagent:") {
 			origChannel := msg.Metadata["origin_channel"]
 			origPeerKind := msg.Metadata["origin_peer_kind"]
 			origLocalKey := msg.Metadata["origin_local_key"]
 			origChannelType := resolveChannelType(channelMgr, origChannel)
+			saProjectID, saProjectOverrides := resolveProjectOverrides(ctx, projectStore, origChannelType, msg.ChatID)
 			parentAgent := msg.Metadata["parent_agent"]
 			if parentAgent == "" {
 				parentAgent = "default"
@@ -510,6 +536,8 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 				Stream:           false,
 				ParentTraceID:    parentTraceID,
 				ParentRootSpanID: parentRootSpanID,
+				ProjectID:        saProjectID,
+				ProjectOverrides: saProjectOverrides,
 			}
 			// Handle announce asynchronously with per-session serialization.
 			// The mutex ensures concurrent announces for the same session wait for
@@ -566,11 +594,12 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 
 		// --- Delegate announce: bypass debounce, inject into parent agent session ---
 		// Same pattern as subagent announce above, using "delegate" lane.
-		if msg.Channel == "system" && strings.HasPrefix(msg.SenderID, "delegate:") {
+		if msg.Channel == tools.ChannelSystem && strings.HasPrefix(msg.SenderID, "delegate:") {
 			origChannel := msg.Metadata["origin_channel"]
 			origPeerKind := msg.Metadata["origin_peer_kind"]
 			origLocalKey := msg.Metadata["origin_local_key"]
 			origChannelType := resolveChannelType(channelMgr, origChannel)
+			dlgProjectID, dlgProjectOverrides := resolveProjectOverrides(ctx, projectStore, origChannelType, msg.ChatID)
 			parentAgent := msg.Metadata["parent_agent"]
 			if parentAgent == "" {
 				parentAgent = "default"
@@ -641,6 +670,8 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 				Stream:           false,
 				ParentTraceID:    parentTraceID,
 				ParentRootSpanID: parentRootSpanID,
+				ProjectID:        dlgProjectID,
+				ProjectOverrides: dlgProjectOverrides,
 			}
 
 			// Same per-session serialization as subagent announce above.
@@ -690,11 +721,12 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 
 		// --- Handoff announce: route initial message to target agent session ---
 		// Same pattern as teammate message routing, using "delegate" lane.
-		if msg.Channel == "system" && strings.HasPrefix(msg.SenderID, "handoff:") {
+		if msg.Channel == tools.ChannelSystem && strings.HasPrefix(msg.SenderID, "handoff:") {
 			origChannel := msg.Metadata["origin_channel"]
 			origPeerKind := msg.Metadata["origin_peer_kind"]
 			origLocalKey := msg.Metadata["origin_local_key"]
 			origChannelType := resolveChannelType(channelMgr, origChannel)
+			hoProjectID, hoProjectOverrides := resolveProjectOverrides(ctx, projectStore, origChannelType, msg.ChatID)
 			targetAgent := msg.AgentID
 			if targetAgent == "" {
 				targetAgent = cfg.ResolveDefaultAgentID()
@@ -725,16 +757,18 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			outMeta := buildAnnounceOutMeta(origLocalKey)
 
 			outCh := sched.Schedule(ctx, scheduler.LaneDelegate, agent.RunRequest{
-				SessionKey:  sessionKey,
-				Message:     msg.Content,
-				Channel:     origChannel,
-				ChannelType: origChannelType,
-				ChatID:      msg.ChatID,
-				PeerKind:    origPeerKind,
-				LocalKey:    origLocalKey,
-				UserID:      announceUserID,
-				RunID:       fmt.Sprintf("handoff-%s", msg.Metadata["handoff_id"]),
-				Stream:      false,
+				SessionKey:       sessionKey,
+				Message:          msg.Content,
+				Channel:          origChannel,
+				ChannelType:      origChannelType,
+				ChatID:           msg.ChatID,
+				PeerKind:         origPeerKind,
+				LocalKey:         origLocalKey,
+				UserID:           announceUserID,
+				RunID:            fmt.Sprintf("handoff-%s", msg.Metadata["handoff_id"]),
+				Stream:           false,
+				ProjectID:        hoProjectID,
+				ProjectOverrides: hoProjectOverrides,
 			})
 
 			go func(origCh, chatID string, meta map[string]string) {
@@ -760,11 +794,12 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 
 		// --- Teammate message: bypass debounce, route to target agent session ---
 		// Same pattern as delegate announce, using "delegate" lane.
-		if msg.Channel == "system" && strings.HasPrefix(msg.SenderID, "teammate:") {
+		if msg.Channel == tools.ChannelSystem && strings.HasPrefix(msg.SenderID, "teammate:") {
 			origChannel := msg.Metadata["origin_channel"]
 			origPeerKind := msg.Metadata["origin_peer_kind"]
 			origLocalKey := msg.Metadata["origin_local_key"]
 			origChannelType := resolveChannelType(channelMgr, origChannel)
+			tmProjectID, tmProjectOverrides := resolveProjectOverrides(ctx, projectStore, origChannelType, msg.ChatID)
 			targetAgent := msg.AgentID // team_message sets AgentID to the target agent key
 			if targetAgent == "" {
 				targetAgent = cfg.ResolveDefaultAgentID()
@@ -774,7 +809,13 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			}
 
 			if origChannel == "" || msg.ChatID == "" {
-				slog.Warn("teammate message: missing origin", "sender", msg.SenderID)
+				slog.Warn("teammate message: missing origin — DROPPED",
+					"sender", msg.SenderID,
+					"target", targetAgent,
+					"origin_channel", origChannel,
+					"chat_id", msg.ChatID,
+					"user_id", msg.UserID,
+				)
 				continue
 			}
 
@@ -795,20 +836,59 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			outMeta := buildAnnounceOutMeta(origLocalKey)
 
 			outCh := sched.Schedule(ctx, scheduler.LaneDelegate, agent.RunRequest{
-				SessionKey:  sessionKey,
-				Message:     msg.Content,
-				Channel:     origChannel,
-				ChannelType: origChannelType,
-				ChatID:      msg.ChatID,
-				PeerKind:    origPeerKind,
-				LocalKey:    origLocalKey,
-				UserID:      announceUserID,
-				RunID:       fmt.Sprintf("teammate-%s-%s", msg.Metadata["from_agent"], msg.Metadata["to_agent"]),
-				Stream:      false,
+				SessionKey:       sessionKey,
+				Message:          msg.Content,
+				Channel:          origChannel,
+				ChannelType:      origChannelType,
+				ChatID:           msg.ChatID,
+				PeerKind:         origPeerKind,
+				LocalKey:         origLocalKey,
+				UserID:           announceUserID,
+				RunID:            fmt.Sprintf("teammate-%s-%s", msg.Metadata["from_agent"], msg.Metadata["to_agent"]),
+				Stream:           false,
+				ProjectID:        tmProjectID,
+				ProjectOverrides: tmProjectOverrides,
 			})
 
-			go func(origCh, chatID, senderID string, meta map[string]string) {
+			go func(origCh, chatID, senderID string, meta, inMeta map[string]string) {
 				outcome := <-outCh
+
+				// Auto-complete/fail the associated team task (v2 only).
+				if taskIDStr := inMeta["team_task_id"]; taskIDStr != "" {
+					teamTaskID, _ := uuid.Parse(taskIDStr)
+					teamID, _ := uuid.Parse(inMeta["team_id"])
+					if teamTaskID != uuid.Nil && teamStore != nil {
+						// Only auto-complete/fail for v2 teams.
+						team, _ := teamStore.GetTeam(ctx, teamID)
+						if team != nil && isConsumerTeamV2(team) {
+							if outcome.Err != nil {
+								_ = teamStore.FailTask(ctx, teamTaskID, teamID, outcome.Err.Error())
+								_ = teamStore.RecordTaskEvent(ctx, &store.TeamTaskEventData{
+									TaskID:    teamTaskID,
+									EventType: "failed",
+									ActorType: "agent",
+									ActorID:   inMeta["to_agent"],
+								})
+							} else {
+								result := outcome.Result.Content
+								if len(outcome.Result.Deliverables) > 0 {
+									result = strings.Join(outcome.Result.Deliverables, "\n\n---\n\n")
+								}
+								if len(result) > 100_000 {
+									result = result[:100_000] + "\n[truncated]"
+								}
+								_ = teamStore.CompleteTask(ctx, teamTaskID, teamID, result)
+								_ = teamStore.RecordTaskEvent(ctx, &store.TeamTaskEventData{
+									TaskID:    teamTaskID,
+									EventType: "completed",
+									ActorType: "agent",
+									ActorID:   inMeta["to_agent"],
+								})
+							}
+						}
+					}
+				}
+
 				if outcome.Err != nil {
 					slog.Error("teammate message: agent run failed", "error", outcome.Err)
 					return
@@ -827,7 +907,32 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 				}
 				appendMediaToOutbound(&outMsg, outcome.Result.Media)
 				msgBus.PublishOutbound(outMsg)
-			}(origChannel, msg.ChatID, msg.SenderID, outMeta)
+			}(origChannel, msg.ChatID, msg.SenderID, outMeta, msg.Metadata)
+			continue
+		}
+
+		// --- Command: /reset — clear session history ---
+		if msg.Metadata["command"] == "reset" {
+			agentID := msg.AgentID
+			if agentID == "" {
+				agentID = resolveAgentRoute(cfg, msg.Channel, msg.ChatID, msg.PeerKind)
+			}
+			peerKind := msg.PeerKind
+			if peerKind == "" {
+				peerKind = string(sessions.PeerDirect)
+			}
+			sessionKey := sessions.BuildScopedSessionKey(agentID, msg.Channel, sessions.PeerKind(peerKind), msg.ChatID, cfg.Sessions.Scope, cfg.Sessions.DmScope, cfg.Sessions.MainKey)
+			if msg.Metadata["is_forum"] == "true" && peerKind == string(sessions.PeerGroup) {
+				var topicID int
+				fmt.Sscanf(msg.Metadata["message_thread_id"], "%d", &topicID)
+				if topicID > 0 {
+					sessionKey = sessions.BuildGroupTopicSessionKey(agentID, msg.Channel, msg.ChatID, topicID)
+				}
+			}
+			sessStore.Reset(sessionKey)
+			sessStore.Save(sessionKey)
+			providers.ResetCLISession("", sessionKey)
+			slog.Info("inbound: /reset command", "session", sessionKey)
 			continue
 		}
 
@@ -901,6 +1006,83 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 		// --- Normal messages: route through debouncer ---
 		debouncer.Push(msg)
 	}
+}
+
+// autoSetFollowup sets followup reminders on in_progress tasks when the lead agent
+// replies on a real channel. Only sets followup if the task doesn't already have one
+// (respects LLM-initiated await_reply). Fire-and-forget, logs errors.
+func autoSetFollowup(ctx context.Context, teamStore store.TeamStore, agentStore store.AgentStore, agentKey, channel, chatID, content string) {
+	if agentStore == nil {
+		return
+	}
+	// agentKey may be a slug ("default") or a UUID string (from WS clients).
+	var ag *store.AgentData
+	var err error
+	if id, parseErr := uuid.Parse(agentKey); parseErr == nil {
+		ag, err = agentStore.GetByID(ctx, id)
+	} else {
+		ag, err = agentStore.GetByKey(ctx, agentKey)
+	}
+	if err != nil || ag == nil {
+		return
+	}
+	team, err := teamStore.GetTeamForAgent(ctx, ag.ID)
+	if err != nil || team == nil || team.LeadAgentID != ag.ID {
+		return // only lead agent triggers auto-set
+	}
+	// Followup is a v2 feature.
+	if !isConsumerTeamV2(team) {
+		return
+	}
+
+	interval, max := parseFollowupSettings(team)
+	followupAt := time.Now().Add(interval)
+	msg := truncateForReminder(content, 200)
+
+	n, err := teamStore.SetFollowupForActiveTasks(ctx, team.ID, channel, chatID, followupAt, max, msg)
+	if err != nil {
+		slog.Warn("auto-set followup failed", "channel", channel, "chat_id", chatID, "error", err)
+	} else if n > 0 {
+		slog.Info("auto-set followup: set", "channel", channel, "chat_id", chatID, "count", n, "followup_at", followupAt)
+	}
+}
+
+// isConsumerTeamV2 delegates to tools.IsTeamV2 for version checking.
+var isConsumerTeamV2 = tools.IsTeamV2
+
+// parseFollowupSettings extracts followup interval and max reminders from team settings.
+func parseFollowupSettings(team *store.TeamData) (time.Duration, int) {
+	const (
+		defaultIntervalMins = 30
+		defaultMax          = 0 // unlimited
+	)
+	if team.Settings == nil {
+		return time.Duration(defaultIntervalMins) * time.Minute, defaultMax
+	}
+	var settings map[string]any
+	if json.Unmarshal(team.Settings, &settings) != nil {
+		return time.Duration(defaultIntervalMins) * time.Minute, defaultMax
+	}
+	interval := defaultIntervalMins
+	if v, ok := settings["followup_interval_minutes"].(float64); ok && v > 0 {
+		interval = int(v)
+	}
+	max := defaultMax
+	if v, ok := settings["followup_max_reminders"].(float64); ok && v >= 0 {
+		max = int(v)
+	}
+	return time.Duration(interval) * time.Minute, max
+}
+
+// truncateForReminder truncates content to maxLen chars, taking the last line as context.
+func truncateForReminder(content string, maxLen int) string {
+	// Use last non-empty line as it's typically the most relevant.
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	msg := lines[len(lines)-1]
+	if len(msg) > maxLen {
+		msg = msg[:maxLen] + "..."
+	}
+	return msg
 }
 
 // appendMediaToOutbound converts agent MediaResults to outbound MediaAttachments

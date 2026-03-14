@@ -25,6 +25,7 @@ import {
   PartyPopper,
   Network,
   Contact,
+  FolderKanban,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SidebarGroup } from "./sidebar-group";
@@ -86,6 +87,7 @@ export function Sidebar({ collapsed, onNavItemClick }: SidebarProps) {
 
         <SidebarGroup label={t("groups.connectivity")} collapsed={collapsed}>
           <SidebarItem to={ROUTES.CHANNELS} icon={Radio} label={t("nav.channels")} collapsed={collapsed} />
+          <SidebarItem to={ROUTES.PROJECTS} icon={FolderKanban} label={t("nav.projects")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.NODES} icon={Link} label={t("nav.nodes")} collapsed={collapsed} badge={pendingCount} />
         </SidebarGroup>
 

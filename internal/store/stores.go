@@ -26,4 +26,5 @@ type Stores struct {
 	Activity         ActivityStore
 	Snapshots        SnapshotStore
 	Party            PartyStore
+	Projects         ProjectStore
 }

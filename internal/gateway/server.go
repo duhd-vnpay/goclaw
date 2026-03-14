@@ -57,6 +57,7 @@ type Server struct {
 	mediaServeHandler       *httpapi.MediaServeHandler       // media serve endpoint
 	activityHandler         *httpapi.ActivityHandler         // activity audit log API
 	usageHandler            *httpapi.UsageHandler            // usage analytics API
+	projectHandler          *httpapi.ProjectHandler          // project CRUD + MCP overrides API
 	agentStore         store.AgentStore             // for context injection in tools_invoke
 	msgBus             *bus.MessageBus              // for MCP bridge media delivery
 
@@ -188,6 +189,11 @@ func (s *Server) BuildMux() *http.ServeMux {
 		s.mcpHandler.RegisterRoutes(mux)
 	}
 
+	// Project CRUD + MCP overrides API
+	if s.projectHandler != nil {
+		s.projectHandler.RegisterRoutes(mux)
+	}
+
 	// Custom tool CRUD API
 	if s.customToolsHandler != nil {
 		s.customToolsHandler.RegisterRoutes(mux)
@@ -294,15 +300,21 @@ func bridgeContextMiddleware(gatewayToken string, next http.Handler) http.Handle
 		peerKind := r.Header.Get("X-Peer-Kind")
 
 		if agentIDStr != "" || userID != "" {
-			// Verify HMAC signature over all context fields when gateway token is configured
-			if gatewayToken != "" {
-				sig := r.Header.Get("X-Bridge-Sig")
-				if !providers.VerifyBridgeContext(gatewayToken, agentIDStr, userID, channel, chatID, peerKind, sig) {
-					slog.Warn("security.mcp_bridge: invalid bridge context signature",
-						"agent_id", agentIDStr, "user_id", userID)
-					http.Error(w, `{"error":"invalid bridge context signature"}`, http.StatusForbidden)
-					return
-				}
+			// Reject context headers when no gateway token — prevents unauthenticated impersonation.
+			if gatewayToken == "" {
+				slog.Warn("security.mcp_bridge: no gateway token, ignoring context headers",
+					"agent_id", agentIDStr, "user_id", userID)
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Verify HMAC signature over all context fields.
+			sig := r.Header.Get("X-Bridge-Sig")
+			if !providers.VerifyBridgeContext(gatewayToken, agentIDStr, userID, channel, chatID, peerKind, sig) {
+				slog.Warn("security.mcp_bridge: invalid bridge context signature",
+					"agent_id", agentIDStr, "user_id", userID)
+				http.Error(w, `{"error":"invalid bridge context signature"}`, http.StatusForbidden)
+				return
 			}
 
 			if agentIDStr != "" {
@@ -482,6 +494,9 @@ func (s *Server) SetActivityHandler(h *httpapi.ActivityHandler) { s.activityHand
 
 // SetUsageHandler sets the usage analytics handler.
 func (s *Server) SetUsageHandler(h *httpapi.UsageHandler) { s.usageHandler = h }
+
+// SetProjectHandler sets the project CRUD + MCP overrides handler.
+func (s *Server) SetProjectHandler(h *httpapi.ProjectHandler) { s.projectHandler = h }
 
 // SetAgentStore sets the agent store for context injection in tools_invoke.
 func (s *Server) SetAgentStore(as store.AgentStore) { s.agentStore = as }

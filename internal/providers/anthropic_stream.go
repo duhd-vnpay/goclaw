@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 )
 
@@ -27,6 +28,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 	defer respBody.Close()
 
 	result := &ChatResponse{FinishReason: "stop"}
+	var receivedStop bool // tracks whether message_stop event was received
 	// Accumulate raw JSON fragments for each tool call by index
 	toolCallJSON := make(map[int]string)
 
@@ -148,8 +150,25 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 			}
 
 		case "message_stop":
-			// Stream complete
+			receivedStop = true
 		}
+	}
+
+	// Check for scanner errors (timeout, connection reset, etc.)
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("anthropic stream read error: %w", err)
+	}
+
+	// Detect premature stream termination: SSE connection closed before
+	// the message_stop event. This can happen when a proxy (e.g. CLIProxyAPI)
+	// drops the connection or the network is interrupted. The default
+	// FinishReason "stop" is misleading in this case.
+	if !receivedStop && (result.Content != "" || len(result.ToolCalls) > 0) {
+		slog.Warn("anthropic stream interrupted: no message_stop event",
+			"content_len", len(result.Content),
+			"tool_calls", len(result.ToolCalls),
+			"has_usage", result.Usage != nil)
+		result.FinishReason = "interrupted"
 	}
 
 	// Parse accumulated tool call JSON arguments

@@ -27,6 +27,13 @@ const (
 	ctxSessionKey  toolContextKey = "tool_session_key" // origin session key for announce routing
 )
 
+// Well-known channel names used for routing and access control.
+const (
+	ChannelSystem    = "system"
+	ChannelDashboard = "dashboard"
+	ChannelDelegate  = "delegate"
+)
+
 func WithToolChannel(ctx context.Context, channel string) context.Context {
 	return context.WithValue(ctx, ctxChannel, channel)
 }
@@ -186,6 +193,59 @@ func WithMemoryConfig(ctx context.Context, cfg *config.MemoryConfig) context.Con
 
 func MemoryConfigFromCtx(ctx context.Context) *config.MemoryConfig {
 	v, _ := ctx.Value(ctxMemoryCfg).(*config.MemoryConfig)
+	return v
+}
+
+// --- Workspace scope propagation (delegation origin) ---
+
+const (
+	ctxWsChannel toolContextKey = "tool_workspace_channel"
+	ctxWsChatID  toolContextKey = "tool_workspace_chat_id"
+)
+
+func WithWorkspaceChannel(ctx context.Context, channel string) context.Context {
+	return context.WithValue(ctx, ctxWsChannel, channel)
+}
+
+func WorkspaceChannelFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(ctxWsChannel).(string)
+	return v
+}
+
+func WithWorkspaceChatID(ctx context.Context, chatID string) context.Context {
+	return context.WithValue(ctx, ctxWsChatID, chatID)
+}
+
+func WorkspaceChatIDFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(ctxWsChatID).(string)
+	return v
+}
+
+// --- Project context propagation (message arrival → delegation chain) ---
+
+const (
+	ctxProjectID        toolContextKey = "tool_project_id"
+	ctxProjectOverrides toolContextKey = "tool_project_overrides"
+)
+
+// WithToolProjectID injects the resolved project UUID into context.
+// Used by delegation tools to propagate project scope through the delegation chain.
+func WithToolProjectID(ctx context.Context, projectID string) context.Context {
+	return context.WithValue(ctx, ctxProjectID, projectID)
+}
+
+func ToolProjectIDFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(ctxProjectID).(string)
+	return v
+}
+
+// WithToolProjectOverrides injects project MCP env overrides into context.
+func WithToolProjectOverrides(ctx context.Context, overrides map[string]map[string]string) context.Context {
+	return context.WithValue(ctx, ctxProjectOverrides, overrides)
+}
+
+func ToolProjectOverridesFromCtx(ctx context.Context) map[string]map[string]string {
+	v, _ := ctx.Value(ctxProjectOverrides).(map[string]map[string]string)
 	return v
 }
 

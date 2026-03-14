@@ -239,18 +239,29 @@ func (c *Channel) handleIncomingMessage(msg map[string]any) {
 	}
 
 	content, _ := msg["content"].(string)
-	if content == "" {
-		content = "[empty message]"
+
+	// Resolve media (download URLs, verify local files, detect MIME)
+	var mediaPaths []string
+	if mediaData, ok := msg["media"].([]any); ok && len(mediaData) > 0 {
+		resolved := c.resolveMedia(mediaData)
+		mediaPaths = mediaInfoToPaths(resolved)
+
+		if len(resolved) > 0 {
+			slog.Info("whatsapp media resolved",
+				"sender_id", senderID,
+				"count", len(resolved),
+				"items", mediaInfoToLogAttrs(resolved),
+			)
+		}
+
+		// If message has media but no text, use a placeholder
+		if content == "" && len(resolved) > 0 {
+			content = "[media]"
+		}
 	}
 
-	var media []string
-	if mediaData, ok := msg["media"].([]any); ok {
-		media = make([]string, 0, len(mediaData))
-		for _, m := range mediaData {
-			if path, ok := m.(string); ok {
-				media = append(media, path)
-			}
-		}
+	if content == "" {
+		content = "[empty message]"
 	}
 
 	metadata := make(map[string]string)
@@ -265,9 +276,10 @@ func (c *Channel) handleIncomingMessage(msg map[string]any) {
 		"sender_id", senderID,
 		"chat_id", chatID,
 		"preview", channels.Truncate(content, 50),
+		"media_count", len(mediaPaths),
 	)
 
-	c.HandleMessage(senderID, chatID, content, media, metadata, peerKind)
+	c.HandleMessage(senderID, chatID, content, mediaPaths, metadata, peerKind)
 }
 
 // checkGroupPolicy evaluates the group policy for a sender, with pairing support.
@@ -290,9 +302,17 @@ func (c *Channel) checkGroupPolicy(senderID, chatID string) bool {
 			return true
 		}
 		groupSenderID := fmt.Sprintf("group:%s", chatID)
-		if c.pairingService != nil && c.pairingService.IsPaired(groupSenderID, c.Name()) {
-			c.approvedGroups.Store(chatID, true)
-			return true
+		if c.pairingService != nil {
+			paired, err := c.pairingService.IsPaired(groupSenderID, c.Name())
+			if err != nil {
+				slog.Warn("security.pairing_check_failed, assuming paired (fail-open)",
+					"group_sender", groupSenderID, "channel", c.Name(), "error", err)
+				paired = true
+			}
+			if paired {
+				c.approvedGroups.Store(chatID, true)
+				return true
+			}
 		}
 		c.sendPairingReply(groupSenderID, chatID)
 		return false
@@ -323,7 +343,14 @@ func (c *Channel) checkDMPolicy(senderID, chatID string) bool {
 	default: // "pairing"
 		paired := false
 		if c.pairingService != nil {
-			paired = c.pairingService.IsPaired(senderID, c.Name())
+			p, err := c.pairingService.IsPaired(senderID, c.Name())
+			if err != nil {
+				slog.Warn("security.pairing_check_failed, assuming paired (fail-open)",
+					"sender_id", senderID, "channel", c.Name(), "error", err)
+				paired = true
+			} else {
+				paired = p
+			}
 		}
 		inAllowList := c.HasAllowList() && c.IsAllowed(senderID)
 

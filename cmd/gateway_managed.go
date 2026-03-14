@@ -385,7 +385,7 @@ func wireExtras(
 	// avoiding import cycle between tools and agent packages.
 	if stores.AgentLinks != nil && stores.Agents != nil {
 		runAgentFn := func(ctx context.Context, agentKey string, req tools.DelegateRunRequest) (*tools.DelegateRunResult, error) {
-			loop, err := agentRouter.Get(agentKey)
+			loop, err := agentRouter.GetForProject(agentKey, req.ProjectID, req.ProjectOverrides)
 			if err != nil {
 				return nil, err
 			}
@@ -406,6 +406,10 @@ func wireExtras(
 				TeamID:            req.TeamID,
 				TeamTaskID:        req.TeamTaskID,
 				ParentAgentID:     req.ParentAgentID,
+				WorkspaceChannel:  req.WorkspaceChannel,
+				WorkspaceChatID:   req.WorkspaceChatID,
+				ProjectID:         req.ProjectID,
+				ProjectOverrides:  req.ProjectOverrides,
 			})
 			if err != nil {
 				return nil, err
@@ -450,7 +454,7 @@ func wireExtras(
 		toolsReg.Register(tools.NewEvaluateLoopTool(delegateMgr))
 
 		// Handoff tool (agent-to-agent conversation transfer)
-		toolsReg.Register(tools.NewHandoffTool(delegateMgr, stores.Teams, stores.Sessions, msgBus))
+		toolsReg.Register(tools.NewHandoffTool(delegateMgr, stores.Teams, stores.Sessions, msgBus, workspace))
 
 		// Inject delegation capability into existing SpawnTool
 		if st, ok := toolsReg.Get("spawn"); ok {
@@ -484,7 +488,7 @@ func wireExtras(
 		slog.Info("delegate + delegate_search tools registered")
 	}
 
-	// Register team tools (team_tasks + team_message) if team store is available.
+	// Register team tools (team_tasks + team_message + workspace) if team store is available.
 	if stores.Teams != nil && stores.Agents != nil {
 		teamMgr := tools.NewTeamToolManager(stores.Teams, stores.Agents, msgBus)
 		if delegateMgr != nil {
@@ -492,6 +496,9 @@ func wireExtras(
 		}
 		toolsReg.Register(tools.NewTeamTasksTool(teamMgr))
 		toolsReg.Register(tools.NewTeamMessageTool(teamMgr))
+		toolsReg.Register(tools.NewWorkspaceWriteTool(teamMgr, workspace))
+		toolsReg.Register(tools.NewWorkspaceReadTool(teamMgr, workspace))
+		slog.Info("team + workspace tools registered", "workspace", workspace)
 
 		// Team cache invalidation via pub/sub
 		msgBus.Subscribe(bus.TopicCacheTeam, func(event bus.Event) {

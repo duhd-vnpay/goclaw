@@ -142,16 +142,17 @@ func DiscoverTools(ctx context.Context, transportType, command string, args []st
 }
 
 // filterTools removes tools from the registry that don't match the allow/deny lists.
-func (m *Manager) filterTools(serverName string, allow, deny []string) {
+// poolKey is the composite key used in poolServers/poolToolNames (e.g. "name" or "name:projectID").
+func (m *Manager) filterTools(poolKey string, allow, deny []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Get the tool names list (pool-backed or standalone)
 	var toolNames []string
-	_, isPool := m.poolServers[serverName]
+	_, isPool := m.poolServers[poolKey]
 	if isPool {
-		toolNames = m.poolToolNames[serverName]
-	} else if ss, ok := m.servers[serverName]; ok {
+		toolNames = m.poolToolNames[poolKey]
+	} else if ss, ok := m.servers[poolKey]; ok {
 		toolNames = ss.toolNames
 	} else {
 		return
@@ -192,8 +193,8 @@ func (m *Manager) filterTools(serverName string, allow, deny []string) {
 
 	// Update the correct tool names list
 	if isPool {
-		m.poolToolNames[serverName] = kept
+		m.poolToolNames[poolKey] = kept
 	} else {
-		m.servers[serverName].toolNames = kept
+		m.servers[poolKey].toolNames = kept
 	}
 }

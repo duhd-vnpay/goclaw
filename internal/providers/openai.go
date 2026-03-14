@@ -110,6 +110,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 	defer respBody.Close()
 
 	result := &ChatResponse{FinishReason: "stop"}
+	var receivedDone bool // tracks whether [DONE] marker was received
 	accumulators := make(map[int]*toolCallAccumulator)
 
 	scanner := bufio.NewScanner(respBody)
@@ -124,6 +125,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 		data := strings.TrimPrefix(line, "data:")
 		data = strings.TrimPrefix(data, " ")
 		if data == "[DONE]" {
+			receivedDone = true
 			break
 		}
 
@@ -194,6 +196,15 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 	// Check for scanner errors (timeout, connection reset, etc.)
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("%s: stream read error: %w", p.name, err)
+	}
+
+	// Detect premature stream termination: connection closed before [DONE].
+	if !receivedDone && (result.Content != "" || len(accumulators) > 0) {
+		slog.Warn("openai stream interrupted: no [DONE] marker",
+			"provider", p.name,
+			"content_len", len(result.Content),
+			"tool_calls", len(accumulators))
+		result.FinishReason = "interrupted"
 	}
 
 	// Parse accumulated tool call arguments.

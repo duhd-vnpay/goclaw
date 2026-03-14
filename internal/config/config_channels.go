@@ -20,6 +20,7 @@ type ChannelsConfig struct {
 	Zalo              ZaloConfig               `json:"zalo"`
 	ZaloPersonal      ZaloPersonalConfig       `json:"zalo_personal"`
 	Feishu            FeishuConfig             `json:"feishu"`
+	GoogleChat        GoogleChatConfig         `json:"google_chat"`
 	PendingCompaction *PendingCompactionConfig `json:"pending_compaction,omitempty"` // global pending message compaction settings
 }
 
@@ -180,6 +181,28 @@ type FeishuConfig struct {
 	VoiceAgentID      string              `json:"voice_agent_id,omitempty"`
 }
 
+type GoogleChatConfig struct {
+	Enabled            bool                `json:"enabled"`
+	ServiceAccountFile string              `json:"serviceAccountFile"`
+	Mode               string              `json:"mode"`                          // "pubsub" (phase 1) | "webhook" (phase 2)
+	ProjectID          string              `json:"projectId"`
+	SubscriptionID     string              `json:"subscriptionId"`
+	PullIntervalMs     int                 `json:"pullIntervalMs,omitempty"`
+	BotUser            string              `json:"botUser,omitempty"`
+	DMPolicy           string              `json:"dm_policy,omitempty"`           // "open" (default), "allowlist", "disabled"
+	GroupPolicy        string              `json:"group_policy,omitempty"`        // "open" (default), "allowlist", "disabled"
+	RequireMention     *bool               `json:"require_mention,omitempty"`     // require @bot mention in groups (default true)
+	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"`
+	HistoryLimit       int                 `json:"history_limit,omitempty"`       // max pending group messages (default 50, 0=disabled)
+	LongFormThreshold  int                 `json:"longFormThreshold,omitempty"`
+	LongFormFormat     string              `json:"longFormFormat,omitempty"`      // "md" (default) | "txt"
+	MediaMaxMB         int                 `json:"mediaMaxMb,omitempty"`
+	FileRetentionDays  int                 `json:"fileRetentionDays,omitempty"`   // auto-delete Drive files (0 = keep forever)
+	DrivePermission    string              `json:"drivePermission,omitempty"`     // "domain" (default) | "anyone"
+	DriveDomain        string              `json:"driveDomain,omitempty"`         // domain for "domain" permission (default "vnpay.vn")
+	BlockReply         *bool               `json:"block_reply,omitempty"`
+}
+
 // ProvidersConfig maps provider name to its config.
 type ProvidersConfig struct {
 	Anthropic  ProviderConfig  `json:"anthropic"`
@@ -276,8 +299,9 @@ type GatewayConfig struct {
 	InjectionAction   string       `json:"injection_action,omitempty"`    // prompt injection action: "log", "warn" (default), "block", "off"
 	InboundDebounceMs int          `json:"inbound_debounce_ms,omitempty"` // merge rapid messages from same sender (default 1000ms, -1 = disabled)
 	Quota             *QuotaConfig `json:"quota,omitempty"`               // per-user/group request quotas
-	BlockReply        *bool        `json:"block_reply,omitempty"`         // deliver intermediate text during tool iterations (default false)
-	ToolStatus        *bool        `json:"tool_status,omitempty"`         // show tool name in streaming preview during tool execution (default true)
+	BlockReply              *bool        `json:"block_reply,omitempty"`                // deliver intermediate text during tool iterations (default false)
+	ToolStatus              *bool        `json:"tool_status,omitempty"`                // show tool name in streaming preview during tool execution (default true)
+	TaskRecoveryIntervalSec int          `json:"task_recovery_interval_sec,omitempty"` // team task recovery ticker interval in seconds (default 300 = 5min)
 }
 
 // ToolsConfig controls tool availability, policy, and web search.

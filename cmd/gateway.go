@@ -19,6 +19,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/channels/discord"
 	"github.com/nextlevelbuilder/goclaw/internal/channels/feishu"
+	"github.com/nextlevelbuilder/goclaw/internal/channels/googlechat"
 	slackchannel "github.com/nextlevelbuilder/goclaw/internal/channels/slack"
 	"github.com/nextlevelbuilder/goclaw/internal/channels/telegram"
 	"github.com/nextlevelbuilder/goclaw/internal/channels/whatsapp"
@@ -37,6 +38,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/store/pg"
+	"github.com/nextlevelbuilder/goclaw/internal/tasks"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 	"github.com/nextlevelbuilder/goclaw/internal/tracing"
 	"github.com/nextlevelbuilder/goclaw/pkg/browser"
@@ -701,7 +703,7 @@ func runGateway() {
 	if mcpMgr != nil {
 		mcpToolLister = mcpMgr
 	}
-	agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH, delegationsH, builtinToolsH, pendingMessagesH := wireHTTP(pgStores, cfg.Gateway.Token, msgBus, toolsReg, providerRegistry, permPE.IsOwner, gatewayAddr, mcpToolLister)
+	agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH, delegationsH, builtinToolsH, pendingMessagesH, projectsH := wireHTTP(pgStores, cfg.Gateway.Token, msgBus, toolsReg, providerRegistry, permPE.IsOwner, gatewayAddr, mcpToolLister)
 	if agentsH != nil {
 		server.SetAgentsHandler(agentsH)
 	}
@@ -716,6 +718,9 @@ func runGateway() {
 	server.SetWakeHandler(wakeH)
 	if mcpH != nil {
 		server.SetMCPHandler(mcpH)
+	}
+	if projectsH != nil {
+		server.SetProjectHandler(projectsH)
 	}
 	if customToolsH != nil {
 		server.SetCustomToolsHandler(customToolsH)
@@ -765,8 +770,10 @@ func runGateway() {
 	// Supports media from any agent workspace (each agent has its own workspace from DB).
 	server.SetFilesHandler(httpapi.NewFilesHandler(cfg.Gateway.Token))
 
-	// Storage file management — browse/delete files under ~/.goclaw/ (excluding skills dirs).
-	server.SetStorageHandler(httpapi.NewStorageHandler(config.ExpandHome("~/.goclaw"), cfg.Gateway.Token))
+	// Storage file management — browse/delete files under the resolved workspace directory.
+	// Uses GOCLAW_WORKSPACE (or default ~/.goclaw/workspace) so it works correctly
+	// in Docker deployments where volumes are mounted outside ~/.goclaw/.
+	server.SetStorageHandler(httpapi.NewStorageHandler(workspace, cfg.Gateway.Token))
 
 	// Media upload endpoint — accepts multipart file uploads, returns temp path + MIME type.
 	server.SetMediaUploadHandler(httpapi.NewMediaUploadHandler(cfg.Gateway.Token))
@@ -820,6 +827,7 @@ func runGateway() {
 		instanceLoader.RegisterFactory(channels.TypeZaloPersonal, zalopersonal.FactoryWithPendingStore(pgStores.PendingMessages))
 		instanceLoader.RegisterFactory(channels.TypeWhatsApp, whatsapp.Factory)
 		instanceLoader.RegisterFactory(channels.TypeSlack, slackchannel.FactoryWithPendingStore(pgStores.PendingMessages))
+		instanceLoader.RegisterFactory(channels.TypeGoogleChat, googlechat.FactoryWithPendingStore(pgStores.PendingMessages))
 		if err := instanceLoader.LoadAll(context.Background()); err != nil {
 			slog.Error("failed to load channel instances from DB", "error", err)
 		}
@@ -1043,7 +1051,14 @@ func runGateway() {
 		channelMgr.SetContactCollector(contactCollector) // propagate to all channel handlers
 	}
 
-	go consumeInboundMessages(ctx, msgBus, agentRouter, cfg, sched, channelMgr, consumerTeamStore, quotaChecker, delegateMgr, pgStores.Sessions, pgStores.Agents, contactCollector)
+	go consumeInboundMessages(ctx, msgBus, agentRouter, cfg, sched, channelMgr, consumerTeamStore, quotaChecker, delegateMgr, pgStores.Sessions, pgStores.Agents, contactCollector, pgStores.Projects)
+
+	// Task recovery ticker: re-dispatches stale/pending team tasks on startup and periodically.
+	var taskTicker *tasks.TaskTicker
+	if pgStores.Teams != nil {
+		taskTicker = tasks.NewTaskTicker(pgStores.Teams, pgStores.Agents, msgBus, cfg.Gateway.TaskRecoveryIntervalSec)
+		taskTicker.Start()
+	}
 
 	go func() {
 		sig := <-sigCh
@@ -1052,9 +1067,12 @@ func runGateway() {
 		// Broadcast shutdown event
 		server.BroadcastEvent(*protocol.NewEvent(protocol.EventShutdown, nil))
 
-		// Stop channels and cron
+		// Stop channels, cron, and task ticker
 		channelMgr.StopAll(context.Background())
 		pgStores.Cron.Stop()
+		if taskTicker != nil {
+			taskTicker.Stop()
+		}
 
 		// Drain audit log queue before closing DB
 		if auditCh != nil {

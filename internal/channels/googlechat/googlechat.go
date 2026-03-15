@@ -209,6 +209,14 @@ func (c *Channel) Stop(ctx context.Context) error {
 
 	c.SetRunning(false)
 
+	// Drain active streams to cancel flush timers and avoid goroutine leaks.
+	c.streams.Range(func(key, value any) bool {
+		cs := value.(*chatStream)
+		cs.stop(ctx)
+		c.streams.Delete(key)
+		return true
+	})
+
 	if c.cleanupCancel != nil {
 		c.cleanupCancel()
 	}

@@ -175,3 +175,163 @@ func TestChatStream_PendingFlush(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamEnabled_Config(t *testing.T) {
+	ch := &Channel{dmStream: true, groupStream: false}
+	if !ch.StreamEnabled(false) {
+		t.Error("DM streaming should be enabled")
+	}
+	if ch.StreamEnabled(true) {
+		t.Error("group streaming should be disabled")
+	}
+
+	ch2 := &Channel{dmStream: false, groupStream: true}
+	if ch2.StreamEnabled(false) {
+		t.Error("DM streaming should be disabled")
+	}
+	if !ch2.StreamEnabled(true) {
+		t.Error("group streaming should be enabled")
+	}
+}
+
+func TestOnStreamStart_ReusePlaceholder(t *testing.T) {
+	env := testStreamEnv(t)
+	ctx := context.Background()
+
+	// Pre-store a placeholder
+	env.ch.placeholders.Store("spaces/test", "spaces/test/messages/placeholder-1")
+
+	err := env.ch.OnStreamStart(ctx, "spaces/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should NOT have created a new message (no POST)
+	recs := env.getRecords()
+	for _, r := range recs {
+		if r.Method == "POST" {
+			t.Error("should reuse placeholder, not POST new message")
+		}
+	}
+
+	// Stream should exist
+	val, ok := env.ch.streams.Load("spaces/test")
+	if !ok {
+		t.Fatal("stream should be stored")
+	}
+	cs := val.(*chatStream)
+	if cs.messageName != "spaces/test/messages/placeholder-1" {
+		t.Errorf("stream should use placeholder message, got %q", cs.messageName)
+	}
+
+	// Placeholder should be consumed
+	if _, ok := env.ch.placeholders.Load("spaces/test"); ok {
+		t.Error("placeholder should be deleted after reuse")
+	}
+}
+
+func TestOnStreamStart_CreateNew(t *testing.T) {
+	env := testStreamEnv(t)
+	ctx := context.Background()
+
+	// No placeholder stored
+	err := env.ch.OnStreamStart(ctx, "spaces/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have created a new message (POST)
+	recs := env.getRecords()
+	postCount := 0
+	for _, r := range recs {
+		if r.Method == "POST" {
+			postCount++
+			// Verify "⏳" text
+			if text, ok := r.Body["text"].(string); ok {
+				if text != "⏳" {
+					t.Errorf("new stream message should have ⏳ text, got %q", text)
+				}
+			}
+		}
+	}
+	if postCount != 1 {
+		t.Errorf("expected 1 POST, got %d", postCount)
+	}
+
+	// Stream should exist with server-returned name
+	val, ok := env.ch.streams.Load("spaces/test")
+	if !ok {
+		t.Fatal("stream should be stored")
+	}
+	cs := val.(*chatStream)
+	if cs.messageName != "spaces/test/messages/new-1" {
+		t.Errorf("stream should use server-returned name, got %q", cs.messageName)
+	}
+}
+
+func TestOnStreamEnd_HandoffToPlaceholders(t *testing.T) {
+	env := testStreamEnv(t)
+	ctx := context.Background()
+
+	// Simulate active stream
+	cs := newChatStream(env.ch, "spaces/test/messages/stream-1")
+	env.ch.streams.Store("spaces/test", cs)
+
+	err := env.ch.OnStreamEnd(ctx, "spaces/test", "final text")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Stream should be removed
+	if _, ok := env.ch.streams.Load("spaces/test"); ok {
+		t.Error("stream should be deleted after OnStreamEnd")
+	}
+
+	// Message should be handed off to placeholders
+	pName, ok := env.ch.placeholders.Load("spaces/test")
+	if !ok {
+		t.Fatal("placeholder should be stored for Send() pickup")
+	}
+	if pName.(string) != "spaces/test/messages/stream-1" {
+		t.Errorf("placeholder should have stream message name, got %q", pName)
+	}
+}
+
+func TestToolIteration_Reuse(t *testing.T) {
+	env := testStreamEnv(t)
+	ctx := context.Background()
+
+	// Simulate: OnStreamStart (reuses placeholder) → chunks → OnStreamEnd("")
+	env.ch.placeholders.Store("spaces/test", "spaces/test/messages/original")
+	if err := env.ch.OnStreamStart(ctx, "spaces/test"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stream some text
+	env.ch.OnChunkEvent(ctx, "spaces/test", "partial response")
+
+	// Tool call: OnStreamEnd with empty finalText
+	if err := env.ch.OnStreamEnd(ctx, "spaces/test", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Message should be in placeholders
+	pName, ok := env.ch.placeholders.Load("spaces/test")
+	if !ok {
+		t.Fatal("placeholder should exist after tool-phase OnStreamEnd")
+	}
+
+	// Next iteration: OnStreamStart should reuse from placeholders
+	if err := env.ch.OnStreamStart(ctx, "spaces/test"); err != nil {
+		t.Fatal(err)
+	}
+
+	val, ok := env.ch.streams.Load("spaces/test")
+	if !ok {
+		t.Fatal("stream should exist after restart")
+	}
+	cs2 := val.(*chatStream)
+	if cs2.messageName != pName.(string) {
+		t.Errorf("restarted stream should reuse message %q, got %q", pName, cs2.messageName)
+	}
+}

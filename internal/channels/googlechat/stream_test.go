@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nextlevelbuilder/goclaw/internal/bus"
 )
 
 // requestRecord captures an HTTP request for test assertions.
@@ -333,5 +335,128 @@ func TestToolIteration_Reuse(t *testing.T) {
 	cs2 := val.(*chatStream)
 	if cs2.messageName != pName.(string) {
 		t.Errorf("restarted stream should reuse message %q, got %q", pName, cs2.messageName)
+	}
+}
+
+func TestSend_InPlaceEdit(t *testing.T) {
+	env := testStreamEnv(t)
+	ctx := context.Background()
+
+	// Simulate stream handoff: placeholder exists
+	env.ch.placeholders.Store("spaces/test", "spaces/test/messages/stream-1")
+
+	msg := bus.OutboundMessage{
+		ChatID:   "spaces/test",
+		Content:  "Short final response.",
+		Metadata: map[string]string{"peer_kind": "direct"},
+	}
+
+	err := env.ch.Send(ctx, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recs := env.getRecords()
+	patchCount := 0
+	postCount := 0
+	for _, r := range recs {
+		switch r.Method {
+		case "PATCH":
+			patchCount++
+		case "POST":
+			postCount++
+		}
+	}
+
+	if patchCount != 1 {
+		t.Errorf("expected 1 PATCH (in-place edit), got %d", patchCount)
+	}
+	if postCount != 0 {
+		t.Errorf("expected 0 POST (no new message), got %d", postCount)
+	}
+
+	// Placeholder should be consumed
+	if _, ok := env.ch.placeholders.Load("spaces/test"); ok {
+		t.Error("placeholder should be consumed after Send")
+	}
+}
+
+func TestSend_FallbackDelete(t *testing.T) {
+	env := testStreamEnv(t)
+	env.ch.longFormThreshold = 50 // low threshold to trigger fallback
+	ctx := context.Background()
+
+	// Simulate stream handoff
+	env.ch.placeholders.Store("spaces/test", "spaces/test/messages/stream-1")
+
+	// Content exceeds longFormThreshold (50 chars)
+	longContent := strings.Repeat("x", 100)
+	msg := bus.OutboundMessage{
+		ChatID:   "spaces/test",
+		Content:  longContent,
+		Metadata: map[string]string{"peer_kind": "direct"},
+	}
+
+	err := env.ch.Send(ctx, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recs := env.getRecords()
+	deleteCount := 0
+	postCount := 0
+	for _, r := range recs {
+		switch r.Method {
+		case "DELETE":
+			deleteCount++
+		case "POST":
+			postCount++
+		}
+	}
+
+	if deleteCount != 1 {
+		t.Errorf("expected 1 DELETE (stream message), got %d", deleteCount)
+	}
+	if postCount == 0 {
+		t.Error("expected POST for new message after fallback")
+	}
+}
+
+func TestSend_PlaceholderUpdate(t *testing.T) {
+	env := testStreamEnv(t)
+	ctx := context.Background()
+
+	// Pre-store placeholder
+	env.ch.placeholders.Store("spaces/test", "spaces/test/messages/stream-1")
+
+	msg := bus.OutboundMessage{
+		ChatID:  "spaces/test",
+		Content: "Running tool: search_code",
+		Metadata: map[string]string{
+			"peer_kind":          "direct",
+			"placeholder_update": "true",
+		},
+	}
+
+	err := env.ch.Send(ctx, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should edit placeholder (PATCH) but NOT consume it
+	recs := env.getRecords()
+	patchCount := 0
+	for _, r := range recs {
+		if r.Method == "PATCH" {
+			patchCount++
+		}
+	}
+	if patchCount != 1 {
+		t.Errorf("expected 1 PATCH for placeholder update, got %d", patchCount)
+	}
+
+	// Placeholder should still exist (not consumed)
+	if _, ok := env.ch.placeholders.Load("spaces/test"); !ok {
+		t.Error("placeholder should still exist after placeholder_update")
 	}
 }

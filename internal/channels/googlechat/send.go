@@ -298,12 +298,22 @@ func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 		replyOption = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
 	}
 
+	// Placeholder update (e.g. tool status, LLM retry): edit placeholder but keep it
+	// alive for the final response. Same pattern as Telegram/Discord/Slack.
+	if msg.Metadata["placeholder_update"] == "true" {
+		if pName, ok := c.placeholders.Load(msg.ChatID); ok {
+			_ = editMessage(ctx, c.apiBase, token, c.httpClient, pName.(string), markdownToGoogleChat(content))
+		}
+		return nil
+	}
+
 	// Check for placeholder edit (Thinking... → final response).
 	if placeholderName, ok := c.placeholders.Load(msg.ChatID); ok {
 		c.placeholders.Delete(msg.ChatID)
 		pName := placeholderName.(string)
 
-		if len([]byte(content)) <= googleChatMaxMessageBytes && !detectStructuredContent(content) {
+		if len([]byte(content)) <= googleChatMaxMessageBytes && !detectStructuredContent(content) &&
+			(c.longFormThreshold == 0 || len(content) <= c.longFormThreshold) {
 			if err := editMessage(ctx, c.apiBase, token, c.httpClient, pName, markdownToGoogleChat(content)); err != nil {
 				slog.Warn("googlechat: placeholder edit failed, sending new", "error", err)
 			} else {

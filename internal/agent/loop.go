@@ -305,8 +305,12 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		l.enrichVideoIDs(messages, mediaRefs)
 	}
 
-	// 2e. Cross-session recovery: recover stale locked tasks and notify team leads
-	// about orphaned pending tasks and in-progress tasks being handled by delegates.
+	// 2e. Enrich <media:image> tags with persisted media IDs so the LLM
+	// knows images were received and stored (consistent with audio/video enrichment).
+	l.enrichImageIDs(messages, mediaRefs)
+
+	// 2f. Cross-session recovery: notify team leads about orphaned pending tasks
+	// and in-progress tasks being handled by delegates.
 	// Safe because Bước 1 (early ClaimTask) ensures running tasks are in_progress,
 	// so only truly un-spawned tasks remain pending.
 	if l.teamStore != nil && l.agentUUID != uuid.Nil {

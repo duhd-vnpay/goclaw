@@ -196,14 +196,14 @@ func TestStreamEnabled_Config(t *testing.T) {
 	}
 }
 
-func TestOnStreamStart_ReusePlaceholder(t *testing.T) {
+func TestCreateStream_ReusePlaceholder(t *testing.T) {
 	env := testStreamEnv(t)
 	ctx := context.Background()
 
 	// Pre-store a placeholder
 	env.ch.placeholders.Store("spaces/test", "spaces/test/messages/placeholder-1")
 
-	err := env.ch.OnStreamStart(ctx, "spaces/test")
+	stream, err := env.ch.CreateStream(ctx, "spaces/test", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,12 +216,8 @@ func TestOnStreamStart_ReusePlaceholder(t *testing.T) {
 		}
 	}
 
-	// Stream should exist
-	val, ok := env.ch.streams.Load("spaces/test")
-	if !ok {
-		t.Fatal("stream should be stored")
-	}
-	cs := val.(*chatStream)
+	// Stream should have the placeholder message name
+	cs := stream.(*chatStream)
 	if cs.messageName != "spaces/test/messages/placeholder-1" {
 		t.Errorf("stream should use placeholder message, got %q", cs.messageName)
 	}
@@ -232,12 +228,12 @@ func TestOnStreamStart_ReusePlaceholder(t *testing.T) {
 	}
 }
 
-func TestOnStreamStart_CreateNew(t *testing.T) {
+func TestCreateStream_CreateNew(t *testing.T) {
 	env := testStreamEnv(t)
 	ctx := context.Background()
 
 	// No placeholder stored
-	err := env.ch.OnStreamStart(ctx, "spaces/test")
+	stream, err := env.ch.CreateStream(ctx, "spaces/test", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,34 +256,23 @@ func TestOnStreamStart_CreateNew(t *testing.T) {
 		t.Errorf("expected 1 POST, got %d", postCount)
 	}
 
-	// Stream should exist with server-returned name
-	val, ok := env.ch.streams.Load("spaces/test")
-	if !ok {
-		t.Fatal("stream should be stored")
-	}
-	cs := val.(*chatStream)
+	// Stream should have server-returned name
+	cs := stream.(*chatStream)
 	if cs.messageName != "spaces/test/messages/new-1" {
 		t.Errorf("stream should use server-returned name, got %q", cs.messageName)
 	}
 }
 
-func TestOnStreamEnd_HandoffToPlaceholders(t *testing.T) {
+func TestFinalizeStream_HandoffToPlaceholders(t *testing.T) {
 	env := testStreamEnv(t)
 	ctx := context.Background()
 
 	// Simulate active stream
 	cs := newChatStream(env.ch, "spaces/test/messages/stream-1")
-	env.ch.streams.Store("spaces/test", cs)
 
-	err := env.ch.OnStreamEnd(ctx, "spaces/test", "final text")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Stream should be removed
-	if _, ok := env.ch.streams.Load("spaces/test"); ok {
-		t.Error("stream should be deleted after OnStreamEnd")
-	}
+	// Stop and finalize
+	cs.Stop(ctx)
+	env.ch.FinalizeStream(ctx, "spaces/test", cs)
 
 	// Message should be handed off to placeholders
 	pName, ok := env.ch.placeholders.Load("spaces/test")
@@ -303,36 +288,33 @@ func TestToolIteration_Reuse(t *testing.T) {
 	env := testStreamEnv(t)
 	ctx := context.Background()
 
-	// Simulate: OnStreamStart (reuses placeholder) → chunks → OnStreamEnd("")
+	// Simulate: CreateStream (reuses placeholder) → chunks → Stop + FinalizeStream
 	env.ch.placeholders.Store("spaces/test", "spaces/test/messages/original")
-	if err := env.ch.OnStreamStart(ctx, "spaces/test"); err != nil {
+	stream, err := env.ch.CreateStream(ctx, "spaces/test", true)
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Stream some text
-	env.ch.OnChunkEvent(ctx, "spaces/test", "partial response")
+	stream.Update(ctx, "partial response")
 
-	// Tool call: OnStreamEnd with empty finalText
-	if err := env.ch.OnStreamEnd(ctx, "spaces/test", ""); err != nil {
-		t.Fatal(err)
-	}
+	// Tool call: stop and finalize (hands off to placeholders)
+	stream.Stop(ctx)
+	env.ch.FinalizeStream(ctx, "spaces/test", stream)
 
 	// Message should be in placeholders
 	pName, ok := env.ch.placeholders.Load("spaces/test")
 	if !ok {
-		t.Fatal("placeholder should exist after tool-phase OnStreamEnd")
+		t.Fatal("placeholder should exist after tool-phase FinalizeStream")
 	}
 
-	// Next iteration: OnStreamStart should reuse from placeholders
-	if err := env.ch.OnStreamStart(ctx, "spaces/test"); err != nil {
+	// Next iteration: CreateStream should reuse from placeholders
+	stream2, err := env.ch.CreateStream(ctx, "spaces/test", false)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	val, ok := env.ch.streams.Load("spaces/test")
-	if !ok {
-		t.Fatal("stream should exist after restart")
-	}
-	cs2 := val.(*chatStream)
+	cs2 := stream2.(*chatStream)
 	if cs2.messageName != pName.(string) {
 		t.Errorf("restarted stream should reuse message %q, got %q", pName, cs2.messageName)
 	}

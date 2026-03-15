@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/nextlevelbuilder/goclaw/internal/channels"
 )
 
 // chatStream manages streaming preview state for a single Google Chat conversation.
@@ -143,7 +145,34 @@ func truncateBytes(s string, maxBytes int) string {
 	return string(b[:maxBytes])
 }
 
-// --- StreamingChannel interface implementation ---
+// --- ChannelStream interface implementation (chatStream) ---
+
+// Update sends or edits the streaming message with the latest accumulated text.
+// Implements channels.ChannelStream.
+func (cs *chatStream) Update(ctx context.Context, text string) {
+	cs.update(ctx, text)
+}
+
+// Stop finalizes the stream with a final flush.
+// Implements channels.ChannelStream.
+func (cs *chatStream) Stop(ctx context.Context) error {
+	cs.stop(ctx)
+	return nil
+}
+
+// MessageID returns 0 — Google Chat uses string messageName, not int IDs.
+// FinalizeStream handles the Google Chat-specific placeholder handoff via type assertion.
+// Implements channels.ChannelStream.
+func (cs *chatStream) MessageID() int { return 0 }
+
+// MessageName returns the Google Chat message resource name for FinalizeStream handoff.
+func (cs *chatStream) MessageName() string {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	return cs.messageName
+}
+
+// --- StreamingChannel interface implementation (Channel) ---
 
 // StreamEnabled returns whether streaming is enabled for DMs or groups.
 func (c *Channel) StreamEnabled(isGroup bool) bool {
@@ -153,12 +182,15 @@ func (c *Channel) StreamEnabled(isGroup bool) bool {
 	return c.dmStream
 }
 
-// OnStreamStart prepares for streaming a response.
-// Reuses existing placeholder message if available, otherwise creates a new one.
-func (c *Channel) OnStreamStart(ctx context.Context, chatID string) error {
+// CreateStream creates a per-run streaming handle for the given chatID.
+// Implements channels.StreamingChannel.
+//
+// Reuses existing placeholder message if available (from sendPlaceholder or
+// a previous FinalizeStream), otherwise creates a new "⏳" message.
+func (c *Channel) CreateStream(ctx context.Context, chatID string, _ bool) (channels.ChannelStream, error) {
 	var messageName string
 
-	// Check for existing placeholder (from sendPlaceholder or previous OnStreamEnd)
+	// Check for existing placeholder (from sendPlaceholder or previous FinalizeStream)
 	if v, ok := c.placeholders.Load(chatID); ok {
 		c.placeholders.Delete(chatID)
 		messageName = v.(string)
@@ -167,47 +199,33 @@ func (c *Channel) OnStreamStart(ctx context.Context, chatID string) error {
 		// Create new stream message
 		token, err := c.auth.Token(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		resp, err := postChatMessage(ctx, c.apiBase, token, c.httpClient, chatID,
 			map[string]any{"text": "⏳"}, "")
 		if err != nil {
-			return fmt.Errorf("googlechat: create stream message: %w", err)
+			return nil, fmt.Errorf("googlechat: create stream message: %w", err)
 		}
 		messageName = resp.Name
 		slog.Info("googlechat: stream created new message", "chat_id", chatID, "name", messageName)
 	}
 
 	cs := newChatStream(c, messageName)
-	c.streams.Store(chatID, cs)
-	return nil
+	return cs, nil
 }
 
-// OnChunkEvent updates the streaming message with accumulated text.
-func (c *Channel) OnChunkEvent(ctx context.Context, chatID string, fullText string) error {
-	val, ok := c.streams.Load(chatID)
-	if !ok {
-		return nil
+// FinalizeStream hands the stream's messageName back to the placeholders map so that
+// Send() can edit it with the properly formatted final response.
+// Implements channels.StreamingChannel.
+func (c *Channel) FinalizeStream(_ context.Context, chatID string, stream channels.ChannelStream) {
+	cs, ok := stream.(*chatStream)
+	if !ok || cs.MessageName() == "" {
+		return
 	}
-	cs := val.(*chatStream)
-	cs.update(ctx, fullText)
-	return nil
+	c.placeholders.Store(chatID, cs.MessageName())
+	slog.Info("googlechat: stream ended, handing off to Send()", "chat_id", chatID, "name", cs.MessageName())
 }
 
-// OnStreamEnd finalizes streaming: flush pending, hand off to Send() via placeholders.
-func (c *Channel) OnStreamEnd(ctx context.Context, chatID string, _ string) error {
-	val, ok := c.streams.Load(chatID)
-	if !ok {
-		return nil
-	}
-	cs := val.(*chatStream)
-	c.streams.Delete(chatID)
-
-	cs.stop(ctx)
-
-	// Hand off to Send() for final formatted edit
-	c.placeholders.Store(chatID, cs.messageName)
-	slog.Info("googlechat: stream ended, handing off to Send()", "chat_id", chatID, "name", cs.messageName)
-
-	return nil
-}
+// ReasoningStreamEnabled returns false — Google Chat doesn't support reasoning lanes yet.
+// The PATCH-based streaming doesn't support dual-lane preview like Telegram DraftStream.
+func (c *Channel) ReasoningStreamEnabled() bool { return false }

@@ -13,6 +13,10 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
+// Compile-time interface assertions.
+var _ channels.Channel = (*Channel)(nil)
+var _ channels.StreamingChannel = (*Channel)(nil)
+
 // Channel implements channels.Channel, channels.BlockReplyChannel, and
 // channels.PendingCompactable for Google Chat via Pub/Sub pull (phase 1).
 type Channel struct {

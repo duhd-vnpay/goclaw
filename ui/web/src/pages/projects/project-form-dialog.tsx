@@ -11,6 +11,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { slugify, isValidSlug } from "@/lib/slug";
 import type { ProjectData, ProjectInput } from "./hooks/use-projects";
 
@@ -123,17 +130,17 @@ export function ProjectFormDialog({ open, onOpenChange, project, onSubmit }: Pro
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="proj-channel">{t("form.channelType")}</Label>
-            <select
-              id="proj-channel"
-              value={channelType}
-              onChange={(e) => setChannelType(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base md:text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              {CHANNEL_TYPES.map((ct) => (
-                <option key={ct.value} value={ct.value}>{ct.label}</option>
-              ))}
-            </select>
+            <Label>{t("form.channelType")}</Label>
+            <Select value={channelType || "__none__"} onValueChange={(v) => setChannelType(v === "__none__" ? "" : v)}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CHANNEL_TYPES.map((ct) => (
+                  <SelectItem key={ct.value || "__none__"} value={ct.value || "__none__"}>{ct.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="grid gap-1.5">
@@ -154,17 +161,17 @@ export function ProjectFormDialog({ open, onOpenChange, project, onSubmit }: Pro
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="proj-status">{t("form.status")}</Label>
-            <select
-              id="proj-status"
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base md:text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
+            <Label>{t("form.status")}</Label>
+            <Select value={status} onValueChange={setStatus}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {STATUS_OPTIONS.map((s) => (
+                  <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}

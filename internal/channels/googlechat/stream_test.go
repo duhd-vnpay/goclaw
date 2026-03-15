@@ -18,22 +18,38 @@ type requestRecord struct {
 	Body   map[string]any
 }
 
-// testStreamEnv creates a Channel with mock auth and HTTP server for stream tests.
-func testStreamEnv(t *testing.T) (*Channel, *httptest.Server, *[]requestRecord) {
-	t.Helper()
-	var mu sync.Mutex
-	var records []requestRecord
+// streamTestEnv holds test infrastructure for stream tests.
+type streamTestEnv struct {
+	ch  *Channel
+	srv *httptest.Server
+	mu  sync.Mutex
+	recs []requestRecord
+}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// getRecords returns a snapshot of recorded requests (thread-safe).
+func (e *streamTestEnv) getRecords() []requestRecord {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]requestRecord, len(e.recs))
+	copy(out, e.recs)
+	return out
+}
+
+// testStreamEnv creates a Channel with mock auth and HTTP server for stream tests.
+func testStreamEnv(t *testing.T) *streamTestEnv {
+	t.Helper()
+	env := &streamTestEnv{}
+
+	env.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
-		mu.Lock()
-		records = append(records, requestRecord{
+		env.mu.Lock()
+		env.recs = append(env.recs, requestRecord{
 			Method: r.Method,
 			URL:    r.URL.String(),
 			Body:   body,
 		})
-		mu.Unlock()
+		env.mu.Unlock()
 
 		if r.Method == "POST" {
 			json.NewEncoder(w).Encode(map[string]any{
@@ -44,30 +60,26 @@ func testStreamEnv(t *testing.T) (*Channel, *httptest.Server, *[]requestRecord) 
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	t.Cleanup(srv.Close)
+	t.Cleanup(env.srv.Close)
 
-	ch := &Channel{
+	env.ch = &Channel{
 		auth: &ServiceAccountAuth{
 			token:     "test-token",
 			expiresAt: time.Now().Add(1 * time.Hour),
 		},
-		apiBase:           srv.URL,
-		httpClient:        srv.Client(),
+		apiBase:           env.srv.URL,
+		httpClient:        env.srv.Client(),
 		dmStream:          true,
 		groupStream:       false,
 		longFormThreshold: longFormThresholdDefault,
 	}
 
-	return ch, srv, &records
-}
-
-func getRecords(records *[]requestRecord) []requestRecord {
-	return *records
+	return env
 }
 
 func TestChatStream_Dedup(t *testing.T) {
-	ch, _, records := testStreamEnv(t)
-	cs := newChatStream(ch, "spaces/test/messages/m1")
+	env := testStreamEnv(t)
+	cs := newChatStream(env.ch, "spaces/test/messages/m1")
 
 	ctx := context.Background()
 
@@ -78,7 +90,7 @@ func TestChatStream_Dedup(t *testing.T) {
 	// Wait for any flush timers
 	time.Sleep(50 * time.Millisecond)
 
-	recs := getRecords(records)
+	recs := env.getRecords()
 	patchCount := 0
 	for _, r := range recs {
 		if r.Method == "PATCH" {
@@ -91,8 +103,8 @@ func TestChatStream_Dedup(t *testing.T) {
 }
 
 func TestChatStream_Throttle(t *testing.T) {
-	ch, _, records := testStreamEnv(t)
-	cs := newChatStream(ch, "spaces/test/messages/m1")
+	env := testStreamEnv(t)
+	cs := newChatStream(env.ch, "spaces/test/messages/m1")
 	ctx := context.Background()
 
 	// First update sends immediately
@@ -104,7 +116,7 @@ func TestChatStream_Throttle(t *testing.T) {
 
 	// Only 1 PATCH should have been sent (chunk1)
 	time.Sleep(50 * time.Millisecond) // let goroutines settle
-	recs := getRecords(records)
+	recs := env.getRecords()
 	immediatePatch := 0
 	for _, r := range recs {
 		if r.Method == "PATCH" {
@@ -118,7 +130,7 @@ func TestChatStream_Throttle(t *testing.T) {
 	// Wait for flush timer to fire
 	time.Sleep(defaultStreamThrottle + 200*time.Millisecond)
 
-	recs = getRecords(records)
+	recs = env.getRecords()
 	totalPatch := 0
 	for _, r := range recs {
 		if r.Method == "PATCH" {
@@ -132,8 +144,8 @@ func TestChatStream_Throttle(t *testing.T) {
 }
 
 func TestChatStream_PendingFlush(t *testing.T) {
-	ch, _, records := testStreamEnv(t)
-	cs := newChatStream(ch, "spaces/test/messages/m1")
+	env := testStreamEnv(t)
+	cs := newChatStream(env.ch, "spaces/test/messages/m1")
 	ctx := context.Background()
 
 	// Send first to start throttle window
@@ -143,7 +155,7 @@ func TestChatStream_PendingFlush(t *testing.T) {
 	// Stop should flush pending
 	cs.stop(ctx)
 
-	recs := getRecords(records)
+	recs := env.getRecords()
 	patchCount := 0
 	var lastBody map[string]any
 	for _, r := range recs {

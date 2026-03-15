@@ -79,7 +79,7 @@ func (cs *chatStream) doFlush(ctx context.Context) {
 
 	// Truncate to fit Google Chat limit
 	if len([]byte(formatted)) > googleChatMaxMessageBytes {
-		formatted = truncateBytes(formatted, googleChatMaxMessageBytes-4) + "…"
+		formatted = truncateBytes(formatted, googleChatMaxMessageBytes-len([]byte("…"))) + "…"
 	}
 
 	token, err := cs.ch.auth.Token(ctx)
@@ -107,6 +107,9 @@ func (cs *chatStream) resetFlushTimer() {
 	if remaining <= 0 {
 		remaining = cs.throttle
 	}
+	// Timer callback runs on a separate goroutine after the caller releases mu.
+	// Uses context.Background() intentionally — the originating request context
+	// may be cancelled by then; a best-effort flush is acceptable for streaming previews.
 	cs.flushTimer = time.AfterFunc(remaining, func() {
 		cs.mu.Lock()
 		defer cs.mu.Unlock()

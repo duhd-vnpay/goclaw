@@ -233,8 +233,10 @@ func (sm *SubagentManager) Spawn(
 		CreatedAt:         time.Now().UnixMilli(),
 		spawnConfig:       cfg,
 	}
-	// Create per-task context for real goroutine cancellation
-	taskCtx, taskCancel := context.WithCancel(ctx)
+	// Detach from parent context so async subagent survives parent completion.
+	// context.WithoutCancel preserves all context values (tracing, store, tools)
+	// while removing the parent's cancellation chain. Same pattern as DelegateAsync.
+	taskCtx, taskCancel := context.WithCancel(context.WithoutCancel(ctx))
 	subTask.cancelFunc = taskCancel
 
 	sm.tasks[id] = subTask

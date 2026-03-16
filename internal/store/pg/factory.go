@@ -18,9 +18,8 @@ func NewPGStores(cfg store.StoreConfig) (*store.Stores, error) {
 
 	skillsDir := cfg.SkillsStorageDir
 	if skillsDir == "" {
-		skillsDir = "~/.goclaw/skills-store"
+		skillsDir = config.ResolvedDataDirFromEnv() + "/skills-store"
 	}
-	skillsDir = config.ExpandHome(skillsDir)
 
 	return &store.Stores{
 		DB:        db,
@@ -45,5 +44,7 @@ func NewPGStores(cfg store.StoreConfig) (*store.Stores, error) {
 		Activity:         NewPGActivityStore(db),
 		Snapshots:        NewPGSnapshotStore(db),
 		Party:            NewPGPartyStore(db),
+		SecureCLI:        NewPGSecureCLIStore(db, cfg.EncryptionKey),
+		APIKeys:          NewPGAPIKeyStore(db),
 	}, nil
 }

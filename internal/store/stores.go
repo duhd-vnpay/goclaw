@@ -26,4 +26,6 @@ type Stores struct {
 	Activity         ActivityStore
 	Snapshots        SnapshotStore
 	Party            PartyStore
+	SecureCLI        SecureCLIStore
+	APIKeys          APIKeyStore
 }

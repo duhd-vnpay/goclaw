@@ -3,11 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Combobox } from "@/components/ui/combobox";
-import { X, Save, Check, Bell, ShieldAlert, Clock, Info } from "lucide-react";
+import { X, Save, Check, Bell, ShieldAlert, Clock, Info, FolderLock, FolderSync } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CHANNEL_TYPES } from "@/constants/channels";
 import type { TeamData, TeamAccessSettings, EscalationMode, EscalationAction } from "@/types/team";
-import { ESCALATION_ACTIONS } from "@/types/team";
 import { useTeams } from "./hooks/use-teams";
 import { TeamVersionModal } from "./team-version-modal";
 
@@ -77,6 +76,7 @@ export function TeamSettingsTab({ teamId, team, onSaved }: TeamSettingsTabProps)
   const [escalationActions, setEscalationActions] = useState<EscalationAction[]>(initial.escalation_actions ?? []);
   const [followupInterval, setFollowupInterval] = useState<number>(initial.followup_interval_minutes ?? 30);
   const [followupMaxReminders, setFollowupMaxReminders] = useState<number>(initial.followup_max_reminders ?? 0);
+  const [workspaceScope, setWorkspaceScope] = useState<string>(initial.workspace_scope ?? "isolated");
   const isTeamV2 = version >= 2;
 
   const [saving, setSaving] = useState(false);
@@ -102,6 +102,7 @@ export function TeamSettingsTab({ teamId, team, onSaved }: TeamSettingsTabProps)
     setEscalationActions(s.escalation_actions ?? []);
     setFollowupInterval(s.followup_interval_minutes ?? 30);
     setFollowupMaxReminders(s.followup_max_reminders ?? 0);
+    setWorkspaceScope(s.workspace_scope ?? "isolated");
     setSaved(false);
     setError(null);
   }, [team]);
@@ -123,6 +124,7 @@ export function TeamSettingsTab({ teamId, team, onSaved }: TeamSettingsTabProps)
       }
       if (followupInterval !== 30) settings.followup_interval_minutes = followupInterval;
       if (followupMaxReminders !== 0) settings.followup_max_reminders = followupMaxReminders;
+      if (workspaceScope === "shared") settings.workspace_scope = "shared";
       if (version >= 2) settings.version = version;
       await updateTeamSettings(teamId, settings);
       setSaved(true);
@@ -133,7 +135,7 @@ export function TeamSettingsTab({ teamId, team, onSaved }: TeamSettingsTabProps)
     } finally {
       setSaving(false);
     }
-  }, [teamId, version, allowUserIds, denyUserIds, allowChannels, denyChannels, progressNotifications, escalationMode, escalationActions, followupInterval, followupMaxReminders, updateTeamSettings, onSaved, t]);
+  }, [teamId, version, allowUserIds, denyUserIds, allowChannels, denyChannels, progressNotifications, escalationMode, escalationActions, followupInterval, followupMaxReminders, workspaceScope, updateTeamSettings, onSaved, t]);
 
   const userOptions = knownUsers.map((u) => ({ value: u, label: u }));
   const channelOptions = CHANNEL_TYPES.map((c) => ({ value: c.value, label: c.label }));
@@ -276,79 +278,68 @@ export function TeamSettingsTab({ teamId, team, onSaved }: TeamSettingsTabProps)
         </div>
       </div>
 
-      {/* Escalation Policy (V2 only) */}
-      {isTeamV2 && <div className="space-y-4">
-        <h3 className="text-sm font-medium">{t("settings.escalationPolicy")}</h3>
+      {/* Workspace Scope */}
+      <div className="space-y-4">
+        <h3 className="text-sm font-medium">{t("settings.workspace")}</h3>
+        <div className="rounded-lg border bg-gradient-to-r from-emerald-500/5 to-teal-500/5 p-4">
+          <div className="flex items-start gap-4">
+            <div className="rounded-lg bg-emerald-500/10 p-2.5 text-emerald-600 dark:text-emerald-400">
+              <FolderSync className="h-5 w-5" />
+            </div>
+            <div className="flex-1 space-y-3">
+              <div className="space-y-1">
+                <span className="text-sm font-semibold">{t("settings.workspaceScope")}</span>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {t("settings.workspaceScopeHint")}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {([
+                  { value: "isolated", Icon: FolderLock, labelKey: "workspaceScopeIsolated", descKey: "workspaceScopeIsolatedDesc" },
+                  { value: "shared", Icon: FolderSync, labelKey: "workspaceScopeShared", descKey: "workspaceScopeSharedDesc" },
+                ] as const).map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setWorkspaceScope(opt.value)}
+                    className={
+                      "flex items-start gap-3 rounded-lg border p-3 text-left transition-colors " +
+                      (workspaceScope === opt.value
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:border-primary/50")
+                    }
+                  >
+                    <opt.Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <div>
+                      <div className="text-sm font-medium">{t(`settings.${opt.labelKey}`)}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {t(`settings.${opt.descKey}`)}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Escalation Policy (V2 only — coming soon) */}
+      {isTeamV2 && <div className="space-y-4 opacity-40 pointer-events-none select-none">
+        <h3 className="text-sm font-medium flex items-center gap-2">
+          {t("settings.escalationPolicy")}
+          <span className="rounded border px-1.5 py-0.5 text-[9px] font-normal text-muted-foreground">{t("settings.versionModal.comingSoon")}</span>
+        </h3>
         <div className="rounded-lg border bg-gradient-to-r from-orange-500/5 to-red-500/5 p-4">
           <div className="flex items-start gap-4">
             <div className="rounded-lg bg-orange-500/10 p-2.5 text-orange-600 dark:text-orange-400">
               <ShieldAlert className="h-5 w-5" />
             </div>
-            <div className="flex-1 space-y-4">
-              <div className="space-y-1">
-                <span className="text-sm font-semibold">{t("settings.escalationMode")}</span>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {t("settings.escalationModeHint")}
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {([
-                  { value: "", labelKey: "escalationModeNone", descKey: "escalationModeNoneDesc" },
-                  { value: "auto", labelKey: "escalationModeAuto", descKey: "escalationModeAutoDesc" },
-                  { value: "review", labelKey: "escalationModeReview", descKey: "escalationModeReviewDesc" },
-                  { value: "reject", labelKey: "escalationModeReject", descKey: "escalationModeRejectDesc" },
-                ] as const).map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setEscalationMode(opt.value as EscalationMode | "")}
-                    className={
-                      "rounded-lg border p-3 text-left transition-colors " +
-                      (escalationMode === opt.value
-                        ? "border-primary bg-primary/5"
-                        : "border-border hover:border-primary/50")
-                    }
-                  >
-                    <div className="text-sm font-medium">{t(`settings.${opt.labelKey}`)}</div>
-                    <div className="mt-0.5 text-xs text-muted-foreground">
-                      {t(`settings.${opt.descKey}`)}
-                    </div>
-                  </button>
-                ))}
-              </div>
-
-              {escalationMode && (
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">{t("settings.escalationActions")}</label>
-                  <p className="text-xs text-muted-foreground">
-                    {t("settings.escalationActionsHint")}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {ESCALATION_ACTIONS.map((action) => (
-                      <button
-                        key={action}
-                        type="button"
-                        onClick={() => {
-                          setEscalationActions((prev) =>
-                            prev.includes(action)
-                              ? prev.filter((a) => a !== action)
-                              : [...prev, action],
-                          );
-                        }}
-                        className={
-                          "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors " +
-                          (escalationActions.includes(action)
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-border text-muted-foreground hover:border-primary/50")
-                        }
-                      >
-                        {action}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+            <div className="flex-1 space-y-1">
+              <span className="text-sm font-semibold">{t("settings.escalationMode")}</span>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {t("settings.escalationModeHint")}
+              </p>
             </div>
           </div>
         </div>

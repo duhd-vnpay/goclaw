@@ -34,8 +34,9 @@ func checkTeamAccess(settings json.RawMessage, userID, channel string) error {
 		return nil // malformed = fail open
 	}
 
-	// System/internal access always allowed
-	if channel == ChannelDelegate || channel == ChannelSystem {
+	// System/internal access always allowed (delegate, system, dashboard, ws)
+	switch channel {
+	case ChannelDelegate, ChannelSystem, ChannelDashboard, "ws":
 		return nil
 	}
 

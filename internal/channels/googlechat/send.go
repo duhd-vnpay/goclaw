@@ -173,6 +173,8 @@ func retrySend(ctx context.Context, httpClient *http.Client, doReq func() (*http
 }
 
 // buildCardMessage creates a Cards V2 message from content with tables/code.
+// Handles: # (card title), ## (section header), ### (bold subtitle),
+// tables (decoratedText for 2-col, <pre> for wider), bullets, code blocks, dividers.
 func buildCardMessage(content string) map[string]any {
 	if !detectStructuredContent(content) {
 		return nil
@@ -181,23 +183,72 @@ func buildCardMessage(content string) map[string]any {
 	var sections []map[string]any
 	lines := strings.Split(content, "\n")
 	var currentWidgets []map[string]any
+	var currentHeader string // section-level header text
 	var inTable bool
 	var tableRows []string
+	var inCodeBlock bool
+	var codeLines []string
+
+	flushWidgets := func() {
+		if len(currentWidgets) == 0 {
+			return
+		}
+		section := map[string]any{"widgets": currentWidgets}
+		if currentHeader != "" {
+			section["header"] = currentHeader
+			currentHeader = ""
+		}
+		sections = append(sections, section)
+		currentWidgets = nil
+	}
 
 	flushTable := func() {
-		if len(tableRows) > 0 {
-			tableText := strings.Join(tableRows, "\n")
-			currentWidgets = append(currentWidgets, map[string]any{
-				"textParagraph": map[string]string{
-					"text": "<pre>" + tableText + "</pre>",
-				},
-			})
-			tableRows = nil
+		if len(tableRows) == 0 {
+			return
 		}
+		tw := buildTableWidget(tableRows)
+		tableRows = nil
+		if tw == nil {
+			return
+		}
+		// buildTableWidget returns {"__widgets": [...]} for 2-col decoratedText
+		if multiWidgets, ok := tw["__widgets"]; ok {
+			currentWidgets = append(currentWidgets, multiWidgets.([]map[string]any)...)
+		} else {
+			currentWidgets = append(currentWidgets, tw)
+		}
+	}
+
+	flushCodeBlock := func() {
+		if len(codeLines) == 0 {
+			return
+		}
+		codeText := strings.Join(codeLines, "\n")
+		currentWidgets = append(currentWidgets, map[string]any{
+			"textParagraph": map[string]string{
+				"text": "<pre>" + codeText + "</pre>",
+			},
+		})
+		codeLines = nil
 	}
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+
+		// Code block toggle.
+		if strings.HasPrefix(trimmed, "```") {
+			if inCodeBlock {
+				flushCodeBlock()
+				inCodeBlock = false
+			} else {
+				inCodeBlock = true
+			}
+			continue
+		}
+		if inCodeBlock {
+			codeLines = append(codeLines, line)
+			continue
+		}
 
 		// Table row detection.
 		if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
@@ -208,33 +259,57 @@ func buildCardMessage(content string) map[string]any {
 			tableRows = append(tableRows, trimmed)
 			continue
 		}
-
 		if inTable {
 			flushTable()
 			inTable = false
 		}
 
-		if strings.HasPrefix(trimmed, "# ") {
-			if len(currentWidgets) > 0 {
-				sections = append(sections, map[string]any{"widgets": currentWidgets})
-				currentWidgets = nil
-			}
+		// Horizontal rule → divider.
+		if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+			currentWidgets = append(currentWidgets, map[string]any{"divider": map[string]any{}})
 			continue
 		}
 
-		if trimmed != "" {
+		// # heading → card title (handled below), start new section
+		if strings.HasPrefix(trimmed, "# ") && !strings.HasPrefix(trimmed, "## ") {
+			flushWidgets()
+			continue
+		}
+
+		// ## heading → section header (CardV2 section.header)
+		if strings.HasPrefix(trimmed, "## ") && !strings.HasPrefix(trimmed, "### ") {
+			flushWidgets()
+			currentHeader = strings.TrimPrefix(trimmed, "## ")
+			continue
+		}
+
+		// ### heading → bold subtitle widget
+		if strings.HasPrefix(trimmed, "### ") {
+			headerText := strings.TrimPrefix(trimmed, "### ")
 			currentWidgets = append(currentWidgets, map[string]any{
-				"textParagraph": map[string]string{
-					"text": markdownToGoogleChat(trimmed),
+				"decoratedText": map[string]any{
+					"text": "<b>" + markdownToGoogleChatHTML(headerText) + "</b>",
 				},
 			})
+			continue
 		}
+
+		// Empty line → skip
+		if trimmed == "" {
+			continue
+		}
+
+		// Regular text (including bullets) → textParagraph with HTML
+		currentWidgets = append(currentWidgets, map[string]any{
+			"textParagraph": map[string]string{
+				"text": markdownToGoogleChatHTML(trimmed),
+			},
+		})
 	}
 
+	flushCodeBlock()
 	flushTable()
-	if len(currentWidgets) > 0 {
-		sections = append(sections, map[string]any{"widgets": currentWidgets})
-	}
+	flushWidgets()
 
 	if len(sections) == 0 {
 		return nil
@@ -242,8 +317,9 @@ func buildCardMessage(content string) map[string]any {
 
 	title := "Response"
 	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "# ") {
-			title = strings.TrimPrefix(strings.TrimSpace(line), "# ")
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "# ") && !strings.HasPrefix(t, "## ") {
+			title = strings.TrimPrefix(t, "# ")
 			break
 		}
 	}

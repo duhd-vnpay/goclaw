@@ -30,6 +30,7 @@ var toolGroups = map[string][]string{
 		"create_image", "create_video",
 		"skill_search", "mcp_tool_search", "tts",
 		"team_tasks", "team_message", "workspace_write", "workspace_read",
+		"internal_api",
 	},
 }
 

@@ -106,20 +106,6 @@ func builtinToolSeedData() []store.BuiltinToolDef {
 		{Name: "use_skill", DisplayName: "Use Skill", Description: "Activate a skill to use its specialized capabilities (tracing marker)", Category: "skills", Enabled: true},
 		{Name: "publish_skill", DisplayName: "Publish Skill", Description: "Register a skill directory (created via skill-creator) in the system database, making it discoverable and grantable to agents", Category: "skills", Enabled: true},
 
-		// delegation (deprecated — team_tasks is the coordination mechanism now)
-		{Name: "delegate_search", DisplayName: "Delegate Search", Description: "Search for available delegation targets by keyword (deprecated)", Category: "delegation", Enabled: false,
-			Requires: []string{"managed_mode", "agent_links"},
-			Metadata: json.RawMessage(`{"deprecated":true}`),
-		},
-		{Name: "evaluate_loop", DisplayName: "Evaluate Loop", Description: "Run a generate→evaluate→revise loop between two agents (deprecated)", Category: "delegation", Enabled: false,
-			Requires: []string{"managed_mode", "agent_links"},
-			Metadata: json.RawMessage(`{"deprecated":true}`),
-		},
-		{Name: "handoff", DisplayName: "Handoff", Description: "Transfer the conversation to another agent (deprecated)", Category: "delegation", Enabled: false,
-			Requires: []string{"managed_mode", "agent_links"},
-			Metadata: json.RawMessage(`{"deprecated":true}`),
-		},
-
 		// teams
 		{Name: "team_tasks", DisplayName: "Team Tasks", Description: "View, create, update, and complete tasks on the team task board", Category: "teams", Enabled: true,
 			Requires: []string{"managed_mode", "teams"},

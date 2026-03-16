@@ -89,9 +89,6 @@ var coreToolSummaries = map[string]string{
 	"create_image":            "Generate images from text descriptions using AI",
 	"create_audio":            "Generate music or sound effects from text descriptions using AI",
 	"knowledge_graph_search":  "Find people, projects, and their connections — use for relationship questions (who works with whom, project dependencies) that memory_search may miss",
-	"handoff":                 "Transfer conversation to another agent (ONLY when user explicitly asks to switch agents — NOT for task delegation)",
-	"evaluate_loop":           "Run a generate→evaluate→revise loop between two agents for quality-critical tasks",
-	"delegate_search":         "Search for agents by expertise to find the right delegation target",
 	"team_tasks":              "Team task board — track progress, manage dependencies (spawn auto-creates delegation tasks)",
 	"team_message":            "Send messages to teammates (progress updates, questions)",
 

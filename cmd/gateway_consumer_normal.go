@@ -43,15 +43,6 @@ func processNormalMessage(
 		agentID = resolveAgentRoute(cfg, msg.Channel, msg.ChatID, msg.PeerKind)
 	}
 
-	// Check handoff routing override
-	if teamStore != nil && msg.AgentID == "" {
-		if route, _ := teamStore.GetHandoffRoute(ctx, msg.Channel, msg.ChatID); route != nil {
-			agentID = route.ToAgentKey
-			slog.Info("inbound: handoff route active",
-				"channel", msg.Channel, "chat", msg.ChatID, "to", agentID)
-		}
-	}
-
 	agentLoop, err := agents.Get(agentID)
 	if err != nil {
 		slog.Warn("inbound: agent not found", "agent", agentID, "channel", msg.Channel)

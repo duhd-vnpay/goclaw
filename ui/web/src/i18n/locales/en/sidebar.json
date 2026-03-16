@@ -37,6 +37,9 @@
     "tts": "TTS",
     "party": "Party Mode",
     "activity": "Activity",
-    "projects": "Projects"
+    "projects": "Projects",
+    "cliCredentials": "CLI Credentials",
+    "apiKeys": "API Keys",
+    "apiDocs": "API Docs"
   }
 }

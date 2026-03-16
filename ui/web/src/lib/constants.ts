@@ -29,6 +29,7 @@ export const ROUTES = {
   PARTY: "/party",
   CUSTOM_TOOLS: "/custom-tools",
   BUILTIN_TOOLS: "/builtin-tools",
+  CLI_CREDENTIALS: "/cli-credentials",
   MCP: "/mcp",
   TTS: "/tts",
   STORAGE: "/storage",
@@ -37,6 +38,7 @@ export const ROUTES = {
   KNOWLEDGE_GRAPH: "/knowledge-graph",
   ACTIVITY: "/activity",
   PROJECTS: "/projects",
+  API_KEYS: "/api-keys",
   SETUP: "/setup",
 } as const;
 

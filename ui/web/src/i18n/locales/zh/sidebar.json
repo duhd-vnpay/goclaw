@@ -37,6 +37,9 @@
     "usage": "用量",
     "party": "Party 模式",
     "activity": "活动日志",
-    "projects": "项目"
+    "projects": "项目",
+    "cliCredentials": "CLI 凭证",
+    "apiKeys": "API 密钥",
+    "apiDocs": "API 文档"
   }
 }

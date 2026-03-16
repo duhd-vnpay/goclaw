@@ -96,6 +96,12 @@ const ActivityPage = lazy(() =>
 const ProjectsPage = lazy(() =>
   import("@/pages/projects/projects-page").then((m) => ({ default: m.ProjectsPage })),
 );
+const CliCredentialsPage = lazy(() =>
+  import("@/pages/cli-credentials/cli-credentials-page").then((m) => ({ default: m.CliCredentialsPage })),
+);
+const ApiKeysPage = lazy(() =>
+  import("@/pages/api-keys/api-keys-page").then((m) => ({ default: m.ApiKeysPage })),
+);
 
 function PageLoader() {
   return (
@@ -169,6 +175,8 @@ export function AppRoutes() {
           <Route path={ROUTES.PARTY} element={<PartyPage />} />
           <Route path={ROUTES.KNOWLEDGE_GRAPH} element={<KnowledgeGraphPage />} />
           <Route path={ROUTES.PROJECTS} element={<ProjectsPage />} />
+          <Route path={ROUTES.CLI_CREDENTIALS} element={<CliCredentialsPage />} />
+          <Route path={ROUTES.API_KEYS} element={<ApiKeysPage />} />
         </Route>
 
         {/* Catch-all → overview */}

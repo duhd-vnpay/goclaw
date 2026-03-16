@@ -71,6 +71,13 @@ func jsonOrEmpty(data []byte) []byte {
 	return data
 }
 
+func jsonOrEmptyArray(data []byte) []byte {
+	if data == nil {
+		return []byte("[]")
+	}
+	return data
+}
+
 func jsonOrNull(data json.RawMessage) any {
 	if data == nil {
 		return nil
@@ -139,6 +146,7 @@ var tablesWithUpdatedAt = map[string]bool{
 	"user_agent_overrides": true, "config_secrets": true,
 	"memory_documents": true, "memory_chunks": true, "embedding_cache": true,
 	"projects": true, "project_mcp_overrides": true,
+	"secure_cli_binaries": true,
 }
 
 func tableHasUpdatedAt(table string) bool {

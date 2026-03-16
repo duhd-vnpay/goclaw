@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -433,9 +432,5 @@ func registerACPFromDB(registry *providers.Registry, p store.LLMProviderData) {
 
 // defaultACPWorkDir returns the default workspace directory for ACP agents.
 func defaultACPWorkDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "goclaw-acp-workspaces")
-	}
-	return filepath.Join(home, ".goclaw", "acp-workspaces")
+	return filepath.Join(config.ResolvedDataDirFromEnv(), "acp-workspaces")
 }

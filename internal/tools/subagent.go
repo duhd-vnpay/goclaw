@@ -233,10 +233,11 @@ func (sm *SubagentManager) Spawn(
 		CreatedAt:         time.Now().UnixMilli(),
 		spawnConfig:       cfg,
 	}
-	// Detach from parent context so async subagent survives parent completion.
-	// context.WithoutCancel preserves all context values (tracing, store, tools)
-	// while removing the parent's cancellation chain. Same pattern as DelegateAsync.
-	taskCtx, taskCancel := context.WithCancel(context.WithoutCancel(ctx))
+	// Detach from parent's cancellation chain so subagent survives after parent run completes.
+	// WithoutCancel preserves all context values (agent ID, workspace, trace info, etc.)
+	// but parent Done() no longer propagates. Manual cancel via taskCancel() still works.
+	detached := context.WithoutCancel(ctx)
+	taskCtx, taskCancel := context.WithCancel(detached)
 	subTask.cancelFunc = taskCancel
 
 	sm.tasks[id] = subTask

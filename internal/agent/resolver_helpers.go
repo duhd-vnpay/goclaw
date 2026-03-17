@@ -175,9 +175,10 @@ func agentToolPolicyWithMCP(policy *config.ToolPolicySpec, hasMCP bool) *config.
 	return policy
 }
 
-// agentToolPolicyWithWorkspace injects workspace_write and workspace_read into
-// alsoAllow when the agent belongs to a team, ensuring the PolicyEngine doesn't
-// block them even if the agent has a restrictive allow list.
+// agentToolPolicyWithWorkspace injects file tools into alsoAllow when the agent
+// belongs to a team, ensuring the PolicyEngine doesn't block them even if the
+// agent has a restrictive allow list. File tools are now workspace-aware via
+// WorkspaceInterceptor, so no separate workspace_write/workspace_read needed.
 func agentToolPolicyWithWorkspace(policy *config.ToolPolicySpec, hasTeam bool) *config.ToolPolicySpec {
 	if !hasTeam {
 		return policy
@@ -185,7 +186,7 @@ func agentToolPolicyWithWorkspace(policy *config.ToolPolicySpec, hasTeam bool) *
 	if policy == nil {
 		policy = &config.ToolPolicySpec{}
 	}
-	for _, tool := range []string{"workspace_write", "workspace_read"} {
+	for _, tool := range []string{"read_file", "write_file", "list_files"} {
 		if !slices.Contains(policy.AlsoAllow, tool) {
 			policy.AlsoAllow = append(policy.AlsoAllow, tool)
 		}

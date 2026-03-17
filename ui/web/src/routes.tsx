@@ -66,9 +66,6 @@ const TtsPage = lazy(() =>
 const EventsPage = lazy(() =>
   import("@/pages/events/events-page").then((m) => ({ default: m.EventsPage })),
 );
-const DelegationsPage = lazy(() =>
-  import("@/pages/delegations/delegations-page").then((m) => ({ default: m.DelegationsPage })),
-);
 const StoragePage = lazy(() =>
   import("@/pages/storage/storage-page").then((m) => ({ default: m.StoragePage })),
 );
@@ -155,7 +152,6 @@ export function AppRoutes() {
           <Route path={ROUTES.TRACES} element={<TracesPage key="list" />} />
           <Route path={ROUTES.TRACE_DETAIL} element={<TracesPage key="detail" />} />
           <Route path={ROUTES.EVENTS} element={<EventsPage />} />
-          <Route path={ROUTES.DELEGATIONS} element={<DelegationsPage />} />
           <Route path={ROUTES.USAGE} element={<Navigate to={ROUTES.OVERVIEW} replace />} />
           <Route path={ROUTES.ACTIVITY} element={<ActivityPage />} />
           <Route path={ROUTES.CHANNELS} element={<ChannelsPage key="list" />} />

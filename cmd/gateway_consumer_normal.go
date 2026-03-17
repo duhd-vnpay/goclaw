@@ -44,15 +44,6 @@ func processNormalMessage(
 		agentID = resolveAgentRoute(cfg, msg.Channel, msg.ChatID, msg.PeerKind)
 	}
 
-	// Check handoff routing override
-	if teamStore != nil && msg.AgentID == "" {
-		if route, _ := teamStore.GetHandoffRoute(ctx, msg.Channel, msg.ChatID); route != nil {
-			agentID = route.ToAgentKey
-			slog.Info("inbound: handoff route active",
-				"channel", msg.Channel, "chat", msg.ChatID, "to", agentID)
-		}
-	}
-
 	// Resolve project for this chat (nil projectStore = backward compatible)
 	channelType := resolveChannelType(channelMgr, msg.Channel)
 	projectID, projectOverrides := resolveProjectOverrides(ctx, projectStore, channelType, msg.ChatID)

@@ -32,7 +32,7 @@ const taskJoinClause = `FROM team_tasks t
 		 LEFT JOIN agents ca ON ca.id = t.created_by_agent_id`
 
 // maxListTasksRows caps ListTasks results to prevent unbounded queries.
-const maxListTasksRows = 50
+const maxListTasksRows = 30
 
 // ============================================================
 // Scopes
@@ -169,14 +169,15 @@ func (s *PGTeamStore) ListTasks(ctx context.Context, teamID uuid.UUID, orderBy s
 		orderClause = "t.created_at DESC"
 	}
 
-	statusWhere := "AND t.status NOT IN ('completed','cancelled')" // default: active only
+	statusWhere := "" // default: all statuses (no filter)
 	switch statusFilter {
-	case store.TeamTaskFilterAll:
-		statusWhere = ""
+	case store.TeamTaskFilterActive:
+		statusWhere = "AND t.status NOT IN ('completed','cancelled')"
 	case store.TeamTaskFilterInReview:
 		statusWhere = "AND t.status = 'in_review'"
 	case store.TeamTaskFilterCompleted:
 		statusWhere = "AND t.status IN ('completed','cancelled')"
+	// "", store.TeamTaskFilterAll ("all") → no filter (all statuses)
 	}
 
 	// Scope filter: always bind $4/$5 but only enforce when non-empty.

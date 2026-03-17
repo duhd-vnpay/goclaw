@@ -58,6 +58,7 @@ type ResolverDeps struct {
 
 	// Agent teams
 	TeamStore store.TeamStore
+	DataDir   string // global workspace root for team workspace resolution
 
 	// Secure CLI credential store for credentialed exec
 	SecureCLIStore store.SecureCLIStore
@@ -317,6 +318,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			MaxIterations:          maxIter,
 			MaxTokens:              maxTokens,
 			Workspace:              workspace,
+			DataDir:                deps.DataDir,
 			RestrictToWs:           &restrictVal,
 			SubagentsCfg:           ag.ParseSubagentsConfig(),
 			MemoryCfg:              ag.ParseMemoryConfig(),

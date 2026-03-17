@@ -219,8 +219,8 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 		acc := accumulators[idx]
 		args := make(map[string]any)
 		if err := json.Unmarshal([]byte(acc.rawArgs), &args); err != nil && acc.rawArgs != "" {
-			slog.Warn("truncated tool call arguments (stream)",
-				"tool", acc.Name, "error", err, "raw_len", len(acc.rawArgs))
+			slog.Warn("openai_stream: failed to parse tool call arguments",
+				"tool", acc.Name, "raw_len", len(acc.rawArgs), "error", err)
 		}
 		acc.Arguments = args
 		if acc.thoughtSig != "" {
@@ -246,7 +246,14 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 	// don't return it (e.g. gemini-3-flash) will cause HTTP 400 if sent as-is.
 	// Tool results are folded into plain user messages to preserve context.
 	inputMessages := req.Messages
-	if strings.Contains(strings.ToLower(p.name), "gemini") {
+
+	// Compute provider capability once: does this endpoint support Google's thought_signature?
+	// We check name, apiBase, and the model string (which covers OpenRouter/LiteLLM routing to Gemini).
+	supportsThoughtSignature := strings.Contains(strings.ToLower(p.name), "gemini") ||
+		strings.Contains(strings.ToLower(p.apiBase), "generativelanguage") ||
+		strings.Contains(strings.ToLower(model), "gemini")
+
+	if supportsThoughtSignature {
 		inputMessages = collapseToolCallsWithoutSig(inputMessages)
 	}
 
@@ -299,7 +306,11 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 					"arguments": string(argsJSON),
 				}
 				if sig := tc.Metadata["thought_signature"]; sig != "" {
-					fn["thought_signature"] = sig
+					// Only send thought_signature to providers that support it (Google/Gemini).
+					// Non-Google providers will reject the unknown field with 422 Unprocessable Entity.
+					if supportsThoughtSignature {
+						fn["thought_signature"] = sig
+					}
 				}
 				toolCalls[i] = map[string]any{
 					"id":       tc.ID,
@@ -411,8 +422,8 @@ func (p *OpenAIProvider) parseResponse(resp *openAIResponse) *ChatResponse {
 		for _, tc := range msg.ToolCalls {
 			args := make(map[string]any)
 			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil && tc.Function.Arguments != "" {
-				slog.Warn("truncated tool call arguments (non-stream)",
-					"tool", tc.Function.Name, "error", err, "raw_len", len(tc.Function.Arguments))
+				slog.Warn("openai: failed to parse tool call arguments",
+					"tool", tc.Function.Name, "raw_len", len(tc.Function.Arguments), "error", err)
 			}
 			call := ToolCall{
 				ID:        tc.ID,

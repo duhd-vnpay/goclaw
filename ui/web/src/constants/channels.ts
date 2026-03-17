@@ -1,10 +1,19 @@
 export const CHANNEL_TYPES = [
   { value: "telegram", label: "Telegram" },
+  { value: "telegram-bot", label: "Telegram Bot" },
   { value: "discord", label: "Discord" },
   { value: "slack", label: "Slack" },
   { value: "google_chat", label: "Google Chat" },
+  { value: "google-chat", label: "Google Chat (instance)" },
   { value: "feishu", label: "Feishu / Lark" },
   { value: "zalo_oa", label: "Zalo OA" },
+  { value: "zalo-bot", label: "Zalo Bot" },
   { value: "zalo_personal", label: "Zalo Personal" },
+  { value: "zalo-personal", label: "Zalo Personal (instance)" },
   { value: "whatsapp", label: "WhatsApp" },
-] as const;
+  { value: "whatsapp-bridge", label: "WhatsApp Bridge" },
+  { value: "ws", label: "WebSocket" },
+  { value: "dashboard", label: "Dashboard" },
+  { value: "delegate", label: "Delegate" },
+  { value: "system", label: "System" },
+] as { value: string; label: string }[];

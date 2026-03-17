@@ -151,7 +151,12 @@ export function TeamSettingsTab({ teamId, team, onSaved }: TeamSettingsTabProps)
   }, [teamId, version, allowUserIds, denyUserIds, allowChannels, denyChannels, notifyDispatched, notifyProgress, notifyFailed, notifyMode, escalationMode, escalationActions, followupInterval, followupMaxReminders, workspaceScope, updateTeamSettings, onSaved, t]);
 
   const userOptions = knownUsers.map((u) => ({ value: u, label: u }));
-  const channelOptions = CHANNEL_TYPES.map((c) => ({ value: c.value, label: c.label }));
+  // Merge hardcoded channel types with any custom instance names already saved in DB settings
+  const baseChannelOptions = CHANNEL_TYPES.map((c) => ({ value: c.value, label: c.label }));
+  const existingValues = new Set(baseChannelOptions.map((o) => o.value));
+  const extraFromAllow = allowChannels.filter((c) => !existingValues.has(c)).map((c) => ({ value: c, label: c }));
+  const extraFromDeny = denyChannels.filter((c) => !existingValues.has(c) && !allowChannels.includes(c)).map((c) => ({ value: c, label: c }));
+  const channelOptions = [...baseChannelOptions, ...extraFromAllow, ...extraFromDeny];
 
   return (
     <div className="space-y-6">

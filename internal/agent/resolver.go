@@ -254,7 +254,9 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			if err := mcpMgr.LoadForAgent(ctx, ag.ID, "", opts.ProjectID, opts.ProjectOverrides); err != nil {
 				slog.Warn("failed to load MCP servers for agent", "agent", agentKey, "error", err)
 			} else if mcpMgr.IsSearchMode() {
-				// Search mode: too many tools — register mcp_tool_search meta-tool
+				// Search mode: too many tools — register mcp_tool_search meta-tool.
+				// Also wire lazy activator so deferred tools can be called by name directly.
+				toolsReg.SetDeferredActivator(mcpMgr.ActivateToolIfDeferred)
 				searchTool := mcpbridge.NewMCPToolSearchTool(mcpMgr)
 				toolsReg.Register(searchTool)
 				hasMCPTools = true
@@ -347,6 +349,8 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			BuiltinToolSettings:    builtinSettings,
 			ThinkingLevel:          ag.ParseThinkingLevel(),
 			SelfEvolve:             ag.ParseSelfEvolve(),
+			SkillEvolve:            ag.AgentType == "predefined" && ag.ParseSkillEvolve(),
+			SkillNudgeInterval:     ag.ParseSkillNudgeInterval(),
 			WorkspaceSharing:       ag.ParseWorkspaceSharing(),
 			GroupWriterCache:       deps.GroupWriterCache,
 			TeamStore:              deps.TeamStore,

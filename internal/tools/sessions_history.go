@@ -58,9 +58,20 @@ func (t *SessionsHistoryTool) Execute(ctx context.Context, args map[string]any) 
 		return ErrorResult("session store not available")
 	}
 
+	currentSession := ToolSandboxKeyFromCtx(ctx)
 	sessionKey, _ := args["session_key"].(string)
+
+	if sessionKey != "" {
+		agentID := resolveAgentIDString(ctx)
+		if agentID != "" && !strings.HasPrefix(sessionKey, "agent:"+agentID+":") {
+			sessionKey = currentSession
+		}
+	} else {
+		sessionKey = currentSession
+	}
+
 	if sessionKey == "" {
-		return ErrorResult("session_key is required")
+		return ErrorResult("session_key is required (could not detect current session)")
 	}
 
 	limit := 20
@@ -69,12 +80,6 @@ func (t *SessionsHistoryTool) Execute(ctx context.Context, args map[string]any) 
 	}
 
 	includeTools, _ := args["include_tools"].(bool)
-
-	// Security: validate session belongs to current agent
-	agentID := resolveAgentIDString(ctx)
-	if agentID != "" && !strings.HasPrefix(sessionKey, "agent:"+agentID+":") {
-		return ErrorResult("access denied: session belongs to a different agent")
-	}
 
 	history := t.sessions.GetHistory(sessionKey)
 	if history == nil {

@@ -782,6 +782,31 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			continue
 		}
 
+		// Output truncated (max_tokens hit) with only text, no tool calls.
+		// The model wrote a long text response instead of using tools.
+		// Nudge it to use tools (e.g. write_file) instead of inlining content.
+		// Detection: finish_reason == "length", OR output tokens >= max_tokens (some proxies
+		// don't forward finish_reason correctly and return "stop" even when truncated).
+		maxTok := l.effectiveMaxTokens()
+		outputHitLimit := resp.FinishReason == "length"
+		if !outputHitLimit && resp.Usage != nil && resp.Usage.CompletionTokens >= maxTok {
+			outputHitLimit = true
+		}
+		if outputHitLimit && len(resp.ToolCalls) == 0 {
+			slog.Warn("output truncated (max_tokens), text-only response — nudging tool use",
+				"agent", l.id, "iteration", iteration, "max_tokens", maxTok,
+				"output_tokens", func() int { if resp.Usage != nil { return resp.Usage.CompletionTokens }; return -1 }(),
+				"finish_reason", resp.FinishReason)
+			messages = append(messages,
+				providers.Message{Role: "assistant", Content: resp.Content},
+				providers.Message{
+					Role:    "user",
+					Content: "[System] Your output was truncated because it exceeded max_tokens. You were writing content directly in your response instead of using tools. Please use the write_file or exec tool to write long content to files. Do NOT write file contents inline in your response — use tools instead.",
+				},
+			)
+			continue
+		}
+
 		// No tool calls → done
 		if len(resp.ToolCalls) == 0 {
 			// Mid-run injection (Point B): drain all buffered user follow-up messages

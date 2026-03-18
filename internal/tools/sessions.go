@@ -134,18 +134,26 @@ func (t *SessionStatusTool) Execute(ctx context.Context, args map[string]any) *R
 		return ErrorResult("session store not available")
 	}
 
+	// Always prefer the current session from context (set by agent loop).
+	// If the LLM passes a session_key arg, validate it belongs to this agent;
+	// if it doesn't match (e.g. inherited from a parent spawn context), silently
+	// fall back to the current session instead of returning an access-denied error.
+	currentSession := ToolSandboxKeyFromCtx(ctx)
 	sessionKey, _ := args["session_key"].(string)
-	if sessionKey == "" {
-		sessionKey = ToolSandboxKeyFromCtx(ctx) // sandboxKey == sessionKey in registry
-	}
-	if sessionKey == "" {
-		return ErrorResult("session_key is required (could not detect current session)")
+
+	if sessionKey != "" {
+		agentID := resolveAgentIDString(ctx)
+		if agentID != "" && !strings.HasPrefix(sessionKey, "agent:"+agentID+":") {
+			// LLM passed a session key that belongs to a different agent
+			// (common when spawned from a parent). Fall back to own session.
+			sessionKey = currentSession
+		}
+	} else {
+		sessionKey = currentSession
 	}
 
-	// Security: validate session belongs to current agent
-	agentID := resolveAgentIDString(ctx)
-	if agentID != "" && !strings.HasPrefix(sessionKey, "agent:"+agentID+":") {
-		return ErrorResult("access denied: session belongs to a different agent")
+	if sessionKey == "" {
+		return ErrorResult("session_key is required (could not detect current session)")
 	}
 
 	data := t.sessions.GetOrCreate(sessionKey)

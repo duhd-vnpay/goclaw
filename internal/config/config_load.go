@@ -19,7 +19,7 @@ func Default() *Config {
 		DataDir: "~/.goclaw/data",
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
-				Workspace:           "~/.goclaw/workspace",
+				Workspace:           "/app/workspace",
 				RestrictToWorkspace: true,
 				Provider:            "anthropic",
 				Model:               "claude-sonnet-4-5-20250929",

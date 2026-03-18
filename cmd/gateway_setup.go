@@ -190,11 +190,11 @@ func setupToolRegistry(
 
 	// Block exec from accessing sensitive directories (data dir, .goclaw, config file).
 	// Prevents `cp /app/data/config.json workspace/` and similar exfiltration.
-	// Exception: .goclaw/skills-store/ is allowed (skills may contain executable scripts).
+	// Exceptions: skills-store (executable scripts) and workspace (agent file operations).
 	if execTool, ok := toolsReg.Get("exec"); ok {
 		if et, ok := execTool.(*tools.ExecTool); ok {
 			et.DenyPaths(dataDir, ".goclaw/")
-			et.AllowPathExemptions(".goclaw/skills-store/")
+			et.AllowPathExemptions(".goclaw/skills-store/", ".goclaw/workspace/")
 			if cfgPath := os.Getenv("GOCLAW_CONFIG"); cfgPath != "" {
 				et.DenyPaths(cfgPath)
 			}

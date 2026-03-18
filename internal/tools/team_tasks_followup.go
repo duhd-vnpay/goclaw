@@ -133,9 +133,11 @@ func (t *TeamTasksTool) executeRetry(ctx context.Context, args map[string]any) *
 		return ErrorResult("failed to retry task: " + err.Error())
 	}
 
-	t.manager.broadcastTeamEvent(protocol.EventTeamTaskAssigned, protocol.TeamTaskEventPayload{
+	t.manager.broadcastTeamEvent(protocol.EventTeamTaskDispatched, protocol.TeamTaskEventPayload{
 		TeamID:        team.ID.String(),
 		TaskID:        taskID.String(),
+		TaskNumber:    task.TaskNumber,
+		Subject:       task.Subject,
 		Status:        store.TeamTaskStatusInProgress,
 		OwnerAgentKey: t.manager.agentKeyFromID(ctx, *task.OwnerAgentID),
 		UserID:        store.UserIDFromContext(ctx),

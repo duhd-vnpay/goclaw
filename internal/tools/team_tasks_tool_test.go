@@ -76,7 +76,7 @@ func TestExecuteCreate_SenderIDTracking(t *testing.T) {
 	team := makeTestTeam(leadID, nil)
 
 	ts := &mockTeamStore{team: team}
-	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil)
+	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil, "")
 	tool := NewTeamTasksTool(mgr)
 
 	ctx := makeCtx(leadID, "group:telegram:chat123", "user-456", "telegram")
@@ -112,7 +112,7 @@ func TestExecuteCreate_NoSenderID(t *testing.T) {
 	team := makeTestTeam(leadID, nil)
 
 	ts := &mockTeamStore{team: team}
-	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil)
+	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil, "")
 	tool := NewTeamTasksTool(mgr)
 
 	// No sender ID in context (delegate channel, internal agent-to-agent)
@@ -150,7 +150,7 @@ func TestExecuteCreate_RequireLead_Rejected(t *testing.T) {
 	team := makeTestTeam(leadID, nil)
 
 	ts := &mockTeamStore{team: team}
-	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil)
+	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil, "")
 	tool := NewTeamTasksTool(mgr)
 
 	// Non-lead agent trying to create task via telegram
@@ -175,7 +175,7 @@ func TestExecuteCreate_RequireLead_DelegateBypass(t *testing.T) {
 	team := makeTestTeam(leadID, nil)
 
 	ts := &mockTeamStore{team: team}
-	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil)
+	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil, "")
 	tool := NewTeamTasksTool(mgr)
 
 	// Non-lead agent via delegate channel (internal agent-to-agent) should bypass
@@ -265,7 +265,7 @@ func TestCheckTeamAccess_DenyChannels(t *testing.T) {
 func TestRequireLead_LeadAllowed(t *testing.T) {
 	leadID := uuid.New()
 	team := makeTestTeam(leadID, nil)
-	mgr := NewTeamToolManager(&mockTeamStore{}, &mockAgentStore{}, nil)
+	mgr := NewTeamToolManager(&mockTeamStore{}, &mockAgentStore{}, nil, "")
 
 	ctx := makeCtx(leadID, "user1", "", "telegram")
 	if err := mgr.requireLead(ctx, team, leadID); err != nil {
@@ -277,7 +277,7 @@ func TestRequireLead_NonLeadRejected(t *testing.T) {
 	leadID := uuid.New()
 	otherID := uuid.New()
 	team := makeTestTeam(leadID, nil)
-	mgr := NewTeamToolManager(&mockTeamStore{}, &mockAgentStore{}, nil)
+	mgr := NewTeamToolManager(&mockTeamStore{}, &mockAgentStore{}, nil, "")
 
 	ctx := makeCtx(otherID, "user1", "", "telegram")
 	if err := mgr.requireLead(ctx, team, otherID); err == nil {
@@ -289,7 +289,7 @@ func TestRequireLead_SystemBypass(t *testing.T) {
 	leadID := uuid.New()
 	otherID := uuid.New()
 	team := makeTestTeam(leadID, nil)
-	mgr := NewTeamToolManager(&mockTeamStore{}, &mockAgentStore{}, nil)
+	mgr := NewTeamToolManager(&mockTeamStore{}, &mockAgentStore{}, nil, "")
 
 	for _, ch := range []string{"delegate", "system"} {
 		ctx := makeCtx(otherID, "user1", "", ch)

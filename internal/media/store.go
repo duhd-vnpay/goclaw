@@ -1,6 +1,7 @@
 package media
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -70,6 +71,52 @@ func (s *Store) LoadPath(id string) (string, error) {
 	return matches[0], nil
 }
 
+// AdminCtxKey is the context key for admin bypass flag.
+// Exported for use by HTTP handlers.
+type ContextKey string
+
+const AdminCtxKey ContextKey = "isAdmin"
+
+// SessionHash returns the 12 hex char session directory hash (exported).
+// Uses same algorithm as internal sessionDir().
+func (s *Store) SessionHash(sessionKey string) string {
+	h := sha256.Sum256([]byte(sessionKey))
+	return fmt.Sprintf("%x", h[:6])
+}
+
+// LoadPathScoped returns the filesystem path for a media ID scoped to a session hash.
+// Only searches within the specific session directory — prevents cross-session access.
+// Used by HTTP handlers with scoped tokens.
+func (s *Store) LoadPathScoped(id string, sessionHash string) (string, error) {
+	pattern := filepath.Join(s.baseDir, sessionHash, id+".*")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", fmt.Errorf("media: glob for %s in %s: %w", id, sessionHash, err)
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("media: file not found: %s in session %s", id, sessionHash)
+	}
+	return matches[0], nil
+}
+
+// LoadPathAny returns the filesystem path for a media ID across ALL sessions.
+// ADMIN ONLY — defense-in-depth check. Legacy/migration backward compat.
+// Will be deprecated after migration window.
+func (s *Store) LoadPathAny(id string, ctx context.Context) (string, error) {
+	if admin, _ := ctx.Value(AdminCtxKey).(bool); !admin {
+		return "", fmt.Errorf("media: LoadPathAny requires admin context")
+	}
+	slog.Warn("media: legacy LoadPathAny called", "id", id)
+	matches, err := filepath.Glob(filepath.Join(s.baseDir, "*", id+".*"))
+	if err != nil {
+		return "", fmt.Errorf("media: glob for %s: %w", id, err)
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("media: file not found: %s", id)
+	}
+	return matches[0], nil
+}
+
 // DeleteSession removes all media files for a session.
 func (s *Store) DeleteSession(sessionKey string) error {
 	dir := s.sessionDir(sessionKey)
@@ -117,6 +164,27 @@ func extFromMime(mime string) string {
 		return ""
 	}
 }
+
+// FileProcessor allows plugging in file transformations (e.g., encryption).
+// Phase A: NoOpProcessor. Future: AESProcessor.
+type FileProcessor interface {
+	BeforeSave(data []byte, meta FileMeta) ([]byte, error)
+	BeforeServe(data []byte, meta FileMeta) ([]byte, error)
+}
+
+// FileMeta provides context about the file being processed.
+type FileMeta struct {
+	MediaID     string
+	SessionHash string
+	MimeType    string
+	Size        int64
+}
+
+// NoOpProcessor is a pass-through processor (no transformation).
+type NoOpProcessor struct{}
+
+func (NoOpProcessor) BeforeSave(data []byte, _ FileMeta) ([]byte, error)  { return data, nil }
+func (NoOpProcessor) BeforeServe(data []byte, _ FileMeta) ([]byte, error) { return data, nil }
 
 // copyFile copies src to dst using buffered I/O.
 func copyFile(src, dst string) error {

@@ -1,6 +1,9 @@
 package mcp
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 func mapToEnvSlice(env map[string]string) []string {
 	if len(env) == 0 {
@@ -8,7 +11,7 @@ func mapToEnvSlice(env map[string]string) []string {
 	}
 	s := make([]string, 0, len(env))
 	for k, v := range env {
-		s = append(s, k+"="+v)
+		s = append(s, k+"="+os.ExpandEnv(v))
 	}
 	return s
 }

@@ -84,6 +84,11 @@ func setupToolRegistry(
 	toolsReg.Register(tools.NewKnowledgeGraphSearchTool())
 	slog.Info("memory + knowledge graph tools registered (PG-backed)")
 
+	// Internal API tool — lets agents call GoClaw's own REST API (/v1/projects, etc.)
+	// bypasses SSRF protection, auto-injects gateway Bearer token
+	toolsReg.Register(tools.NewInternalAPITool(cfg.Gateway.Port, cfg.Gateway.Token))
+	slog.Info("internal_api tool registered", "port", cfg.Gateway.Port)
+
 	// Browser automation tool
 	if cfg.Tools.Browser.Enabled {
 		var opts []browser.Option

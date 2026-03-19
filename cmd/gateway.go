@@ -27,6 +27,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway/methods"
+	"github.com/nextlevelbuilder/goclaw/internal/access"
 	httpapi "github.com/nextlevelbuilder/goclaw/internal/http"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
@@ -389,6 +390,34 @@ func runGateway() {
 		server.SetKnowledgeGraphHandler(httpapi.NewKnowledgeGraphHandler(pgStores.KnowledgeGraph, providerRegistry, cfg.Gateway.Token))
 	}
 
+	// --- Media ACL ---
+	signingKey := os.Getenv("GOCLAW_MEDIA_SIGNING_KEY")
+	signingKeyPrev := os.Getenv("GOCLAW_MEDIA_SIGNING_KEY_PREV")
+	tokenTTLStr := os.Getenv("GOCLAW_MEDIA_TOKEN_TTL")
+
+	var tokenSigner *access.TokenSigner
+	var fileChecker access.AccessChecker
+
+	if len(signingKey) >= 32 {
+		ttl := 1 * time.Hour
+		if d, err := time.ParseDuration(tokenTTLStr); err == nil && d >= time.Hour && d <= 720*time.Hour {
+			ttl = d
+		}
+		tokenSigner = access.NewTokenSigner(signingKey, signingKeyPrev, ttl)
+
+		auditWriter := access.NewAuditWriter(access.AuditWriterConfig{
+			DBWriter: func(ctx context.Context, batch []access.FileAccessEvent) error {
+				// TODO: Batch INSERT into file_access_log table
+				// Will be wired to pg store in a follow-up task
+				return nil
+			},
+		})
+		fileChecker = &access.AppAccessChecker{AuditWriter: auditWriter}
+		slog.Info("media ACL enabled", "ttl", ttl)
+	} else {
+		slog.Warn("media ACL disabled: GOCLAW_MEDIA_SIGNING_KEY not set or too short (min 32 bytes)")
+	}
+
 	// Workspace file serving endpoint — serves files by absolute path, auth-token protected.
 	// Supports media from any agent workspace (each agent has its own workspace from DB).
 	server.SetFilesHandler(httpapi.NewFilesHandler(cfg.Gateway.Token))
@@ -403,7 +432,7 @@ func runGateway() {
 
 	// Media serve endpoint — serves persisted media files by ID for WS/web clients.
 	if mediaStore != nil {
-		server.SetMediaServeHandler(httpapi.NewMediaServeHandler(mediaStore, cfg.Gateway.Token, nil, nil))
+		server.SetMediaServeHandler(httpapi.NewMediaServeHandler(mediaStore, cfg.Gateway.Token, tokenSigner, fileChecker))
 	}
 
 	// Seed + apply builtin tool disables

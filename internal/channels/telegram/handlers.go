@@ -465,6 +465,14 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		peerKind = "group"
 	}
 
+	// Media disclaimer: prepend warning when message contains media files.
+	if len(mediaList) > 0 {
+		if metadata["media_warning_shown"] != "true" {
+			finalContent = mediaDisclaimer + "\n\n" + finalContent
+			metadata["media_warning_shown"] = "true"
+		}
+	}
+
 	// Audio-aware routing: if a voice/audio message was received and a dedicated speaking agent
 	// is configured, route to that agent instead of the default channel agent.
 	// This prevents voice turns from landing on a text-router agent that cannot handle audio.

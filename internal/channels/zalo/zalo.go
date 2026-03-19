@@ -33,6 +33,10 @@ const (
 	pairingDebounce    = 60 * time.Second
 )
 
+const mediaDisclaimer = "⚠️ File bạn gửi được lưu trữ trên hệ thống AI Assistant.\n" +
+	"Các agent phục vụ bạn có thể truy cập file này trong phiên làm việc hiện tại.\n" +
+	"Không nên gửi thông tin cực kỳ nhạy cảm (mật khẩu, private key, số thẻ tín dụng)."
+
 // Channel connects to the Zalo OA Bot API.
 type Channel struct {
 	*channels.BaseChannel
@@ -271,6 +275,14 @@ func (c *Channel) handleImageMessage(msg *zaloMessage) {
 	metadata := map[string]string{
 		"message_id": msg.MessageID,
 		"platform":   "zalo",
+	}
+
+	// Media disclaimer: prepend warning when message contains media files.
+	if len(media) > 0 {
+		if metadata["media_warning_shown"] != "true" {
+			content = mediaDisclaimer + "\n\n" + content
+			metadata["media_warning_shown"] = "true"
+		}
 	}
 
 	c.HandleMessage(senderID, chatID, content, media, metadata, "direct")

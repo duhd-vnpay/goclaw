@@ -17,6 +17,10 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
+const mediaDisclaimer = "⚠️ File bạn gửi được lưu trữ trên hệ thống AI Assistant.\n" +
+	"Các agent phục vụ bạn có thể truy cập file này trong phiên làm việc hiện tại.\n" +
+	"Không nên gửi thông tin cực kỳ nhạy cảm (mật khẩu, private key, số thẻ tín dụng)."
+
 const (
 	// defaultMediaMaxBytes is the default max download size for the official Bot API (20 MB).
 	defaultMediaMaxBytes int64 = 20 * 1024 * 1024

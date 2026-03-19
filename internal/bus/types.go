@@ -89,6 +89,7 @@ const (
 	TopicConfigChanged         = "config:changed"
 	TopicPairingRevoked        = "pairing:revoked"
 	TopicAgentStatusChanged    = "agent:status_changed"
+	TopicFileAccess            = "file:access"
 )
 
 // EventPairingRevoked is the event name broadcast when a paired device is revoked.
@@ -102,6 +103,9 @@ type PairingRevokedPayload struct {
 
 // EventAgentStatusChanged is broadcast when an agent's status changes (e.g., active → inactive).
 const EventAgentStatusChanged = "agent.status_changed"
+
+// EventFileAccess is broadcast when a file is accessed (read/write/delete/deny).
+const EventFileAccess = "file.access"
 
 // AgentStatusChangedPayload carries agent status transition info for cascade operations.
 type AgentStatusChangedPayload struct {

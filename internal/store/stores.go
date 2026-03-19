@@ -28,5 +28,7 @@ type Stores struct {
 	Party            PartyStore
 	Projects         ProjectStore
 	SecureCLI        SecureCLIStore
-	APIKeys          APIKeyStore
+	APIKeys           APIKeyStore
+	Heartbeats        HeartbeatStore
+	ConfigPermissions ConfigPermissionStore
 }

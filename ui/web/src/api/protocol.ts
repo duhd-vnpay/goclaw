@@ -161,6 +161,21 @@ export const Methods = {
   PARTY_EXIT: "party.exit",
   PARTY_LIST: "party.list",
 
+  // Heartbeat
+  HEARTBEAT_GET: "heartbeat.get",
+  HEARTBEAT_SET: "heartbeat.set",
+  HEARTBEAT_TOGGLE: "heartbeat.toggle",
+  HEARTBEAT_TEST: "heartbeat.test",
+  HEARTBEAT_LOGS: "heartbeat.logs",
+  HEARTBEAT_CHECKLIST_GET: "heartbeat.checklist.get",
+  HEARTBEAT_CHECKLIST_SET: "heartbeat.checklist.set",
+  HEARTBEAT_TARGETS: "heartbeat.targets",
+
+  // Config permissions
+  CONFIG_PERMISSIONS_LIST: "config.permissions.list",
+  CONFIG_PERMISSIONS_GRANT: "config.permissions.grant",
+  CONFIG_PERMISSIONS_REVOKE: "config.permissions.revoke",
+
   // Phase 3+ - NICE TO HAVE
   LOGS_TAIL: "logs.tail",
 } as const;
@@ -190,6 +205,7 @@ export const Events = {
   TEAM_TASK_CLAIMED: "team.task.claimed",
   TEAM_TASK_COMPLETED: "team.task.completed",
   TEAM_TASK_CANCELLED: "team.task.cancelled",
+  TEAM_TASK_FAILED: "team.task.failed",
   TEAM_TASK_REVIEWED: "team.task.reviewed",
   TEAM_TASK_APPROVED: "team.task.approved",
   TEAM_TASK_REJECTED: "team.task.rejected",
@@ -239,6 +255,8 @@ export const Events = {
   // Skill dependency install (triggered by POST /v1/skills/install-deps)
   SKILL_DEPS_INSTALLING: "skill.deps.installing",
   SKILL_DEPS_INSTALLED: "skill.deps.installed",
+
+  HEARTBEAT: "heartbeat",
 } as const;
 
 /** All event names relevant to team debug view */

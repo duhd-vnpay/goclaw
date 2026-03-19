@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -119,6 +120,32 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 	if teamWsDir, err := WorkspaceDir(t.manager.dataDir, team.ID, wsChat); err == nil {
 		taskMeta["team_workspace"] = teamWsDir
 	}
+	// Auto-collect media files from current run to team workspace.
+	// When leader received files from user and creates a task, copy those
+	// files to the team workspace so members can access them via read_file.
+	// Also rewrite any media paths in the description to point to the workspace copy,
+	// since members can't access the original .media/ paths outside their workspace.
+	if mediaPaths := RunMediaPathsFromCtx(ctx); len(mediaPaths) > 0 {
+		if wsDir, _ := taskMeta["team_workspace"].(string); wsDir != "" {
+			nameMap := RunMediaNamesFromCtx(ctx)
+			if copiedPaths := copyMediaToWorkspace(mediaPaths, wsDir, nameMap); len(copiedPaths) > 0 {
+				// Store as []any so type assertion works both before and after JSON round-trip.
+				files := make([]any, len(copiedPaths))
+				for i, p := range copiedPaths {
+					files[i] = p
+				}
+				taskMeta["attached_files"] = files
+
+				// Rewrite media paths in description so members see workspace paths.
+				for i, src := range mediaPaths {
+					if i < len(copiedPaths) {
+						description = strings.ReplaceAll(description, src, copiedPaths[i])
+					}
+				}
+			}
+		}
+	}
+
 	// Preserve original blocked_by list for blocker-result forwarding when task unblocks.
 	if len(blockedBy) > 0 {
 		ids := make([]string, len(blockedBy))
@@ -134,6 +161,11 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 	// Store local key so forum-topic routing works on deferred/unblocked dispatches.
 	if lk := ToolLocalKeyFromCtx(ctx); lk != "" {
 		taskMeta["local_key"] = lk
+	}
+	// Store origin session key so deferred dispatches route announces correctly.
+	// WS sessions use non-standard key format that BuildScopedSessionKey() cannot reproduce.
+	if sk := ToolSessionKeyFromCtx(ctx); sk != "" {
+		taskMeta["origin_session_key"] = sk
 	}
 	// Store leader's trace context so unblocked dispatch links back to the leader's trace.
 	if traceID := tracing.TraceIDFromContext(ctx); traceID != uuid.Nil {
@@ -203,7 +235,11 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		}
 	}
 
-	return NewResult(fmt.Sprintf("Task created: %s (id=%s, task_number=%d, status=%s)", subject, task.ID, task.TaskNumber, status))
+	assigneeName := t.manager.agentDisplayName(ctx, t.manager.agentKeyFromID(ctx, assigneeID))
+	if assigneeName == "" {
+		assigneeName = t.manager.agentKeyFromID(ctx, assigneeID)
+	}
+	return NewResult(fmt.Sprintf("Task created: %s (id=%s, task_number=%d, status=%s, assignee=%s)", subject, task.ID, task.TaskNumber, status, assigneeName))
 }
 
 func (t *TeamTasksTool) executeComment(ctx context.Context, args map[string]any) *Result {

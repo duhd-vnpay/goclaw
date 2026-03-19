@@ -232,6 +232,21 @@ func (a *AgentData) ParseWorkspaceSharing() *WorkspaceSharingConfig {
 	return cfg.WS
 }
 
+// ParseShellDenyGroups extracts shell_deny_groups from other_config JSONB.
+// Returns nil if not configured (all defaults apply).
+func (a *AgentData) ParseShellDenyGroups() map[string]bool {
+	if len(a.OtherConfig) == 0 {
+		return nil
+	}
+	var cfg struct {
+		ShellDenyGroups map[string]bool `json:"shell_deny_groups"`
+	}
+	if json.Unmarshal(a.OtherConfig, &cfg) != nil || len(cfg.ShellDenyGroups) == 0 {
+		return nil
+	}
+	return cfg.ShellDenyGroups
+}
+
 // AgentShareData represents an agent share grant.
 type AgentShareData struct {
 	BaseModel
@@ -298,12 +313,6 @@ type AgentStore interface {
 	ListUserInstances(ctx context.Context, agentID uuid.UUID) ([]UserInstanceData, error)
 	UpdateUserProfileMetadata(ctx context.Context, agentID uuid.UUID, userID string, metadata map[string]string) error
 
-	// Group file writers (allowlist for protected file edits in group chats)
-	IsGroupFileWriter(ctx context.Context, agentID uuid.UUID, groupID, userID string) (bool, error)
-	AddGroupFileWriter(ctx context.Context, agentID uuid.UUID, groupID, userID, displayName, username string) error
-	RemoveGroupFileWriter(ctx context.Context, agentID uuid.UUID, groupID, userID string) error
-	ListGroupFileWriters(ctx context.Context, agentID uuid.UUID, groupID string) ([]GroupFileWriterData, error)
-	ListGroupFileWriterGroups(ctx context.Context, agentID uuid.UUID) ([]GroupWriterGroupInfo, error)
 }
 
 // UserInstanceData represents a user instance for a predefined agent.
@@ -315,15 +324,3 @@ type UserInstanceData struct {
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
-// GroupFileWriterData represents a group file writer entry.
-type GroupFileWriterData struct {
-	UserID      string  `json:"user_id"`
-	DisplayName *string `json:"display_name,omitempty"`
-	Username    *string `json:"username,omitempty"`
-}
-
-// GroupWriterGroupInfo represents a group that has writers configured.
-type GroupWriterGroupInfo struct {
-	GroupID     string `json:"group_id"`
-	WriterCount int    `json:"writer_count"`
-}

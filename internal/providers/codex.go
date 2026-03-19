@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // CodexProvider implements Provider for the OpenAI Responses API,
@@ -39,7 +38,7 @@ func NewCodexProvider(name string, tokenSource TokenSource, apiBase, defaultMode
 		name:         name,
 		apiBase:      apiBase,
 		defaultModel: defaultModel,
-		client:       &http.Client{Timeout: 300 * time.Second},
+		client:       &http.Client{Timeout: DefaultHTTPTimeout},
 		retryConfig:  DefaultRetryConfig(),
 		tokenSource:  tokenSource,
 	}
@@ -69,7 +68,7 @@ func (p *CodexProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk
 	toolCalls := make(map[string]*codexToolCallAcc) // keyed by item_id
 
 	scanner := bufio.NewScanner(respBody)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, SSEScanBufInit), SSEScanBufMax)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {

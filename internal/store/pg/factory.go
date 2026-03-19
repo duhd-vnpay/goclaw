@@ -46,6 +46,8 @@ func NewPGStores(cfg store.StoreConfig) (*store.Stores, error) {
 		Party:            NewPGPartyStore(db),
 		Projects:         NewPGProjectStore(db),
 		SecureCLI:        NewPGSecureCLIStore(db, cfg.EncryptionKey),
-		APIKeys:          NewPGAPIKeyStore(db),
+		APIKeys:           NewPGAPIKeyStore(db),
+		Heartbeats:        NewPGHeartbeatStore(db),
+		ConfigPermissions: NewPGConfigPermissionStore(db),
 	}, nil
 }

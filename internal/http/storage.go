@@ -297,6 +297,10 @@ func (h *StorageHandler) handleRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Security headers — set before any response body is written.
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": i18n.T(locale, i18n.MsgFailedToReadFile)})

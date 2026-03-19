@@ -354,9 +354,17 @@ func hasTeamWorkspace(toolNames []string) bool {
 
 // buildTeamWorkspaceSection generates guidance for team workspace file tools.
 // teamWsPath is the absolute path to the team shared workspace directory.
-func buildTeamWorkspaceSection(teamWsPath string) []string {
+// isLeadWorkspace indicates that the agent's default workspace IS the team workspace
+// (lead agents), so relative paths already resolve there.
+func buildTeamWorkspaceSection(teamWsPath string, isLeadWorkspace bool) []string {
 	if teamWsPath == "" {
 		return nil
+	}
+	var defaultWsNote string
+	if isLeadWorkspace {
+		defaultWsNote = "- Your default workspace (for relative paths) is the team workspace — use relative paths directly (e.g. \"report.md\")"
+	} else {
+		defaultWsNote = "- Your default workspace (for relative paths) is your personal workspace — use absolute paths for team files"
 	}
 	return []string{
 		"## Team Shared Workspace",
@@ -367,7 +375,7 @@ func buildTeamWorkspaceSection(teamWsPath string) []string {
 		fmt.Sprintf("- Use read_file(path=\"%s/filename.md\") to read team files", teamWsPath),
 		fmt.Sprintf("- Use write_file(path=\"%s/filename.md\", content=\"...\") to write team files", teamWsPath),
 		"- All files in the team workspace are visible to all team members",
-		"- Your default workspace (for relative paths) is your personal workspace",
+		defaultWsNote,
 		"- To delete a team file, use write_file with empty content",
 		"",
 		"## Auto-Status Updates",

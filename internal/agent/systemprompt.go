@@ -219,9 +219,11 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 	// 6. ## Workspace (sandbox-aware: show container workdir when sandboxed)
 	lines = append(lines, buildWorkspaceSection(cfg.Workspace, cfg.SandboxEnabled, cfg.SandboxContainerDir)...)
 
-	// 6.3. ## Team Workspace (when agent belongs to a team) — skip during bootstrap
+	// 6.3. ## Team Workspace (when agent belongs to a team) — skip during bootstrap.
+	// isLeadWorkspace: lead agents use team workspace as their default (Workspace == TeamWorkspace).
 	if !cfg.IsBootstrap && hasTeamWorkspace(cfg.ToolNames) {
-		lines = append(lines, buildTeamWorkspaceSection(cfg.TeamWorkspace)...)
+		isLeadWorkspace := cfg.TeamWorkspace != "" && cfg.Workspace == cfg.TeamWorkspace
+		lines = append(lines, buildTeamWorkspaceSection(cfg.TeamWorkspace, isLeadWorkspace)...)
 	}
 
 	// 6.5 ## Sandbox (matching TS sandboxInfo section) — skip during bootstrap

@@ -94,6 +94,13 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 			promptWorkspace = filepath.Join(l.workspace, sanitizePathSegment(userID))
 		}
 	}
+	// For lead agents in a team, ToolWorkspace is overridden to the team workspace
+	// (see loop.go). Sync promptWorkspace so the system prompt matches actual tool
+	// behaviour — prevents the LLM from generating stale personal-workspace paths
+	// in task descriptions and tool calls.
+	if actualWs := tools.ToolWorkspaceFromCtx(ctx); actualWs != "" {
+		promptWorkspace = actualWs
+	}
 
 	// Resolve context files once — also detect BOOTSTRAP.md presence.
 	contextFiles := l.resolveContextFiles(ctx, userID)

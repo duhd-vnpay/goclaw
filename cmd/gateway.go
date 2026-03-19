@@ -403,7 +403,7 @@ func runGateway() {
 
 	// Media serve endpoint — serves persisted media files by ID for WS/web clients.
 	if mediaStore != nil {
-		server.SetMediaServeHandler(httpapi.NewMediaServeHandler(mediaStore, cfg.Gateway.Token))
+		server.SetMediaServeHandler(httpapi.NewMediaServeHandler(mediaStore, cfg.Gateway.Token, nil, nil))
 	}
 
 	// Seed + apply builtin tool disables

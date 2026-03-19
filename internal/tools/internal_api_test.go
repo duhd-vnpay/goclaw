@@ -17,10 +17,10 @@ func TestInternalAPI_GET(t *testing.T) {
 		if r.Method != "GET" {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
-		if r.URL.Path != "/v1/projects" {
-			t.Errorf("expected /v1/projects, got %s", r.URL.Path)
+		if r.URL.Path != "/v1/projects/by-chat" {
+			t.Errorf("expected /v1/projects/by-chat, got %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(map[string]any{"projects": []any{}})
+		json.NewEncoder(w).Encode(map[string]any{"id": "abc", "slug": "xpos"})
 	}))
 	defer srv.Close()
 
@@ -32,7 +32,7 @@ func TestInternalAPI_GET(t *testing.T) {
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"method": "GET",
-		"path":   "/v1/projects",
+		"path":   "/v1/projects/by-chat?channel_type=telegram&chat_id=-100123",
 	})
 
 	if result.IsError {
@@ -93,9 +93,10 @@ func TestInternalAPI_ErrorResponse(t *testing.T) {
 		client:  srv.Client(),
 	}
 
+	// /v1/projects/by-chat is in the allowlist — this tests 404 handling
 	result := tool.Execute(context.Background(), map[string]any{
 		"method": "GET",
-		"path":   "/v1/projects/nonexistent",
+		"path":   "/v1/projects/by-chat?channel_type=telegram&chat_id=nonexistent",
 	})
 
 	if !result.IsError {
@@ -139,12 +140,86 @@ func TestInternalAPI_NoToken(t *testing.T) {
 		client:  srv.Client(),
 	}
 
+	// Use an allowed path
 	tool.Execute(context.Background(), map[string]any{
 		"method": "GET",
-		"path":   "/v1/projects",
+		"path":   "/v1/projects/by-chat?channel_type=telegram&chat_id=-100",
 	})
 
 	if gotAuth != "" {
 		t.Errorf("expected no Authorization header when token is empty, got %q", gotAuth)
+	}
+}
+
+// TestInternalAPI_Allowlist verifies that the allowlist blocks denied paths
+// and permits allowed paths, with and without a custom settings getter.
+func TestInternalAPI_Allowlist(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	tool := &InternalAPITool{baseURL: srv.URL, token: "", client: srv.Client()}
+
+	cases := []struct {
+		method  string
+		path    string
+		wantErr bool
+	}{
+		// allowed by default
+		{"GET", "/v1/projects/by-chat?channel_type=telegram&chat_id=-1", false},
+		{"POST", "/v1/projects", false},
+		{"PUT", "/v1/projects/abc-123/mcp/gitlab", false},
+		// denied by default
+		{"GET", "/v1/projects", true},
+		{"DELETE", "/v1/projects/abc-123", true},
+		{"GET", "/v1/agents", true},
+		{"PUT", "/v1/agents/abc-123", true},
+	}
+
+	for _, c := range cases {
+		res := tool.Execute(context.Background(), map[string]any{
+			"method": c.method,
+			"path":   c.path,
+		})
+		if c.wantErr && !res.IsError {
+			t.Errorf("%s %s: expected denied, got allowed", c.method, c.path)
+		}
+		if !c.wantErr && res.IsError {
+			t.Errorf("%s %s: expected allowed, got denied: %s", c.method, c.path, res.ForLLM)
+		}
+	}
+}
+
+// TestInternalAPI_SettingsGetter verifies that a custom settings getter
+// overrides the default allowlist.
+func TestInternalAPI_SettingsGetter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	tool := &InternalAPITool{baseURL: srv.URL, token: "", client: srv.Client()}
+
+	// Custom allowlist: only GET /v1/agents
+	tool.SetSettingsGetter(func(_ context.Context, _ string) (json.RawMessage, error) {
+		return json.RawMessage(`{"allowed_routes":[{"method":"GET","prefix":"/v1/agents"}]}`), nil
+	})
+
+	// Now /v1/agents should be allowed, /v1/projects/by-chat should be denied
+	resAllowed := tool.Execute(context.Background(), map[string]any{
+		"method": "GET",
+		"path":   "/v1/agents",
+	})
+	if resAllowed.IsError {
+		t.Errorf("expected /v1/agents to be allowed by custom settings, got: %s", resAllowed.ForLLM)
+	}
+
+	resDenied := tool.Execute(context.Background(), map[string]any{
+		"method": "GET",
+		"path":   "/v1/projects/by-chat?channel_type=telegram&chat_id=-1",
+	})
+	if !resDenied.IsError {
+		t.Error("expected /v1/projects/by-chat to be denied by custom settings")
 	}
 }

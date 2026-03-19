@@ -12,15 +12,39 @@ import (
 	"time"
 )
 
-// InternalAPITool lets agents call the GoClaw HTTP API directly,
-// bypassing SSRF protection and auto-injecting the gateway Bearer token.
-type InternalAPITool struct {
-	baseURL string // e.g. "http://localhost:18790"
-	token   string // gateway token for Authorization header
-	client  *http.Client
+// allowedRoute defines a permitted method + path-prefix pair.
+type allowedRoute struct {
+	Method string `json:"method"`
+	Prefix string `json:"prefix"`
 }
 
-// NewInternalAPITool creates a tool for agents to call GoClaw's own REST API.
+// defaultAllowedRoutes is the fallback allowlist used when no settings are
+// stored in the database yet (e.g. first boot before seed runs).
+var defaultAllowedRoutes = []allowedRoute{
+	{Method: "GET", Prefix: "/v1/projects/by-chat"},
+	{Method: "POST", Prefix: "/v1/projects"},
+	{Method: "PUT", Prefix: "/v1/projects/"},
+}
+
+// InternalAPITool lets agents call a restricted subset of the GoClaw HTTP API
+// (project management only), bypassing SSRF protection and auto-injecting the
+// gateway Bearer token.
+//
+// The allowed-route list is loaded from the builtin_tools.settings column for
+// the "internal_api" row, making it configurable via the Builtin Tools UI
+// without a code change or redeploy. It falls back to defaultAllowedRoutes
+// when no settings are available.
+type InternalAPITool struct {
+	baseURL        string
+	token          string
+	client         *http.Client
+	// settingsGetter is wired after store initialisation via SetSettingsGetter.
+	// Signature: func(ctx, toolName) → (raw JSON, error)
+	settingsGetter func(ctx context.Context, name string) (json.RawMessage, error)
+}
+
+// NewInternalAPITool creates the tool. Call SetSettingsGetter once the store
+// is available to enable DB-backed allowlist management.
 func NewInternalAPITool(port int, token string) *InternalAPITool {
 	return &InternalAPITool{
 		baseURL: fmt.Sprintf("http://localhost:%d", port),
@@ -29,10 +53,22 @@ func NewInternalAPITool(port int, token string) *InternalAPITool {
 	}
 }
 
+// SetSettingsGetter wires the builtin-tool settings loader.
+// Typically called once in gateway.go after pgStores is initialised:
+//
+//	iat.SetSettingsGetter(pgStores.BuiltinTools.GetSettings)
+func (t *InternalAPITool) SetSettingsGetter(fn func(ctx context.Context, name string) (json.RawMessage, error)) {
+	t.settingsGetter = fn
+}
+
 func (t *InternalAPITool) Name() string { return "internal_api" }
 
 func (t *InternalAPITool) Description() string {
-	return "Call GoClaw's internal REST API. Auth is handled automatically. Use for project management (/v1/projects), MCP overrides, and other gateway endpoints."
+	return "Call GoClaw's project management API. Auth is handled automatically. " +
+		"Allowed: GET /v1/projects/by-chat (resolve project from channel/chat_id), " +
+		"POST /v1/projects (create project), " +
+		"PUT /v1/projects/{id}/mcp/{server} (set MCP overrides). " +
+		"Allowed routes are configurable via Admin → Builtin Tools → internal_api."
 }
 
 func (t *InternalAPITool) Parameters() map[string]any {
@@ -41,20 +77,62 @@ func (t *InternalAPITool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"method": map[string]any{
 				"type":        "string",
-				"description": `HTTP method: "GET", "POST", "PUT", "DELETE".`,
-				"enum":        []string{"GET", "POST", "PUT", "DELETE"},
+				"description": `HTTP method: "GET", "POST", or "PUT".`,
+				"enum":        []string{"GET", "POST", "PUT"},
 			},
 			"path": map[string]any{
-				"type":        "string",
-				"description": `API path, e.g. "/v1/projects" or "/v1/projects/{id}/mcp/gitlab". Query params included.`,
+				"type": "string",
+				"description": `API path. Allowed paths:
+- GET  /v1/projects/by-chat?channel_type=telegram&chat_id=-100123
+- POST /v1/projects
+- PUT  /v1/projects/{id}/mcp/{serverName}`,
 			},
 			"body": map[string]any{
 				"type":        "object",
-				"description": "JSON request body (for POST/PUT). Omit for GET/DELETE.",
+				"description": "JSON request body (for POST/PUT). Omit for GET.",
 			},
 		},
 		"required": []string{"method", "path"},
 	}
+}
+
+// loadAllowedRoutes returns the current allowlist from DB settings, or falls
+// back to defaultAllowedRoutes when the getter is not wired or the row is absent.
+func (t *InternalAPITool) loadAllowedRoutes(ctx context.Context) []allowedRoute {
+	if t.settingsGetter == nil {
+		return defaultAllowedRoutes
+	}
+	raw, err := t.settingsGetter(ctx, "internal_api")
+	if err != nil || len(raw) == 0 {
+		return defaultAllowedRoutes
+	}
+
+	var settings struct {
+		AllowedRoutes []allowedRoute `json:"allowed_routes"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil || len(settings.AllowedRoutes) == 0 {
+		return defaultAllowedRoutes
+	}
+	return settings.AllowedRoutes
+}
+
+// checkAllowlist returns a non-empty error string when method+path is denied.
+func checkAllowlist(method, path string, routes []allowedRoute) string {
+	// Strip query string for prefix matching
+	pathOnly := path
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		pathOnly = path[:i]
+	}
+	for _, r := range routes {
+		if r.Method == method && strings.HasPrefix(pathOnly, r.Prefix) {
+			return ""
+		}
+	}
+	return fmt.Sprintf(
+		"internal_api: %s %s is not in the allowlist — "+
+			"configure allowed routes via Admin → Builtin Tools → internal_api",
+		method, pathOnly,
+	)
 }
 
 func (t *InternalAPITool) Execute(ctx context.Context, args map[string]any) *Result {
@@ -66,13 +144,17 @@ func (t *InternalAPITool) Execute(ctx context.Context, args map[string]any) *Res
 	}
 
 	method = strings.ToUpper(method)
-	if method != "GET" && method != "POST" && method != "PUT" && method != "DELETE" {
-		return ErrorResult("method must be GET, POST, PUT, or DELETE")
-	}
 
 	// Ensure path starts with /
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
+	}
+
+	// Enforce allowlist — loaded from DB settings (or default)
+	routes := t.loadAllowedRoutes(ctx)
+	if errMsg := checkAllowlist(method, path, routes); errMsg != "" {
+		slog.Warn("internal_api: denied by allowlist", "method", method, "path", path)
+		return ErrorResult(errMsg)
 	}
 
 	url := t.baseURL + path
@@ -112,10 +194,8 @@ func (t *InternalAPITool) Execute(ctx context.Context, args map[string]any) *Res
 	}
 
 	result := fmt.Sprintf("HTTP %d\n%s", resp.StatusCode, string(respBody))
-
 	if resp.StatusCode >= 400 {
 		return ErrorResult(result)
 	}
-
 	return NewResult(result)
 }

@@ -123,6 +123,16 @@ func runGateway() {
 
 	setupMemoryEmbeddings(cfg, pgStores, providerRegistry)
 
+	// Wire internal_api tool settings getter — enables allowlist management via Builtin Tools UI.
+	if pgStores.BuiltinTools != nil {
+		if t, ok := toolsReg.Get("internal_api"); ok {
+			if iat, ok := t.(*tools.InternalAPITool); ok {
+				iat.SetSettingsGetter(pgStores.BuiltinTools.GetSettings)
+				slog.Info("internal_api: settings getter wired (allowlist via Builtin Tools UI)")
+			}
+		}
+	}
+
 	loadBootstrapFiles(pgStores, workspace, agentCfg)
 
 	// Subagent system

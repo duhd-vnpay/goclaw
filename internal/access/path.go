@@ -3,6 +3,7 @@ package access
 import (
 	"errors"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -30,13 +31,17 @@ func SafeResolvePath(requestedPath string, allowedPrefixes []string) (string, er
 }
 
 func matchesAnyPrefix(path string, prefixes []string) bool {
+	sep := string(filepath.Separator)
 	for _, p := range prefixes {
 		cleanP := filepath.Clean(p)
-		// Ensure prefix ends with separator to prevent /media matching /media-evil
-		if !strings.HasSuffix(cleanP, string(filepath.Separator)) {
-			cleanP += string(filepath.Separator)
+		// On Windows, paths are case-insensitive
+		pathCmp, prefixCmp := path, cleanP
+		if runtime.GOOS == "windows" {
+			pathCmp = strings.ToLower(pathCmp)
+			prefixCmp = strings.ToLower(prefixCmp)
 		}
-		if strings.HasPrefix(path, cleanP) || path == strings.TrimSuffix(cleanP, string(filepath.Separator)) {
+		// Check if path is exactly the prefix or within it
+		if pathCmp == prefixCmp || strings.HasPrefix(pathCmp, prefixCmp+sep) {
 			return true
 		}
 	}

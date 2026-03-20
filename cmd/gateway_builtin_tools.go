@@ -29,7 +29,7 @@ func builtinToolSeedData() []store.BuiltinToolDef {
 			Metadata: json.RawMessage(`{"config_hint":"Config → Tools → Web Search"}`),
 		},
 		{Name: "web_fetch", DisplayName: "Web Fetch", Description: "Fetch a web page or API endpoint and extract its text content", Category: "web", Enabled: true,
-			Settings: json.RawMessage(`{"extractors":[{"name":"defuddle","enabled":true,"base_url":"https://fetch.goclaw.sh/"},{"name":"html-to-markdown","enabled":true}]}`),
+			Settings: json.RawMessage(`{"extractors":[{"name":"defuddle","enabled":true,"base_url":"https://fetch.goclaw.sh/","max_retries":2},{"name":"html-to-markdown","enabled":true}]}`),
 		},
 
 		// memory
@@ -219,7 +219,7 @@ func backfillWebFetchSettings(ctx context.Context, bts store.BuiltinToolStore) {
 	if len(t.Settings) > 0 && string(t.Settings) != "{}" && string(t.Settings) != "null" {
 		return // already has settings, don't overwrite
 	}
-	defaultSettings := json.RawMessage(`{"extractors":[{"name":"defuddle","enabled":true,"base_url":"https://fetch.goclaw.sh/"},{"name":"html-to-markdown","enabled":true}]}`)
+	defaultSettings := json.RawMessage(`{"extractors":[{"name":"defuddle","enabled":true,"base_url":"https://fetch.goclaw.sh/","max_retries":2},{"name":"html-to-markdown","enabled":true}]}`)
 	if err := bts.Update(ctx, "web_fetch", map[string]any{"settings": defaultSettings}); err != nil {
 		slog.Warn("builtin_tools: failed to backfill web_fetch settings", "error", err)
 		return

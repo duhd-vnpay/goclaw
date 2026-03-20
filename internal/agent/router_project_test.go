@@ -3,7 +3,23 @@ package agent
 import (
 	"context"
 	"testing"
+
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 )
+
+// mockProvider implements the Provider interface for testing.
+type mockProvider struct{}
+
+func (m *mockProvider) Chat(ctx context.Context, req providers.ChatRequest) (*providers.ChatResponse, error) {
+	return &providers.ChatResponse{}, nil
+}
+
+func (m *mockProvider) ChatStream(ctx context.Context, req providers.ChatRequest, onChunk func(providers.StreamChunk)) (*providers.ChatResponse, error) {
+	return &providers.ChatResponse{}, nil
+}
+
+func (m *mockProvider) DefaultModel() string { return "test-model" }
+func (m *mockProvider) Name() string          { return "test-provider" }
 
 // mockAgent implements the Agent interface for testing.
 type mockAgent struct {
@@ -15,6 +31,7 @@ func (m *mockAgent) Run(_ context.Context, _ RunRequest) (*RunResult, error) { r
 func (m *mockAgent) IsRunning() bool                                         { return false }
 func (m *mockAgent) Model() string                                           { return "test-model" }
 func (m *mockAgent) ProviderName() string                                    { return "test-provider" }
+func (m *mockAgent) Provider() providers.Provider                            { return &mockProvider{} }
 
 func TestGetForProject_EmptyProjectFallsBackToGet(t *testing.T) {
 	r := NewRouter()

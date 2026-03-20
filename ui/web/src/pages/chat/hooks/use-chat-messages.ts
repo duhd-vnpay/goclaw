@@ -90,7 +90,7 @@ export function useChatMessages(sessionKey: string, agentId: string) {
               toolCallId: tc.id,
               runId: "",
               name: tc.name,
-              phase: (toolMsg ? "completed" : "calling") as ToolStreamEntry["phase"],
+              phase: (toolMsg ? (toolMsg.is_error ? "error" : "completed") : "calling") as ToolStreamEntry["phase"],
               startedAt: 0,
               updatedAt: 0,
               arguments: tc.arguments,

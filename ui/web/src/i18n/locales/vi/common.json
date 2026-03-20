@@ -45,6 +45,7 @@
   "manage": "Quản lý",
   "messages": "tin nhắn",
   "model": "Model",
+  "useCustomModel": "Dùng tuỳ chỉnh:",
   "modelTip": "ID model để sử dụng.",
   "modelVerified": "Model đã được xác minh",
   "name": "Tên",
@@ -115,5 +116,7 @@
   "failedToLoadImage": "Không thể tải hình ảnh",
   "deleteFolder": "Xóa thư mục",
   "deleteFile": "Xóa tệp",
-  "loadMore": "Tải thêm..."
+  "loadMore": "Tải thêm...",
+  "viewCard": "Dạng thẻ",
+  "viewList": "Dạng danh sách"
 }

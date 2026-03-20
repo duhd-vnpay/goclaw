@@ -24,6 +24,7 @@ export function ChatPage() {
   const userId = useAuthStore((s) => s.userId);
 
   const [scrollTrigger, setScrollTrigger] = useState(0);
+  const [files, setFiles] = useState<AttachedFile[]>([]);
 
   // sessionKey derived from URL — single source of truth, no separate state
   const sessionKey = urlSessionKey ?? "";
@@ -118,17 +119,21 @@ export function ChatPage() {
   );
 
   const handleSend = useCallback(
-    (message: string, files?: AttachedFile[]) => {
+    (message: string, sendFiles?: AttachedFile[]) => {
       let key = sessionKey;
       if (!key) {
         key = buildNewSessionKey();
         navigate(`/chat/${encodeURIComponent(key)}`, { replace: true });
       }
-      send(message, key, files);
+      send(message, key, sendFiles);
       setScrollTrigger((n) => n + 1);
     },
     [sessionKey, send, buildNewSessionKey, navigate],
   );
+
+  const handleDropFiles = useCallback((dropped: File[]) => {
+    setFiles((prev) => [...prev, ...dropped.map((f) => ({ file: f }))]);
+  }, []);
 
   const handleAbort = useCallback(() => {
     abort(sessionKey);
@@ -215,7 +220,7 @@ export function ChatPage() {
           </div>
         )}
 
-        <DropZone onDrop={() => { /* TODO: wire to chat input */ }}>
+        <DropZone onDrop={handleDropFiles}>
           <ChatThread
             messages={messages}
             streamText={streamText}
@@ -235,6 +240,8 @@ export function ChatPage() {
               onAbort={handleAbort}
               isRunning={isRunning}
               disabled={!connected}
+              files={files}
+              onFilesChange={setFiles}
             />
           ) : (
             <div className="mx-3 mb-3 flex items-center gap-2 rounded-xl border bg-muted/50 px-4 py-3 text-sm text-muted-foreground shadow-sm">

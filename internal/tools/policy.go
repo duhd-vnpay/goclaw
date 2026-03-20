@@ -33,8 +33,7 @@ var toolGroups = map[string][]string{
 		"read_image", "read_document", "read_audio", "read_video",
 		"create_image", "create_video",
 		"skill_search", "mcp_tool_search", "tts",
-		"team_tasks", "team_message",
-		"internal_api",
+		"team_tasks",
 	},
 }
 
@@ -44,6 +43,25 @@ func RegisterToolGroup(name string, members []string) {
 	toolGroupsMu.Lock()
 	toolGroups[name] = members
 	toolGroupsMu.Unlock()
+}
+
+// AppendToToolGroup adds members to an existing tool group without replacing it.
+// No-op if the group does not exist. Duplicate members are silently ignored.
+func AppendToToolGroup(name string, members ...string) {
+	toolGroupsMu.Lock()
+	defer toolGroupsMu.Unlock()
+	existing := toolGroups[name]
+	seen := make(map[string]bool, len(existing))
+	for _, m := range existing {
+		seen[m] = true
+	}
+	for _, m := range members {
+		if !seen[m] {
+			existing = append(existing, m)
+			seen[m] = true
+		}
+	}
+	toolGroups[name] = existing
 }
 
 // UnregisterToolGroup removes a dynamic tool group.

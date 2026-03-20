@@ -113,15 +113,6 @@ func builtinToolSeedData() []store.BuiltinToolDef {
 		{Name: "team_tasks", DisplayName: "Team Tasks", Description: "View, create, update, and complete tasks on the team task board", Category: "teams", Enabled: true,
 			Requires: []string{"managed_mode", "teams"},
 		},
-		{Name: "team_message", DisplayName: "Team Message", Description: "Send a direct message or broadcast to teammates in the agent team", Category: "teams", Enabled: true,
-			Requires: []string{"managed_mode", "teams"},
-		},
-
-		// gateway
-		{Name: "internal_api", DisplayName: "Internal API", Description: "Call GoClaw's project management REST API (allowlist-controlled). Agents use this to resolve projects and configure MCP overrides.", Category: "gateway", Enabled: true,
-			Settings: json.RawMessage(`{"allowed_routes":[{"method":"GET","prefix":"/v1/projects/by-chat"},{"method":"POST","prefix":"/v1/projects"},{"method":"PUT","prefix":"/v1/projects/"}]}`),
-			Metadata: json.RawMessage(`{"config_hint":"Edit allowed_routes to control which endpoints agents can call"}`),
-		},
 	}
 }
 

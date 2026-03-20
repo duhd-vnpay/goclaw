@@ -470,6 +470,8 @@ func runGateway() {
 	// Seed + apply builtin tool disables
 	if pgStores.BuiltinTools != nil {
 		seedBuiltinTools(context.Background(), pgStores.BuiltinTools)
+		seedLocalBuiltinTools(context.Background(), pgStores.BuiltinTools) // local fork additions
+		registerLocalToolGroups()                                          // local fork policy groups
 		migrateBuiltinToolSettings(context.Background(), pgStores.BuiltinTools)
 		backfillWebFetchSettings(context.Background(), pgStores.BuiltinTools)
 		applyBuiltinToolDisables(context.Background(), pgStores.BuiltinTools, toolsReg)

@@ -100,6 +100,20 @@ func runGateway() {
 		defer snapshotWorker.Stop()
 	}
 
+	// Apply DB secrets to cfg NOW that pgStores is available.
+	// setupToolRegistry ran before pgStores existed, so the TTS manager was built
+	// without DB-stored secrets (e.g. tts.minimax.api_key). Re-apply secrets and
+	// rebuild the TTS manager so providers are registered correctly from the start.
+	if pgStores != nil && pgStores.ConfigSecrets != nil {
+		if secrets, err := pgStores.ConfigSecrets.GetAll(context.Background()); err == nil && len(secrets) > 0 {
+			cfg.ApplyDBSecrets(secrets)
+			if newMgr := setupTTS(cfg); newMgr != nil {
+				ttsTool.UpdateManager(newMgr)
+				slog.Info("tts manager rebuilt with DB secrets", "provider", newMgr.PrimaryProvider(), "auto", string(newMgr.AutoMode()))
+			}
+		}
+	}
+
 	// Sweep orphan traces left by previous crashes (running > 1h)
 	if pgStores.Tracing != nil {
 		go func() {

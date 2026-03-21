@@ -68,7 +68,7 @@ func (s *Store) LoadPath(id string) (string, error) {
 	if len(matches) == 0 {
 		return "", fmt.Errorf("media: file not found: %s", id)
 	}
-	return matches[0], nil
+	return s.resolveAndValidate(id, matches[0])
 }
 
 // AdminCtxKey is the context key for admin bypass flag.
@@ -96,7 +96,7 @@ func (s *Store) LoadPathScoped(id string, sessionHash string) (string, error) {
 	if len(matches) == 0 {
 		return "", fmt.Errorf("media: file not found: %s in session %s", id, sessionHash)
 	}
-	return matches[0], nil
+	return s.resolveAndValidate(id, matches[0])
 }
 
 // LoadPathAny returns the filesystem path for a media ID across ALL sessions.
@@ -106,7 +106,7 @@ func (s *Store) LoadPathAny(id string, ctx context.Context) (string, error) {
 	if admin, _ := ctx.Value(AdminCtxKey).(bool); !admin {
 		return "", fmt.Errorf("media: LoadPathAny requires admin context")
 	}
-	slog.Warn("media: legacy LoadPathAny called", "id", id)
+	slog.Warn("media: legacy LoadPathAny called", "id", sanitizePath(id))
 	matches, err := filepath.Glob(filepath.Join(s.baseDir, "*", id+".*"))
 	if err != nil {
 		return "", fmt.Errorf("media: glob for %s: %w", id, err)
@@ -114,7 +114,36 @@ func (s *Store) LoadPathAny(id string, ctx context.Context) (string, error) {
 	if len(matches) == 0 {
 		return "", fmt.Errorf("media: file not found: %s", id)
 	}
-	return matches[0], nil
+	return s.resolveAndValidate(id, matches[0])
+}
+
+// resolveAndValidate resolves symlinks and ensures the path stays within baseDir.
+func (s *Store) resolveAndValidate(id, path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("media: resolve symlink for %s: %w", id, err)
+	}
+	absBase, _ := filepath.Abs(s.baseDir)
+	absResolved, _ := filepath.Abs(resolved)
+	if !strings.HasPrefix(absResolved, absBase+string(filepath.Separator)) {
+		slog.Warn("media: path traversal attempt blocked",
+			"id", sanitizePath(id),
+			"resolved", sanitizePath(absResolved),
+			"base", absBase,
+		)
+		return "", fmt.Errorf("media: path outside base dir: %s", id)
+	}
+	return resolved, nil
+}
+
+// sanitizePath removes newlines and control characters from paths before logging.
+func sanitizePath(path string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r < 32 {
+			return '_'
+		}
+		return r
+	}, path)
 }
 
 // DeleteSession removes all media files for a session.

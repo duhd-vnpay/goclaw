@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nextlevelbuilder/goclaw/internal/access"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
@@ -19,6 +20,7 @@ type MediaServeHandler struct {
 	gatewayToken string
 	tokenSigner  *access.TokenSigner
 	checker      access.AccessChecker
+	rateLimiter  *RateLimiter
 }
 
 // NewMediaServeHandler creates a media serve handler.
@@ -29,12 +31,14 @@ func NewMediaServeHandler(store *media.Store, gatewayToken string, signer *acces
 		gatewayToken: gatewayToken,
 		tokenSigner:  signer,
 		checker:      checker,
+		rateLimiter:  NewRateLimiter(100, time.Minute), // 100 req/min per IP
 	}
 }
 
-// RegisterRoutes registers the media serve endpoint.
+// RegisterRoutes registers the media serve endpoint with rate limiting.
 func (h *MediaServeHandler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /v1/media/{id}", h.handleServe)
+	handler := http.HandlerFunc(h.handleServe)
+	mux.Handle("GET /v1/media/{id}", RateLimitMiddleware(handler, h.rateLimiter))
 }
 
 func (h *MediaServeHandler) handleServe(w http.ResponseWriter, r *http.Request) {

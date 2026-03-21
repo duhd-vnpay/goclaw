@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -102,6 +103,15 @@ func (t *MemorySearchTool) Execute(ctx context.Context, args map[string]any) *Re
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("memory search failed: %v", err))
 	}
+
+	// Security audit: log memory search for observability (HIGH-02 mitigation).
+	slog.Info("security.memory_search",
+		"agent_id", agentID.String(),
+		"query_len", len(query),
+		"results_count", len(results),
+		"user_id", userID,
+	)
+
 	if len(results) == 0 {
 		return NewResult("No memory results found for query: " + query)
 	}

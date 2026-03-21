@@ -159,6 +159,59 @@ func (s *PGBuiltinToolStore) Seed(ctx context.Context, tools []store.BuiltinTool
 	return tx.Commit()
 }
 
+// Upsert inserts or updates builtin tool definitions without reconciliation.
+// Unlike Seed(), it does NOT delete rows not in the provided list.
+// Use for additive fork-specific tools that should not affect the upstream tool set.
+func (s *PGBuiltinToolStore) Upsert(ctx context.Context, tools []store.BuiltinToolDef) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO builtin_tools (name, display_name, description, category, enabled, settings, requires, metadata, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+		 ON CONFLICT (name) DO UPDATE SET
+		   display_name = EXCLUDED.display_name,
+		   description = EXCLUDED.description,
+		   category = EXCLUDED.category,
+		   requires = EXCLUDED.requires,
+		   metadata = EXCLUDED.metadata,
+		   settings = CASE
+		     WHEN builtin_tools.settings IS NULL OR builtin_tools.settings::text IN ('{}', 'null')
+		     THEN EXCLUDED.settings
+		     ELSE builtin_tools.settings
+		   END,
+		   updated_at = EXCLUDED.updated_at`)
+	if err != nil {
+		return fmt.Errorf("prepare upsert stmt: %w", err)
+	}
+	defer stmt.Close()
+
+	now := time.Now()
+	for _, t := range tools {
+		settings := t.Settings
+		if settings == nil {
+			settings = json.RawMessage("{}")
+		}
+		metadata := t.Metadata
+		if metadata == nil {
+			metadata = json.RawMessage("{}")
+		}
+		_, err := stmt.ExecContext(ctx,
+			t.Name, t.DisplayName, t.Description, t.Category,
+			t.Enabled, []byte(settings), pqStringArray(t.Requires), []byte(metadata), now,
+		)
+		if err != nil {
+			return fmt.Errorf("upsert tool %s: %w", t.Name, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+
 func (s *PGBuiltinToolStore) scanTool(row *sql.Row) (*store.BuiltinToolDef, error) {
 	var def store.BuiltinToolDef
 	var settings []byte

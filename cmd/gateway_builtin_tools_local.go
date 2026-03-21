@@ -34,15 +34,16 @@ func localBuiltinTools() []store.BuiltinToolDef {
 	}
 }
 
-// seedLocalBuiltinTools seeds local-only tools into the database.
-// Called after upstream seedBuiltinTools to add fork-specific tools.
+// seedLocalBuiltinTools upserts local-only tools into the database.
+// Uses Upsert() (not Seed()) to avoid the reconcile DELETE that would wipe
+// the upstream tools already seeded by seedBuiltinTools().
 func seedLocalBuiltinTools(ctx context.Context, bts store.BuiltinToolStore) {
 	seeds := localBuiltinTools()
-	if err := bts.Seed(ctx, seeds); err != nil {
-		slog.Error("failed to seed local builtin tools", "error", err)
+	if err := bts.Upsert(ctx, seeds); err != nil {
+		slog.Error("failed to upsert local builtin tools", "error", err)
 		return
 	}
-	slog.Info("local builtin tools seeded", "count", len(seeds))
+	slog.Info("local builtin tools upserted", "count", len(seeds))
 }
 
 // registerLocalToolGroups adds local tools to the "goclaw" policy group

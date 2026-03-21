@@ -102,14 +102,6 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		ctx = tools.WithTeamTaskID(ctx, req.TeamTaskID)
 	}
 
-	// Project scope propagation (message arrival → delegation chain).
-	if req.ProjectID != "" {
-		ctx = tools.WithToolProjectID(ctx, req.ProjectID)
-	}
-	if req.ProjectOverrides != nil {
-		ctx = tools.WithToolProjectOverrides(ctx, req.ProjectOverrides)
-	}
-
 	// Per-user workspace isolation.
 	// Workspace path comes from user_agent_profiles (includes channel segment
 	// for cross-channel isolation). Cached in userWorkspaces to avoid repeated DB queries.
@@ -144,6 +136,9 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		}
 		if l.shouldShareMemory() {
 			ctx = store.WithSharedMemory(ctx)
+		}
+		if l.shouldShareKnowledgeGraph() {
+			ctx = store.WithSharedKG(ctx)
 		}
 		if err := os.MkdirAll(effectiveWorkspace, 0755); err != nil {
 			slog.Warn("failed to create user workspace directory", "workspace", effectiveWorkspace, "user", req.UserID, "error", err)
@@ -449,7 +444,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 					messages = messages[:len(messages)-1]
 					messages = append(messages,
 						providers.Message{Role: "user", Content: reminder},
-						// No assistant prefill — thinking models reject it.
+						providers.Message{Role: "assistant", Content: "I see the task status. Let me handle accordingly."},
 						userMsg,
 					)
 				}
@@ -476,7 +471,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				messages = messages[:len(messages)-1]
 				messages = append(messages,
 					providers.Message{Role: "user", Content: reminder},
-					// No assistant prefill — thinking models reject it.
+					providers.Message{Role: "assistant", Content: "Understood. I'll focus on this task and report progress."},
 					userMsg,
 				)
 			}
@@ -515,9 +510,8 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 	// Team task orphan detection: track team_tasks create vs spawn calls.
 	// If the LLM creates tasks but forgets to spawn, inject a reminder.
-	var teamTaskCreates int     // count of team_tasks action=create calls
-	var teamTaskSpawns int      // count of spawn calls with team_task_id
-	var interruptRetried bool   // only retry interrupted streams once
+	var teamTaskCreates int // count of team_tasks action=create calls
+	var teamTaskSpawns int  // count of spawn calls with team_task_id
 
 	// Skill evolution: budget pressure nudge state (sent at most once each per run).
 	var skillNudge70Sent, skillNudge90Sent bool
@@ -776,50 +770,6 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			}
 		}
 
-		// Truncation guard: if response was cut off (max_tokens reached) and has tool calls,
-		// the tool call arguments are likely incomplete/malformed. Skip execution and ask
-		// the LLM to re-issue with complete arguments or break into smaller parts.
-		if resp.FinishReason == "length" && len(resp.ToolCalls) > 0 {
-			slog.Warn("truncated tool calls detected",
-				"agent", l.id, "iteration", iteration,
-				"tool_calls", len(resp.ToolCalls), "max_tokens", l.maxTokens)
-			messages = append(messages,
-				providers.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls,
-					Thinking: resp.Thinking, RawAssistantContent: resp.RawAssistantContent},
-				providers.Message{
-					Role:    "user",
-					Content: "[System] Your response was truncated (max_tokens reached). The last tool call had incomplete arguments. Do NOT re-issue the same large tool call. Instead, break your work into smaller steps or respond with text only.",
-				},
-			)
-			pendingMsgs = append(pendingMsgs,
-				providers.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls},
-				providers.Message{Role: "user", Content: "[System] Response truncated — tool call skipped."},
-			)
-			continue
-		}
-
-		// Interrupted stream guard: if the provider detected premature SSE termination
-		// (connection dropped before message_stop/[DONE]), retry once with the same context.
-		// The partial content is discarded since it may be incomplete/cut off mid-sentence.
-		if resp.FinishReason == "interrupted" && !interruptRetried {
-			interruptRetried = true
-			slog.Warn("interrupted stream detected, retrying",
-				"agent", l.id, "iteration", iteration,
-				"content_len", len(resp.Content))
-			// Emit retry event so channels can update placeholder.
-			emitRun(AgentEvent{
-				Type:    protocol.AgentEventRunRetrying,
-				AgentID: l.id,
-				RunID:   req.RunID,
-				Payload: map[string]string{
-					"attempt": "1", "maxAttempts": "1",
-					"error": "SSE stream interrupted before completion",
-				},
-			})
-			iteration-- // don't count the failed attempt
-			continue
-		}
-
 		if resp.Usage != nil {
 			totalUsage.PromptTokens += resp.Usage.PromptTokens
 			totalUsage.CompletionTokens += resp.Usage.CompletionTokens
@@ -873,31 +823,6 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				providers.Message{
 					Role:    "user",
 					Content: "[System] Your output was truncated because it exceeded max_tokens. Your tool call arguments were incomplete. Please retry with shorter content — split large writes into multiple smaller calls, or reduce the amount of text.",
-				},
-			)
-			continue
-		}
-
-		// Output truncated (max_tokens hit) with only text, no tool calls.
-		// The model wrote a long text response instead of using tools.
-		// Nudge it to use tools (e.g. write_file) instead of inlining content.
-		// Detection: finish_reason == "length", OR output tokens >= max_tokens (some proxies
-		// don't forward finish_reason correctly and return "stop" even when truncated).
-		maxTok := l.effectiveMaxTokens()
-		outputHitLimit := resp.FinishReason == "length"
-		if !outputHitLimit && resp.Usage != nil && resp.Usage.CompletionTokens >= maxTok {
-			outputHitLimit = true
-		}
-		if outputHitLimit && len(resp.ToolCalls) == 0 {
-			slog.Warn("output truncated (max_tokens), text-only response — nudging tool use",
-				"agent", l.id, "iteration", iteration, "max_tokens", maxTok,
-				"output_tokens", func() int { if resp.Usage != nil { return resp.Usage.CompletionTokens }; return -1 }(),
-				"finish_reason", resp.FinishReason)
-			messages = append(messages,
-				providers.Message{Role: "assistant", Content: resp.Content},
-				providers.Message{
-					Role:    "user",
-					Content: "[System] Your output was truncated because it exceeded max_tokens. You were writing content directly in your response instead of using tools. Please use the write_file or exec tool to write long content to files. Do NOT write file contents inline in your response — use tools instead.",
 				},
 			)
 			continue

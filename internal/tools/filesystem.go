@@ -427,8 +427,3 @@ func resolveThroughExistingAncestors(target string) (string, error) {
 	return filepath.Clean(target), nil
 }
 
-// hasMutableSymlinkParent checks if any component of the resolved path is a symlink
-// whose parent directory is writable by the current process. A writable parent means
-// the symlink could be replaced between path resolution and actual file operation
-// (TOCTOU symlink rebind attack).
-// hasMutableSymlinkParent and checkHardlink are in filesystem_security_{unix,windows}.go

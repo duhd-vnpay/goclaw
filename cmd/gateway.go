@@ -973,6 +973,15 @@ func runGateway() {
 		if !ok {
 			return
 		}
+		// Re-apply DB secrets before setting up TTS.
+		// config:changed may be broadcast by subsystems (e.g. registerProvidersFromDB)
+		// that haven't called ApplyDBSecrets, causing TTS API keys (MiniMax, etc.)
+		// to be missing from updatedCfg → setupTTS registers fewer providers → manager downgrade.
+		if pgStores != nil && pgStores.ConfigSecrets != nil {
+			if secrets, err := pgStores.ConfigSecrets.GetAll(context.Background()); err == nil && len(secrets) > 0 {
+				updatedCfg.ApplyDBSecrets(secrets)
+			}
+		}
 		newMgr := setupTTS(updatedCfg)
 		if newMgr == nil {
 			return

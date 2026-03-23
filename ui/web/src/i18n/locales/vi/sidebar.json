@@ -38,8 +38,9 @@
     "activity": "Hoạt động",
     "projects": "Dự án",
     "cliCredentials": "Xác thực CLI",
-    "apiKeys": "Khóa API",
+    "apiKeys": "API Keys",
     "apiDocs": "Tài liệu API",
-    "packages": "Gói phần mềm"
+    "packages": "Gói phần mềm",
+    "tenants": "Tổ chức"
   }
 }

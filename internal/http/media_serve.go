@@ -49,6 +49,17 @@ func (h *MediaServeHandler) handleServe(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Priority 0: short-lived signed file token (?ft=) — decoupled from gateway token.
+	if ft := r.URL.Query().Get("ft"); ft != "" {
+		if !VerifyFileToken(ft, "/v1/media/"+id, FileSigningKey()) {
+			http.Error(w, "invalid or expired file token", http.StatusUnauthorized)
+			return
+		}
+		// File token verified — serve without further auth checks.
+		h.serveMedia(w, r, id)
+		return
+	}
+
 	provided := extractBearerToken(r)
 	if provided == "" {
 		provided = r.URL.Query().Get("token")
@@ -118,6 +129,29 @@ func (h *MediaServeHandler) handleServe(w http.ResponseWriter, r *http.Request) 
 				IsAdmin:      true,
 			}, true)
 		}
+	}
+
+	ext := filepath.Ext(filePath)
+	ct := mime.TypeByExtension(ext)
+	if ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+
+	http.ServeFile(w, r, filePath)
+}
+
+// serveMedia serves a media file by ID without additional auth checks.
+// Used when auth is already verified (e.g., via HMAC file token).
+func (h *MediaServeHandler) serveMedia(w http.ResponseWriter, r *http.Request, id string) {
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
+	ctx := context.WithValue(r.Context(), media.AdminCtxKey, true)
+	filePath, err := h.store.LoadPathAny(id, ctx)
+	if err != nil {
+		http.NotFound(w, r)
+		return
 	}
 
 	ext := filepath.Ext(filePath)

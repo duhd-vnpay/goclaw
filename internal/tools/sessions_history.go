@@ -81,7 +81,15 @@ func (t *SessionsHistoryTool) Execute(ctx context.Context, args map[string]any) 
 
 	includeTools, _ := args["include_tools"].(bool)
 
-	history := t.sessions.GetHistory(sessionKey)
+	// Security: validate session belongs to current agent
+	{
+		aid := resolveAgentIDString(ctx)
+		if aid != "" && !strings.HasPrefix(sessionKey, "agent:"+aid+":") {
+			return ErrorResult("access denied: session belongs to a different agent")
+		}
+	}
+
+	history := t.sessions.GetHistory(ctx, sessionKey)
 	if history == nil {
 		return SilentResult(`{"session_key":"` + sessionKey + `","messages":[],"count":0}`)
 	}

@@ -85,9 +85,10 @@ type ImageContent struct {
 // Stored in session JSONB (~60 bytes each) instead of megabytes for base64.
 // On reload, MediaRefs are resolved to file paths and loaded into Images (for images).
 type MediaRef struct {
-	ID       string `json:"id"`        // unique media ID (uuid)
-	MimeType string `json:"mime_type"` // e.g. "image/jpeg", "application/pdf"
-	Kind     string `json:"kind"`      // "image", "video", "audio", "document"
+	ID       string `json:"id"`                // unique media ID (uuid)
+	MimeType string `json:"mime_type"`         // e.g. "image/jpeg", "application/pdf"
+	Kind     string `json:"kind"`              // "image", "video", "audio", "document"
+	Path     string `json:"path,omitempty"`    // absolute workspace path (persisted for /v1/files/ serving)
 }
 
 // Message represents a conversation message.
@@ -95,7 +96,7 @@ type Message struct {
 	Role            string         `json:"role"` // "system", "user", "assistant", "tool"
 	Content         string         `json:"content"`
 	Thinking        string         `json:"thinking,omitempty"`   // reasoning_content for thinking models (Kimi, DeepSeek, etc.)
-	Images          []ImageContent `json:"images,omitempty"`     // vision: base64 images (runtime only, not persisted)
+	Images          []ImageContent `json:"-"`                    // vision: base64 images (runtime only, never persisted to DB)
 	MediaRefs       []MediaRef     `json:"media_refs,omitempty"` // persistent media file references
 	ToolCalls       []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID      string         `json:"tool_call_id,omitempty"`      // for role="tool" responses

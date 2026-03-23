@@ -139,8 +139,10 @@ func New(cfg config.GoogleChatConfig, msgBus *bus.MessageBus, pendingStore store
 		groupStream = *cfg.GroupStream
 	}
 
+	base := channels.NewBaseChannel(channels.TypeGoogleChat, msgBus, cfg.AllowFrom)
+
 	ch := &Channel{
-		BaseChannel:       channels.NewBaseChannel(channels.TypeGoogleChat, msgBus, cfg.AllowFrom),
+		BaseChannel:       base,
 		auth:              auth,
 		projectID:         cfg.ProjectID,
 		subscriptionID:    cfg.SubscriptionID,
@@ -162,7 +164,7 @@ func New(cfg config.GoogleChatConfig, msgBus *bus.MessageBus, pendingStore store
 		historyLimit:      historyLimit,
 		dmStream:          dmStream,
 		groupStream:       groupStream,
-		groupHistory:      channels.MakeHistory("google_chat", pendingStore),
+		groupHistory:      channels.MakeHistory("google_chat", pendingStore, base.TenantID()),
 	}
 
 	ch.BaseChannel.SetType(typeGoogleChat)

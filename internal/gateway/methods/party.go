@@ -50,7 +50,8 @@ func (m *PartyMethods) Register(router *gateway.MethodRouter) {
 // Prefers providers with a non-empty DefaultModel (DB providers with settings),
 // falling back to the first name alphabetically for deterministic selection.
 func (m *PartyMethods) getEngine() (*party.Engine, error) {
-	names := m.providerReg.List()
+	ctx := context.Background()
+	names := m.providerReg.List(ctx)
 	if len(names) == 0 {
 		return nil, fmt.Errorf("no LLM providers available")
 	}
@@ -58,7 +59,7 @@ func (m *PartyMethods) getEngine() (*party.Engine, error) {
 	// Prefer a provider with DefaultModel set (typically DB providers with settings.default_model)
 	var bestName string
 	for _, name := range names {
-		p, err := m.providerReg.Get(name)
+		p, err := m.providerReg.Get(ctx, name)
 		if err != nil {
 			continue
 		}
@@ -74,7 +75,7 @@ func (m *PartyMethods) getEngine() (*party.Engine, error) {
 		bestName = names[0]
 	}
 
-	provider, err := m.providerReg.Get(bestName)
+	provider, err := m.providerReg.Get(ctx, bestName)
 	if err != nil {
 		return nil, fmt.Errorf("provider %s: %w", bestName, err)
 	}

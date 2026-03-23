@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -139,17 +140,17 @@ func mergeEnv(base, overrides map[string]string) map[string]string {
 
 // connectViaPool acquires a shared connection from the pool and creates
 // per-agent BridgeTools pointing to the shared client/connected pointers.
-func (m *Manager) connectViaPool(ctx context.Context, name, transportType, command string,
+func (m *Manager) connectViaPool(ctx context.Context, tenantID uuid.UUID, name, transportType, command string,
 	args []string, env map[string]string, url string, headers map[string]string,
 	toolPrefix string, timeoutSec int, projectID string, projectEnvOverrides map[string]string) error {
 
 	mergedEnv := mergeEnv(env, projectEnvOverrides)
-	poolKey := name
+	pkey := poolKey(tenantID, name)
 	if projectID != "" {
-		poolKey = name + ":" + projectID
+		pkey = poolKey(tenantID, name) + ":" + projectID
 	}
 
-	entry, err := m.pool.Acquire(ctx, poolKey, name, transportType, command, args, mergedEnv, url, headers, timeoutSec)
+	entry, err := m.pool.Acquire(ctx, pkey, name, transportType, command, args, mergedEnv, url, headers, timeoutSec)
 	if err != nil {
 		return err
 	}
@@ -157,27 +158,33 @@ func (m *Manager) connectViaPool(ctx context.Context, name, transportType, comma
 	// Create per-agent BridgeTools from the pool's shared connection
 	registeredNames := m.registerPoolBridgeTools(entry, name, toolPrefix, timeoutSec)
 
-	// Track server state and per-agent tool names
+	// Track server state and per-agent tool names.
+	// poolServers/poolToolNames keyed by pkey for Close() iteration.
+	// poolKeys maps pkey → pool compound key for Release().
 	m.mu.Lock()
-	m.servers[poolKey] = entry.state
+	m.servers[pkey] = entry.state
 	if m.poolServers == nil {
 		m.poolServers = make(map[string]struct{})
 	}
-	m.poolServers[poolKey] = struct{}{}
+	m.poolServers[pkey] = struct{}{}
 	if m.poolToolNames == nil {
 		m.poolToolNames = make(map[string][]string)
 	}
-	m.poolToolNames[poolKey] = registeredNames
+	m.poolToolNames[pkey] = registeredNames
+	if m.poolKeys == nil {
+		m.poolKeys = make(map[string]string)
+	}
+	m.poolKeys[pkey] = pkey
 	m.mu.Unlock()
 
 	if len(registeredNames) > 0 {
-		tools.RegisterToolGroup("mcp:"+poolKey, registeredNames)
+		tools.RegisterToolGroup("mcp:"+pkey, registeredNames)
 		m.updateMCPGroup()
 	}
 
 	slog.Info("mcp.server.connected_via_pool",
 		"server", name,
-		"poolKey", poolKey,
+		"pkey", pkey,
 		"transport", transportType,
 		"tools", len(registeredNames),
 	)

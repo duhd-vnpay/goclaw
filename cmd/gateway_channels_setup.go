@@ -154,7 +154,7 @@ func wireChannelEventSubscribers(
 			if !ok || payload.Kind != bus.CacheKindChannelInstances {
 				return
 			}
-			go instanceLoader.Reload(context.Background())
+			go instanceLoader.Reload(store.WithCrossTenant(context.Background()))
 		})
 	}
 
@@ -208,7 +208,7 @@ func wireChannelEventSubscribers(
 				if err != nil {
 					return
 				}
-				all, err := ciStore.ListAll(context.Background())
+				all, err := ciStore.ListAll(store.WithCrossTenant(context.Background()))
 				if err != nil {
 					slog.Warn("cascade disable: failed to list channel instances", "error", err)
 					return
@@ -216,7 +216,7 @@ func wireChannelEventSubscribers(
 				disabled := 0
 				for _, inst := range all {
 					if inst.AgentID == agentID && inst.Enabled {
-						if err := ciStore.Update(context.Background(), inst.ID, map[string]any{"enabled": false}); err != nil {
+						if err := ciStore.Update(store.WithCrossTenant(context.Background()), inst.ID, map[string]any{"enabled": false}); err != nil {
 							slog.Warn("cascade disable: failed to disable channel instance", "name", inst.Name, "error", err)
 						} else {
 							disabled++

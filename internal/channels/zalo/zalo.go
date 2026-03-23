@@ -190,6 +190,8 @@ func (c *Channel) processUpdate(update zaloUpdate) {
 }
 
 func (c *Channel) handleTextMessage(msg *zaloMessage) {
+	ctx := context.Background()
+	ctx = store.WithTenantID(ctx, c.TenantID())
 	senderID := msg.From.ID
 	if senderID == "" {
 		slog.Warn("zalo: dropping text message with empty sender ID", "message_id", msg.MessageID)
@@ -201,7 +203,7 @@ func (c *Channel) handleTextMessage(msg *zaloMessage) {
 	}
 
 	// DM policy enforcement (Zalo is DM-only)
-	if !c.checkDMPolicy(senderID, chatID) {
+	if !c.checkDMPolicy(ctx, senderID, chatID) {
 		return
 	}
 
@@ -225,6 +227,8 @@ func (c *Channel) handleTextMessage(msg *zaloMessage) {
 }
 
 func (c *Channel) handleImageMessage(msg *zaloMessage) {
+	ctx := context.Background()
+	ctx = store.WithTenantID(ctx, c.TenantID())
 	senderID := msg.From.ID
 	if senderID == "" {
 		slog.Warn("zalo: dropping image message with empty sender ID", "message_id", msg.MessageID)
@@ -235,7 +239,7 @@ func (c *Channel) handleImageMessage(msg *zaloMessage) {
 		chatID = senderID
 	}
 
-	if !c.checkDMPolicy(senderID, chatID) {
+	if !c.checkDMPolicy(ctx, senderID, chatID) {
 		return
 	}
 
@@ -290,7 +294,7 @@ func (c *Channel) handleImageMessage(msg *zaloMessage) {
 
 // --- DM Policy ---
 
-func (c *Channel) checkDMPolicy(senderID, chatID string) bool {
+func (c *Channel) checkDMPolicy(ctx context.Context, senderID, chatID string) bool {
 	switch c.dmPolicy {
 	case "disabled":
 		slog.Debug("zalo message rejected: DMs disabled", "sender_id", senderID)
@@ -310,7 +314,7 @@ func (c *Channel) checkDMPolicy(senderID, chatID string) bool {
 		// Check if already paired or in allowlist
 		paired := false
 		if c.pairingService != nil {
-			p, err := c.pairingService.IsPaired(senderID, c.Name())
+			p, err := c.pairingService.IsPaired(ctx, senderID, c.Name())
 			if err != nil {
 				slog.Warn("security.pairing_check_failed, assuming paired (fail-open)",
 					"sender_id", senderID, "channel", c.Name(), "error", err)
@@ -326,12 +330,12 @@ func (c *Channel) checkDMPolicy(senderID, chatID string) bool {
 		}
 
 		// Send pairing reply (debounced)
-		c.sendPairingReply(senderID, chatID)
+		c.sendPairingReply(ctx, senderID, chatID)
 		return false
 	}
 }
 
-func (c *Channel) sendPairingReply(senderID, chatID string) {
+func (c *Channel) sendPairingReply(ctx context.Context, senderID, chatID string) {
 	if c.pairingService == nil {
 		return
 	}
@@ -343,7 +347,7 @@ func (c *Channel) sendPairingReply(senderID, chatID string) {
 		}
 	}
 
-	code, err := c.pairingService.RequestPairing(senderID, c.Name(), chatID, "default", nil)
+	code, err := c.pairingService.RequestPairing(ctx, senderID, c.Name(), chatID, "default", nil)
 	if err != nil {
 		slog.Debug("zalo pairing request failed", "sender_id", senderID, "error", err)
 		return

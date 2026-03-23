@@ -30,7 +30,7 @@ func makeSchedulerRunFunc(agents *agent.Router, cfg *config.Config) scheduler.Ru
 			}
 		}
 
-		loop, err := agents.GetForProject(agentID, req.ProjectID, req.ProjectOverrides)
+		loop, err := agents.GetForProject(ctx, agentID, req.ProjectID, req.ProjectOverrides)
 		if err != nil {
 			return nil, fmt.Errorf("agent %s not found: %w", agentID, err)
 		}

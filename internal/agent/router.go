@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
 // ResolveOpts carries per-request context for the resolver (e.g., project scoping).
@@ -17,8 +21,8 @@ type ResolveOpts struct {
 }
 
 // ResolverFunc is called when an agent isn't found in the cache.
-// Used to lazy-create agents from DB.
-type ResolverFunc func(agentKey string, opts ResolveOpts) (Agent, error)
+// Used to lazy-create agents from DB. Context carries tenant scope.
+type ResolverFunc func(ctx context.Context, agentKey string, opts ResolveOpts) (Agent, error)
 
 const defaultRouterTTL = 10 * time.Minute
 
@@ -73,9 +77,12 @@ func (r *Router) Register(ag Agent) {
 
 // Get returns an agent by ID. Lazy-creates from DB via resolver if needed.
 // Cached entries expire after TTL as a safety net for multi-instance deployments.
-func (r *Router) Get(agentID string) (Agent, error) {
+// Cache key includes tenant so the same agent_key in different tenants resolves independently.
+func (r *Router) Get(ctx context.Context, agentID string) (Agent, error) {
+	cacheKey := agentCacheKey(ctx, agentID)
+
 	r.mu.RLock()
-	entry, ok := r.agents[agentID]
+	entry, ok := r.agents[cacheKey]
 	resolver := r.resolver
 	r.mu.RUnlock()
 
@@ -86,23 +93,23 @@ func (r *Router) Get(agentID string) (Agent, error) {
 	// TTL expired → remove stale entry so resolver re-creates
 	if ok {
 		r.mu.Lock()
-		delete(r.agents, agentID)
+		delete(r.agents, cacheKey)
 		r.mu.Unlock()
 	}
 
 	// Try resolver (create from DB)
 	if resolver != nil {
-		ag, err := resolver(agentID, ResolveOpts{})
+		ag, err := resolver(ctx, agentID, ResolveOpts{})
 		if err != nil {
 			return nil, err
 		}
 		r.mu.Lock()
 		// Double-check: another goroutine might have created it
-		if existing, ok := r.agents[agentID]; ok {
+		if existing, ok := r.agents[cacheKey]; ok {
 			r.mu.Unlock()
 			return existing.agent, nil
 		}
-		r.agents[agentID] = &agentEntry{agent: ag, cachedAt: time.Now()}
+		r.agents[cacheKey] = &agentEntry{agent: ag, cachedAt: time.Now()}
 		r.mu.Unlock()
 		return ag, nil
 	}
@@ -111,12 +118,12 @@ func (r *Router) Get(agentID string) (Agent, error) {
 }
 
 // GetForProject returns an agent Loop scoped to a specific project.
-// Cache key: "agentID:projectID". If projectID is empty, falls back to Get(agentID).
-func (r *Router) GetForProject(agentID, projectID string, projectOverrides map[string]map[string]string) (Agent, error) {
+// Cache key: "agentID:projectID". If projectID is empty, falls back to Get(ctx, agentID).
+func (r *Router) GetForProject(ctx context.Context, agentID, projectID string, projectOverrides map[string]map[string]string) (Agent, error) {
 	if projectID == "" {
-		return r.Get(agentID)
+		return r.Get(ctx, agentID)
 	}
-	cacheKey := agentID + ":" + projectID
+	cacheKey := agentCacheKey(ctx, agentID) + ":" + projectID
 
 	r.mu.RLock()
 	entry, ok := r.agents[cacheKey]
@@ -135,7 +142,7 @@ func (r *Router) GetForProject(agentID, projectID string, projectOverrides map[s
 		return nil, fmt.Errorf("agent not found: %s", agentID)
 	}
 
-	ag, err := resolver(agentID, ResolveOpts{
+	ag, err := resolver(ctx, agentID, ResolveOpts{
 		ProjectID:        projectID,
 		ProjectOverrides: projectOverrides,
 	})
@@ -152,6 +159,15 @@ func (r *Router) GetForProject(agentID, projectID string, projectOverrides map[s
 	r.agents[cacheKey] = &agentEntry{agent: ag, cachedAt: time.Now()}
 	r.mu.Unlock()
 	return ag, nil
+}
+
+// agentCacheKey builds a tenant-scoped cache key for the agent router.
+func agentCacheKey(ctx context.Context, agentID string) string {
+	tid := store.TenantIDFromContext(ctx)
+	if tid == uuid.Nil {
+		return agentID
+	}
+	return tid.String() + ":" + agentID
 }
 
 // Remove removes an agent from the router.

@@ -38,8 +38,9 @@
     "activity": "活动日志",
     "projects": "项目",
     "cliCredentials": "CLI 凭证",
-    "apiKeys": "API 密钥",
+    "apiKeys": "API Keys",
     "apiDocs": "API 文档",
-    "packages": "软件包"
+    "packages": "软件包",
+    "tenants": "租户"
   }
 }

@@ -40,6 +40,7 @@
     "cliCredentials": "CLI Credentials",
     "apiKeys": "API Keys",
     "apiDocs": "API Docs",
-    "packages": "Packages"
+    "packages": "Packages",
+    "tenants": "Tenants"
   }
 }

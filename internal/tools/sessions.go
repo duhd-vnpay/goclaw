@@ -59,7 +59,7 @@ func (t *SessionsListTool) Execute(ctx context.Context, args map[string]any) *Re
 	}
 
 	agentID := resolveAgentIDString(ctx)
-	sessions := t.sessions.List(agentID)
+	sessions := t.sessions.List(ctx, agentID)
 
 	// Filter by active_minutes
 	if activeMinutes > 0 {
@@ -156,7 +156,7 @@ func (t *SessionStatusTool) Execute(ctx context.Context, args map[string]any) *R
 		return ErrorResult("session_key is required (could not detect current session)")
 	}
 
-	data := t.sessions.GetOrCreate(sessionKey)
+	data := t.sessions.GetOrCreate(ctx, sessionKey)
 
 	var lines []string
 	lines = append(lines, fmt.Sprintf("Session: %s", data.Key))

@@ -425,6 +425,7 @@ func (p *OpenAIProvider) doRequest(ctx context.Context, body any) (io.ReadCloser
 		return nil, fmt.Errorf("%s: marshal request: %w", p.name, err)
 	}
 
+
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.apiBase+p.chatPath, bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("%s: create request: %w", p.name, err)

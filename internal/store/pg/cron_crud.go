@@ -156,10 +156,67 @@ func (s *PGCronStore) EnableJob(jobID string, enabled bool) error {
 	if err != nil {
 		return fmt.Errorf("invalid job ID: %s", jobID)
 	}
-	_, err = s.db.Exec("UPDATE cron_jobs SET enabled = $1, updated_at = $2 WHERE id = $3", enabled, time.Now(), id)
+
+	now := time.Now()
+
+	if !enabled {
+		// Disable: clear next_run_at so GetDueJobs skips it immediately.
+		_, err = s.db.Exec(
+			"UPDATE cron_jobs SET enabled = false, next_run_at = NULL, updated_at = $1 WHERE id = $2",
+			now, id,
+		)
+		if err != nil {
+			return err
+		}
+		s.mu.Lock()
+		s.cacheLoaded = false
+		s.mu.Unlock()
+		return nil
+	}
+
+	// Enable: read the schedule fields so we can compute next_run_at inline,
+	// matching the same logic used at AddJob and recomputeStaleJobs.
+	var scheduleKind string
+	var cronExpr, tz *string
+	var runAt *time.Time
+	var intervalMS *int64
+	row := s.db.QueryRow(
+		`SELECT schedule_kind, cron_expression, run_at, timezone, interval_ms
+		 FROM cron_jobs WHERE id = $1`, id,
+	)
+	if err = row.Scan(&scheduleKind, &cronExpr, &runAt, &tz, &intervalMS); err != nil {
+		return fmt.Errorf("load job schedule: %w", err)
+	}
+
+	schedule := store.CronSchedule{Kind: scheduleKind}
+	if cronExpr != nil {
+		schedule.Expr = *cronExpr
+	}
+	if runAt != nil {
+		ms := runAt.UnixMilli()
+		schedule.AtMS = &ms
+	}
+	if intervalMS != nil {
+		schedule.EveryMS = intervalMS
+	}
+	if tz != nil {
+		schedule.TZ = *tz
+	}
+
+	s.mu.Lock()
+	defaultTZ := s.defaultTZ
+	s.mu.Unlock()
+
+	next := computeNextRun(&schedule, now, defaultTZ)
+	_, err = s.db.Exec(
+		"UPDATE cron_jobs SET enabled = true, next_run_at = $1, updated_at = $2 WHERE id = $3",
+		next, now, id,
+	)
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
 	s.cacheLoaded = false
+	s.mu.Unlock()
 	return nil
 }

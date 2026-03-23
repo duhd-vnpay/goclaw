@@ -424,7 +424,7 @@ func (p *OpenAIProvider) doRequest(ctx context.Context, body any) (io.ReadCloser
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal request: %w", p.name, err)
 	}
-
+	data = sanitizeJSONSurrogates(data)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.apiBase+p.chatPath, bytes.NewReader(data))
 	if err != nil {

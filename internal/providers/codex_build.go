@@ -133,6 +133,7 @@ func (p *CodexProvider) doRequest(ctx context.Context, body any) (io.ReadCloser,
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal request: %w", p.name, err)
 	}
+	data = sanitizeJSONSurrogates(data)
 
 	endpoint := p.apiBase + "/codex/responses"
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(data))

@@ -104,6 +104,7 @@ func (p *AnthropicProvider) doRequest(ctx context.Context, body any) (io.ReadClo
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
+	data = sanitizeJSONSurrogates(data)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/messages", bytes.NewReader(data))
 	if err != nil {

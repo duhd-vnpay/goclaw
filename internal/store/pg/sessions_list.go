@@ -282,14 +282,23 @@ func (s *PGSessionStore) Save(ctx context.Context, key string) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE sessions SET
+		`INSERT INTO sessions (
+			session_key, tenant_id, messages, summary, model, provider, channel,
+			input_tokens, output_tokens, compaction_count,
+			memory_flush_compaction_count, memory_flush_at,
+			label, spawned_by, spawn_depth,
+			agent_id, user_id, metadata, created_at, updated_at, team_id
+		 ) VALUES (
+			$19, $20, $1, $2, $3, $4, $5,
+			$6, $7, $8, $9, $10,
+			$11, $12, $13, $14, $15, $16, $17, $17, $18
+		 ) ON CONFLICT (tenant_id, session_key) DO UPDATE SET
 			messages = $1, summary = $2, model = $3, provider = $4, channel = $5,
 			input_tokens = $6, output_tokens = $7, compaction_count = $8,
 			memory_flush_compaction_count = $9, memory_flush_at = $10,
 			label = $11, spawned_by = $12, spawn_depth = $13,
 			agent_id = $14, user_id = $15, metadata = $16, updated_at = $17,
-			team_id = $18
-		 WHERE session_key = $19 AND tenant_id = $20`,
+			team_id = $18`,
 		msgsJSON, nilStr(snapshot.Summary), nilStr(snapshot.Model), nilStr(snapshot.Provider), nilStr(snapshot.Channel),
 		snapshot.InputTokens, snapshot.OutputTokens, snapshot.CompactionCount,
 		snapshot.MemoryFlushCompactionCount, snapshot.MemoryFlushAt,

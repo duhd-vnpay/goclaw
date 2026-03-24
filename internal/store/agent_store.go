@@ -316,6 +316,7 @@ type AgentStore interface {
 	Create(ctx context.Context, agent *AgentData) error
 	GetByKey(ctx context.Context, agentKey string) (*AgentData, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*AgentData, error)
+	GetByIDUnscoped(ctx context.Context, id uuid.UUID) (*AgentData, error)
 	GetByKeys(ctx context.Context, keys []string) ([]AgentData, error)
 	GetByIDs(ctx context.Context, ids []uuid.UUID) ([]AgentData, error)
 	Update(ctx context.Context, id uuid.UUID, updates map[string]any) error
@@ -333,6 +334,10 @@ type AgentStore interface {
 	// Agent-level context files
 	GetAgentContextFiles(ctx context.Context, agentID uuid.UUID) ([]AgentContextFileData, error)
 	SetAgentContextFile(ctx context.Context, agentID uuid.UUID, fileName, content string) error
+
+	// Propagate agent-level file content to all existing user instances that have this file.
+	// Returns count of updated user rows.
+	PropagateContextFile(ctx context.Context, agentID uuid.UUID, fileName string) (int, error)
 
 	// Per-user context files + overrides
 	GetUserContextFiles(ctx context.Context, agentID uuid.UUID, userID string) ([]UserContextFileData, error)

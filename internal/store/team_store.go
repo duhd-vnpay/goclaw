@@ -197,6 +197,7 @@ type TeamStore interface {
 	// Team CRUD
 	CreateTeam(ctx context.Context, team *TeamData) error
 	GetTeam(ctx context.Context, teamID uuid.UUID) (*TeamData, error)
+	GetTeamUnscoped(ctx context.Context, id uuid.UUID) (*TeamData, error)
 	UpdateTeam(ctx context.Context, teamID uuid.UUID, updates map[string]any) error
 	DeleteTeam(ctx context.Context, teamID uuid.UUID) error
 	ListTeams(ctx context.Context) ([]TeamData, error)
@@ -324,6 +325,10 @@ type TeamStore interface {
 	ListRecoverableTasks(ctx context.Context, teamID uuid.UUID) ([]TeamTaskData, error)
 	// MarkAllStaleTasks sets pending tasks older than olderThan to stale status across all v2 active teams.
 	MarkAllStaleTasks(ctx context.Context, olderThan time.Time) ([]RecoveredTaskInfo, error)
+	// MarkInReviewStaleTasks sets in_review tasks older than olderThan to stale across all v2 active teams.
+	MarkInReviewStaleTasks(ctx context.Context, olderThan time.Time) ([]RecoveredTaskInfo, error)
+	// FixOrphanedBlockedTasks unblocks blocked tasks where all blockers reached terminal status.
+	FixOrphanedBlockedTasks(ctx context.Context) ([]RecoveredTaskInfo, error)
 	// ResetTaskStatus resets a stale or failed task back to pending for retry.
 	ResetTaskStatus(ctx context.Context, taskID, teamID uuid.UUID) error
 

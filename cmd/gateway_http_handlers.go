@@ -27,37 +27,40 @@ func wireHTTP(stores *store.Stores, token, defaultWorkspace, dataDir, bundledSki
 		if providerReg != nil {
 			summoner = httpapi.NewAgentSummoner(stores.Agents, providerReg, msgBus)
 		}
-		agentsH = httpapi.NewAgentsHandler(stores.Agents, token, defaultWorkspace, msgBus, summoner, isOwner)
+		agentsH = httpapi.NewAgentsHandler(stores.Agents, defaultWorkspace, msgBus, summoner, isOwner)
 	}
 
 	if stores != nil && stores.Skills != nil {
 		if pgSkills, ok := stores.Skills.(*pg.PGSkillStore); ok {
 			dirs := pgSkills.Dirs()
 			if len(dirs) > 0 {
-				skillsH = httpapi.NewSkillsHandler(pgSkills, dirs[0], dataDir, bundledSkillsDir, token, msgBus)
+				skillsH = httpapi.NewSkillsHandler(pgSkills, dirs[0], dataDir, bundledSkillsDir, msgBus)
 			}
 		}
 	}
 
 	if stores != nil && stores.Tracing != nil {
-		tracesH = httpapi.NewTracesHandler(stores.Tracing, token)
+		tracesH = httpapi.NewTracesHandler(stores.Tracing)
 	}
 
 	if stores != nil && stores.MCP != nil {
-		mcpH = httpapi.NewMCPHandler(stores.MCP, token, msgBus, mcpToolLister)
+		mcpH = httpapi.NewMCPHandler(stores.MCP, msgBus, mcpToolLister)
 	}
 	var mcpUserCredsH *httpapi.MCPUserCredentialsHandler
 	if stores != nil && stores.MCP != nil {
-		mcpUserCredsH = httpapi.NewMCPUserCredentialsHandler(stores.MCP, token)
+		mcpUserCredsH = httpapi.NewMCPUserCredentialsHandler(stores.MCP, stores.Tenants)
 	}
 
 	if stores != nil && stores.ChannelInstances != nil {
-		channelInstancesH = httpapi.NewChannelInstancesHandler(stores.ChannelInstances, stores.Agents, stores.ConfigPermissions, stores.Contacts, stores.Tenants, token, msgBus)
+		channelInstancesH = httpapi.NewChannelInstancesHandler(stores.ChannelInstances, stores.Agents, stores.ConfigPermissions, stores.Contacts, stores.Tenants, msgBus)
 	}
 
 	if stores != nil && stores.Providers != nil {
-		providersH = httpapi.NewProvidersHandler(stores.Providers, stores.ConfigSecrets, token, providerReg, gatewayAddr)
+		providersH = httpapi.NewProvidersHandler(stores.Providers, stores.ConfigSecrets, providerReg, gatewayAddr)
 		providersH.SetMessageBus(msgBus)
+		if stores.SystemConfigs != nil {
+			providersH.SetSystemConfigStore(stores.SystemConfigs)
+		}
 		if stores.MCP != nil {
 			providersH.SetMCPServerLookup(buildMCPServerLookup(stores.MCP))
 		}
@@ -66,15 +69,15 @@ func wireHTTP(stores *store.Stores, token, defaultWorkspace, dataDir, bundledSki
 	var teamEventsH *httpapi.TeamEventsHandler
 
 	if stores != nil && stores.Teams != nil {
-		teamEventsH = httpapi.NewTeamEventsHandler(stores.Teams, token)
+		teamEventsH = httpapi.NewTeamEventsHandler(stores.Teams)
 	}
 
 	if stores != nil && stores.BuiltinTools != nil {
-		builtinToolsH = httpapi.NewBuiltinToolsHandler(stores.BuiltinTools, stores.BuiltinToolTenantCfgs, token, msgBus)
+		builtinToolsH = httpapi.NewBuiltinToolsHandler(stores.BuiltinTools, stores.BuiltinToolTenantCfgs, msgBus)
 	}
 
 	if stores != nil && stores.PendingMessages != nil {
-		pendingMessagesH = httpapi.NewPendingMessagesHandler(stores.PendingMessages, stores.Agents, token, providerReg)
+		pendingMessagesH = httpapi.NewPendingMessagesHandler(stores.PendingMessages, stores.Agents, providerReg)
 	}
 
 	if stores != nil && stores.Projects != nil {
@@ -82,7 +85,7 @@ func wireHTTP(stores *store.Stores, token, defaultWorkspace, dataDir, bundledSki
 	}
 
 	if stores != nil && stores.SecureCLI != nil {
-		secureCLIH = httpapi.NewSecureCLIHandler(stores.SecureCLI, token, msgBus)
+		secureCLIH = httpapi.NewSecureCLIHandler(stores.SecureCLI, msgBus)
 	}
 
 	return agentsH, skillsH, tracesH, mcpH, channelInstancesH, providersH, builtinToolsH, pendingMessagesH, projectsH, teamEventsH, secureCLIH, mcpUserCredsH

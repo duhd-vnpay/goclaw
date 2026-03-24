@@ -73,12 +73,26 @@ func ResolveMediaProviderChain(
 		return []MediaProviderEntry{entry}
 	}
 
-	// 2. Parse from builtin_tools.settings
+	// 2. Parse from builtin_tools.settings, then filter by registry availability
 	if settings := BuiltinToolSettingsFromCtx(ctx); settings != nil {
 		if raw, ok := settings[toolName]; ok && len(raw) > 0 {
 			chain := parseChainSettings(raw, defaultModels)
+			var available []MediaProviderEntry
+			for _, e := range chain {
+				if _, err := registry.Get(ctx, e.Provider); err == nil {
+					available = append(available, e)
+				} else {
+					slog.Warn("media_chain: configured provider not registered, skipping",
+						"tool", toolName, "provider", e.Provider)
+				}
+			}
+			if len(available) > 0 {
+				return available
+			}
 			if len(chain) > 0 {
-				return chain
+				// All configured providers unavailable — fall through to default chain
+				slog.Warn("media_chain: all configured providers unavailable, falling back to defaults",
+					"tool", toolName)
 			}
 		}
 	}
@@ -113,24 +127,45 @@ func parseChainSettings(raw []byte, defaultModels map[string]string) []MediaProv
 	return result
 }
 
-// buildDefaultChain creates a chain from the hardcoded priority list,
-// including only providers that are currently registered.
+// buildDefaultChain creates a chain from all currently registered providers,
+// filtered to those with vision-capable types (present in defaultModels),
+// ordered by the priority list of provider types.
 func buildDefaultChain(
 	ctx context.Context,
 	priority []string,
 	defaultModels map[string]string,
 	registry *providers.Registry,
 ) []MediaProviderEntry {
+	// Group registered providers by their resolved media type.
+	byType := make(map[string][]MediaProviderEntry)
+	for _, name := range registry.List(ctx) {
+		p, err := registry.Get(ctx, name)
+		if err != nil {
+			continue
+		}
+		pType := ResolveProviderType(p)
+		model, ok := defaultModels[pType]
+		if !ok {
+			continue // provider type does not support this media tool
+		}
+		entry := MediaProviderEntry{
+			Provider: name,
+			Model:    model,
+			Enabled:  true,
+		}
+		entry.applyDefaults()
+		byType[pType] = append(byType[pType], entry)
+	}
+
+	// Return providers ordered by the priority type list.
 	var chain []MediaProviderEntry
-	for _, name := range priority {
-		if _, err := registry.Get(ctx, name); err == nil {
-			entry := MediaProviderEntry{
-				Provider: name,
-				Model:    defaultModels[name],
-				Enabled:  true,
+	seen := make(map[string]bool)
+	for _, pType := range priority {
+		for _, entry := range byType[pType] {
+			if !seen[entry.Provider] {
+				seen[entry.Provider] = true
+				chain = append(chain, entry)
 			}
-			entry.applyDefaults()
-			chain = append(chain, entry)
 		}
 	}
 	return chain

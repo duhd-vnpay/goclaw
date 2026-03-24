@@ -50,11 +50,9 @@ interface Props {
 
 export function ApiKeyCreateDialog({ open, onOpenChange, onCreate }: Props) {
   const { t } = useTranslation("api-keys");
-  const { isOwner, tenants, currentTenantId } = useTenants();
+  const { isOwner, currentTenantId, currentTenantName } = useTenants();
 
-  const defaultTenant = isOwner
-    ? currentTenantId || SYSTEM_TENANT
-    : SYSTEM_TENANT;
+  const defaultTenant = currentTenantId || SYSTEM_TENANT;
 
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>([]);
@@ -132,11 +130,11 @@ export function ApiKeyCreateDialog({ open, onOpenChange, onCreate }: Props) {
                     <SelectItem value={SYSTEM_TENANT}>
                       {t("form.tenantSystem")}
                     </SelectItem>
-                    {tenants.map((tenant) => (
-                      <SelectItem key={tenant.id} value={tenant.id}>
-                        {tenant.name}
+                    {currentTenantId && (
+                      <SelectItem value={currentTenantId}>
+                        {currentTenantName || currentTenantId}
                       </SelectItem>
-                    ))}
+                    )}
                   </SelectContent>
                 </Select>
               </div>

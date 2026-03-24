@@ -35,11 +35,11 @@ func (m *mockAgent) Provider() providers.Provider                            { r
 
 func TestGetForProject_EmptyProjectFallsBackToGet(t *testing.T) {
 	r := NewRouter()
-	r.SetResolver(func(agentKey string, opts ResolveOpts) (Agent, error) {
+	r.SetResolver(func(_ context.Context, agentKey string, opts ResolveOpts) (Agent, error) {
 		return &mockAgent{id: agentKey}, nil
 	})
 
-	ag, err := r.GetForProject("sdlc-assistant", "", nil)
+	ag, err := r.GetForProject(context.Background(), "sdlc-assistant", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -52,17 +52,17 @@ func TestGetForProject_DifferentProjectsSeparateCache(t *testing.T) {
 	callCount := 0
 
 	r := NewRouter()
-	r.SetResolver(func(agentKey string, opts ResolveOpts) (Agent, error) {
+	r.SetResolver(func(_ context.Context, agentKey string, opts ResolveOpts) (Agent, error) {
 		callCount++
 		return &mockAgent{id: agentKey + ":" + opts.ProjectID}, nil
 	})
 
-	ag1, err := r.GetForProject("sdlc-assistant", "uuid-xpos", nil)
+	ag1, err := r.GetForProject(context.Background(), "sdlc-assistant", "uuid-xpos", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	ag2, err := r.GetForProject("sdlc-assistant", "uuid-payment", nil)
+	ag2, err := r.GetForProject(context.Background(), "sdlc-assistant", "uuid-payment", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,13 +79,13 @@ func TestGetForProject_SameProjectUsesCache(t *testing.T) {
 	callCount := 0
 
 	r := NewRouter()
-	r.SetResolver(func(agentKey string, opts ResolveOpts) (Agent, error) {
+	r.SetResolver(func(_ context.Context, agentKey string, opts ResolveOpts) (Agent, error) {
 		callCount++
 		return &mockAgent{id: agentKey}, nil
 	})
 
-	_, _ = r.GetForProject("sdlc-assistant", "uuid-xpos", nil)
-	_, _ = r.GetForProject("sdlc-assistant", "uuid-xpos", nil)
+	_, _ = r.GetForProject(context.Background(), "sdlc-assistant", "uuid-xpos", nil)
+	_, _ = r.GetForProject(context.Background(), "sdlc-assistant", "uuid-xpos", nil)
 
 	if callCount != 1 {
 		t.Errorf("resolver should be called once (cached), got %d", callCount)
@@ -96,7 +96,7 @@ func TestGetForProject_NoProjectAndWithProject_SeparateCache(t *testing.T) {
 	callCount := 0
 
 	r := NewRouter()
-	r.SetResolver(func(agentKey string, opts ResolveOpts) (Agent, error) {
+	r.SetResolver(func(_ context.Context, agentKey string, opts ResolveOpts) (Agent, error) {
 		callCount++
 		suffix := ""
 		if opts.ProjectID != "" {
@@ -105,8 +105,8 @@ func TestGetForProject_NoProjectAndWithProject_SeparateCache(t *testing.T) {
 		return &mockAgent{id: agentKey + suffix}, nil
 	})
 
-	ag1, _ := r.GetForProject("sdlc-assistant", "", nil)
-	ag2, _ := r.GetForProject("sdlc-assistant", "uuid-xpos", nil)
+	ag1, _ := r.GetForProject(context.Background(), "sdlc-assistant", "", nil)
+	ag2, _ := r.GetForProject(context.Background(), "sdlc-assistant", "uuid-xpos", nil)
 
 	if ag1.ID() == ag2.ID() {
 		t.Error("no-project and with-project should get different agents")

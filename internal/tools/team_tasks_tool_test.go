@@ -17,8 +17,9 @@ import (
 
 type mockTeamStore struct {
 	store.TeamStore // embed to satisfy full interface
-	team            *store.TeamData
-	createdTask     *store.TeamTaskData
+	team        *store.TeamData
+	members     []store.TeamMemberData
+	createdTask *store.TeamTaskData
 }
 
 func (m *mockTeamStore) GetTeamForAgent(_ context.Context, _ uuid.UUID) (*store.TeamData, error) {
@@ -26,6 +27,14 @@ func (m *mockTeamStore) GetTeamForAgent(_ context.Context, _ uuid.UUID) (*store.
 		return nil, nil
 	}
 	return m.team, nil
+}
+
+func (m *mockTeamStore) ListMembers(_ context.Context, _ uuid.UUID) ([]store.TeamMemberData, error) {
+	return m.members, nil
+}
+
+func (m *mockTeamStore) AssignTask(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ uuid.UUID) error {
+	return nil
 }
 
 func (m *mockTeamStore) CreateTask(_ context.Context, task *store.TeamTaskData) error {
@@ -37,12 +46,25 @@ func (m *mockTeamStore) CreateTask(_ context.Context, task *store.TeamTaskData) 
 
 type mockAgentStore struct {
 	store.AgentStore
+	agents map[string]*store.AgentData // key → agent
 }
 
-func (m *mockAgentStore) GetByKey(_ context.Context, _ string) (*store.AgentData, error) {
+func (m *mockAgentStore) GetByKey(_ context.Context, key string) (*store.AgentData, error) {
+	if m.agents != nil {
+		if ag, ok := m.agents[key]; ok {
+			return ag, nil
+		}
+	}
 	return nil, fmt.Errorf("not found")
 }
-func (m *mockAgentStore) GetByID(_ context.Context, _ uuid.UUID) (*store.AgentData, error) {
+func (m *mockAgentStore) GetByID(_ context.Context, id uuid.UUID) (*store.AgentData, error) {
+	if m.agents != nil {
+		for _, ag := range m.agents {
+			if ag.ID == id {
+				return ag, nil
+			}
+		}
+	}
 	return nil, fmt.Errorf("not found")
 }
 
@@ -73,16 +95,24 @@ func makeCtx(agentID uuid.UUID, userID, senderID, channel string) context.Contex
 
 func TestExecuteCreate_SenderIDTracking(t *testing.T) {
 	leadID := uuid.New()
+	memberID := uuid.New()
 	team := makeTestTeam(leadID, nil)
 
-	ts := &mockTeamStore{team: team}
-	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil, "")
+	ts := &mockTeamStore{
+		team:    team,
+		members: []store.TeamMemberData{{AgentID: memberID, Role: "member"}},
+	}
+	as := &mockAgentStore{agents: map[string]*store.AgentData{
+		"test-member": {BaseModel: store.BaseModel{ID: memberID}, AgentKey: "test-member"},
+	}}
+	mgr := NewTeamToolManager(ts, as, nil, "")
 	tool := NewTeamTasksTool(mgr)
 
 	ctx := makeCtx(leadID, "group:telegram:chat123", "user-456", "telegram")
 	args := map[string]any{
-		"action":  "create",
-		"subject": "Test task with sender_id",
+		"action":   "create",
+		"subject":  "Test task with sender_id",
+		"assignee": "test-member",
 	}
 
 	result := tool.executeCreate(ctx, args)
@@ -94,32 +124,37 @@ func TestExecuteCreate_SenderIDTracking(t *testing.T) {
 		t.Fatal("expected task to be created")
 	}
 
-	meta := ts.createdTask.Metadata
-	if meta == nil {
-		t.Fatal("expected metadata to be non-nil")
+	// Channel is stored directly on the task (not in metadata)
+	if ts.createdTask.Channel != "telegram" {
+		t.Errorf("expected task.Channel=telegram, got %v", ts.createdTask.Channel)
 	}
-
-	if sid, ok := meta["sender_id"].(string); !ok || sid != "user-456" {
-		t.Errorf("expected sender_id=user-456, got %v", meta["sender_id"])
-	}
-	if ch, ok := meta["channel"].(string); !ok || ch != "telegram" {
-		t.Errorf("expected channel=telegram, got %v", meta["channel"])
+	// UserID propagated from context
+	if ts.createdTask.UserID != "group:telegram:chat123" {
+		t.Errorf("expected task.UserID=group:telegram:chat123, got %v", ts.createdTask.UserID)
 	}
 }
 
 func TestExecuteCreate_NoSenderID(t *testing.T) {
 	leadID := uuid.New()
+	memberID := uuid.New()
 	team := makeTestTeam(leadID, nil)
 
-	ts := &mockTeamStore{team: team}
-	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil, "")
+	ts := &mockTeamStore{
+		team:    team,
+		members: []store.TeamMemberData{{AgentID: memberID, Role: "member"}},
+	}
+	as := &mockAgentStore{agents: map[string]*store.AgentData{
+		"test-member": {BaseModel: store.BaseModel{ID: memberID}, AgentKey: "test-member"},
+	}}
+	mgr := NewTeamToolManager(ts, as, nil, "")
 	tool := NewTeamTasksTool(mgr)
 
 	// No sender ID in context (delegate channel, internal agent-to-agent)
 	ctx := makeCtx(leadID, "delegate:system", "", "delegate")
 	args := map[string]any{
-		"action":  "create",
-		"subject": "Internal task",
+		"action":   "create",
+		"subject":  "Internal task",
+		"assignee": "test-member",
 	}
 
 	result := tool.executeCreate(ctx, args)
@@ -127,18 +162,9 @@ func TestExecuteCreate_NoSenderID(t *testing.T) {
 		t.Fatalf("expected success, got error: %s", result.ForLLM)
 	}
 
-	meta := ts.createdTask.Metadata
-	if meta == nil {
-		t.Fatal("expected metadata to be non-nil")
-	}
-
-	// sender_id should NOT be present (empty sender)
-	if _, ok := meta["sender_id"]; ok {
-		t.Error("expected no sender_id for delegate channel")
-	}
-	// channel should still be present
-	if ch, ok := meta["channel"].(string); !ok || ch != "delegate" {
-		t.Errorf("expected channel=delegate, got %v", meta["channel"])
+	// Channel stored on task field
+	if ts.createdTask.Channel != "delegate" {
+		t.Errorf("expected task.Channel=delegate, got %v", ts.createdTask.Channel)
 	}
 }
 
@@ -153,7 +179,7 @@ func TestExecuteCreate_RequireLead_Rejected(t *testing.T) {
 	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil, "")
 	tool := NewTeamTasksTool(mgr)
 
-	// Non-lead agent trying to create task via telegram
+	// Non-lead agent trying to create task via telegram (member_requests not enabled)
 	ctx := makeCtx(nonLeadID, "group:telegram:chat123", "user-789", "telegram")
 	args := map[string]any{
 		"action":  "create",
@@ -164,30 +190,38 @@ func TestExecuteCreate_RequireLead_Rejected(t *testing.T) {
 	if !result.IsError {
 		t.Fatal("expected error for non-lead agent")
 	}
-	if !strings.Contains(result.ForLLM, "only the team lead") {
-		t.Errorf("expected 'only the team lead' error, got: %s", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "Members cannot create tasks") {
+		t.Errorf("expected 'Members cannot create tasks' error, got: %s", result.ForLLM)
 	}
 }
 
 func TestExecuteCreate_RequireLead_DelegateBypass(t *testing.T) {
 	leadID := uuid.New()
 	nonLeadID := uuid.New()
+	memberID := uuid.New()
 	team := makeTestTeam(leadID, nil)
 
-	ts := &mockTeamStore{team: team}
-	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil, "")
+	ts := &mockTeamStore{
+		team:    team,
+		members: []store.TeamMemberData{{AgentID: memberID, Role: "member"}},
+	}
+	as := &mockAgentStore{agents: map[string]*store.AgentData{
+		"test-member": {BaseModel: store.BaseModel{ID: memberID}, AgentKey: "test-member"},
+	}}
+	mgr := NewTeamToolManager(ts, as, nil, "")
 	tool := NewTeamTasksTool(mgr)
 
-	// Non-lead agent via delegate channel (internal agent-to-agent) should bypass
-	ctx := makeCtx(nonLeadID, "delegate:system", "", "delegate")
+	// Non-lead agent via teammate channel (internal agent-to-agent) should bypass — acts as lead
+	ctx := makeCtx(nonLeadID, "delegate:system", "", ChannelTeammate)
 	args := map[string]any{
-		"action":  "create",
-		"subject": "Delegated task",
+		"action":   "create",
+		"subject":  "Delegated task",
+		"assignee": "test-member",
 	}
 
 	result := tool.executeCreate(ctx, args)
 	if result.IsError {
-		t.Fatalf("delegate channel should bypass requireLead, got: %s", result.ForLLM)
+		t.Fatalf("teammate channel should bypass requireLead, got: %s", result.ForLLM)
 	}
 }
 
@@ -291,7 +325,7 @@ func TestRequireLead_SystemBypass(t *testing.T) {
 	team := makeTestTeam(leadID, nil)
 	mgr := NewTeamToolManager(&mockTeamStore{}, &mockAgentStore{}, nil, "")
 
-	for _, ch := range []string{"delegate", "system"} {
+	for _, ch := range []string{ChannelTeammate, ChannelSystem} {
 		ctx := makeCtx(otherID, "user1", "", ch)
 		if err := mgr.requireLead(ctx, team, otherID); err != nil {
 			t.Errorf("channel %q should bypass requireLead: %v", ch, err)

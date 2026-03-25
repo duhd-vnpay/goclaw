@@ -1,6 +1,7 @@
 package http
 
 import (
+	"fmt"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -18,7 +19,7 @@ import (
 // Admin (gateway token) callers get unrestricted access; non-admin callers are
 // restricted to the workspace-scoped allowed prefixes via SafeResolvePath.
 // When an exact path is not found, falls back to searching the workspace for
-// generated files by basename (goclaw_gen_* filenames are globally unique).
+// generated files by basename (media filenames include timestamps and are globally unique).
 type FilesHandler struct {
 	workspace string // workspace root for fallback file search
 	dataDir   string // data directory root for tenant path validation
@@ -118,9 +119,13 @@ func (h *FilesHandler) handleServe(w http.ResponseWriter, r *http.Request) {
 	info, err := os.Stat(absPath)
 	if err != nil || info.IsDir() {
 		// Fallback: search workspace for file by basename (handles LLM-hallucinated paths).
-		// Generated filenames (goclaw_gen_*) include nanosecond timestamps and are globally unique.
-		// Workspace scoped to tenant to prevent cross-tenant file discovery.
+		// Generated media filenames include timestamps and are globally unique.
+		// For ft= signed requests, search from workspace root (no tenant context available);
+		// for bearer requests, scope to tenant workspace.
 		ws := h.tenantWorkspace(r)
+		if r.URL.Query().Get("ft") != "" {
+			ws = h.workspace // ft= auth has no tenant context; path is cryptographically bound
+		}
 		if resolved := h.findInWorkspace(ws, filepath.Base(absPath)); resolved != "" {
 			absPath = resolved
 			info, _ = os.Stat(absPath)
@@ -139,6 +144,11 @@ func (h *FilesHandler) handleServe(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+
+	// Trigger browser download with original filename when ?download=true
+	if r.URL.Query().Get("download") == "true" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(absPath)))
+	}
 
 	http.ServeFile(w, r, absPath)
 }

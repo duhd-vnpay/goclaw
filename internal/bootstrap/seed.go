@@ -4,7 +4,7 @@ import (
 	"embed"
 	"log/slog"
 	"os"
-	"path/filepath"
+	"path"
 )
 
 //go:embed templates/*.md
@@ -22,7 +22,7 @@ var templateFiles = []string{
 
 // ReadTemplate returns the content of an embedded template file.
 func ReadTemplate(name string) (string, error) {
-	content, err := templateFS.ReadFile(filepath.Join("templates", name))
+	content, err := templateFS.ReadFile(path.Join("templates", name))
 	if err != nil {
 		return "", err
 	}
@@ -41,7 +41,7 @@ func EnsureWorkspaceFiles(workspaceDir string) ([]string, error) {
 	var created []string
 
 	// Check if this is a brand-new workspace (no AGENTS.md yet)
-	_, agentsErr := os.Stat(filepath.Join(workspaceDir, AgentsFile))
+	_, agentsErr := os.Stat(path.Join(workspaceDir, AgentsFile))
 	isBrandNew := os.IsNotExist(agentsErr)
 
 	// Seed standard template files
@@ -72,7 +72,7 @@ func EnsureWorkspaceFiles(workspaceDir string) ([]string, error) {
 // seedTemplate writes a template file to the workspace if it doesn't exist.
 // Returns true if the file was created, false if it already exists.
 func seedTemplate(workspaceDir, name string) (bool, error) {
-	dstPath := filepath.Join(workspaceDir, name)
+	dstPath := path.Join(workspaceDir, name)
 
 	// Only create if file doesn't exist (O_EXCL)
 	f, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
@@ -85,7 +85,7 @@ func seedTemplate(workspaceDir, name string) (bool, error) {
 	defer f.Close()
 
 	// Read embedded template
-	content, err := templateFS.ReadFile(filepath.Join("templates", name))
+	content, err := templateFS.ReadFile(path.Join("templates", name))
 	if err != nil {
 		os.Remove(dstPath) // clean up empty file
 		return false, err

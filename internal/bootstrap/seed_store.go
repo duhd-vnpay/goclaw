@@ -3,7 +3,7 @@ package bootstrap
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
+	"path"
 
 	"github.com/google/uuid"
 
@@ -49,7 +49,7 @@ func SeedToStore(ctx context.Context, agentStore store.AgentStore, agentID uuid.
 			continue
 		}
 
-		content, err := templateFS.ReadFile(filepath.Join("templates", name))
+		content, err := templateFS.ReadFile(path.Join("templates", name))
 		if err != nil {
 			slog.Warn("bootstrap: failed to read embedded template", "file", name, "error", err)
 			continue
@@ -64,7 +64,7 @@ func SeedToStore(ctx context.Context, agentStore store.AgentStore, agentID uuid.
 	// Seed USER_PREDEFINED.md for predefined agents (agent-level, not in templateFiles).
 	// Provides baseline user-handling rules shared across all users.
 	if !hasContent[UserPredefinedFile] {
-		content, err := templateFS.ReadFile(filepath.Join("templates", UserPredefinedFile))
+		content, err := templateFS.ReadFile(path.Join("templates", UserPredefinedFile))
 		if err == nil {
 			if err := agentStore.SetAgentContextFile(ctx, agentID, UserPredefinedFile, string(content)); err != nil {
 				return seeded, err
@@ -169,7 +169,7 @@ func SeedUserFiles(ctx context.Context, agentStore store.AgentStore, agentID uui
 			templateName = "BOOTSTRAP_PREDEFINED.md"
 		}
 
-		content, err := templateFS.ReadFile(filepath.Join("templates", templateName))
+		content, err := templateFS.ReadFile(path.Join("templates", templateName))
 		if err != nil {
 			slog.Warn("bootstrap: failed to read embedded template for user seed", "file", name, "error", err)
 			continue

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -84,7 +85,10 @@ func (h *ProjectHandler) handleCreateProject(w http.ResponseWriter, r *http.Requ
 		Status      string     `json:"status"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidJSON)})
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":           i18n.T(locale, i18n.MsgInvalidJSON),
+			"expected_schema": `{"name":"...","slug":"...","channel_type":"telegram","chat_id":"...","description":"..."}`,
+		})
 		return
 	}
 
@@ -114,7 +118,19 @@ func (h *ProjectHandler) handleCreateProject(w http.ResponseWriter, r *http.Requ
 
 	if err := h.store.CreateProject(r.Context(), &project); err != nil {
 		slog.Error("projects.create", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		if strings.Contains(err.Error(), "projects_slug_key") {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "slug '" + payload.Slug + "' already exists — choose a different slug",
+			})
+			return
+		}
+		if strings.Contains(err.Error(), "projects_channel_type_chat_id_key") {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "a project is already linked to this channel/chat_id pair",
+			})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": i18n.T(locale, i18n.MsgInternalError, "failed to create project")})
 		return
 	}
 
@@ -167,7 +183,10 @@ func (h *ProjectHandler) handleUpdateProject(w http.ResponseWriter, r *http.Requ
 
 	var updates map[string]any
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&updates); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidJSON)})
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":           i18n.T(locale, i18n.MsgInvalidJSON),
+			"expected_schema": `{"name":"...","description":"...","status":"active"} — partial update, only include fields to change`,
+		})
 		return
 	}
 
@@ -240,7 +259,10 @@ func (h *ProjectHandler) handleSetMCPOverride(w http.ResponseWriter, r *http.Req
 
 	var envOverrides map[string]string
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&envOverrides); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidJSON)})
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":           i18n.T(locale, i18n.MsgInvalidJSON),
+			"expected_schema": `{"ENV_KEY":"value","ANOTHER_KEY":"value"} — flat key-value map of env var overrides`,
+		})
 		return
 	}
 

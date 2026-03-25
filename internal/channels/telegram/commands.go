@@ -85,6 +85,16 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 			"/writers — List file writers for this group\n" +
 			"/addwriter — Add a file writer (reply to their message)\n" +
 			"/removewriter — Remove a file writer (reply to their message)\n" +
+			"\n📌 Project commands (group chat only):\n" +
+			"/setup — Setup project workspace for this group\n" +
+			"/connect — Connect Jira/GitLab/Confluence\n" +
+			"/config — View/edit project config\n" +
+			"/monitor — Show project health now\n" +
+			"/enable_monitor — Enable project heartbeat\n" +
+			"/disable_monitor — Disable project heartbeat\n" +
+			"/report — Generate weekly report\n" +
+			"/retro — Sprint retrospective\n" +
+			"/pipeline — Run SDLC pipeline on a task\n" +
 			"\nJust send a message to chat with the AI."
 		msg := tu.Message(chatIDObj, helpText)
 		setThread(msg)

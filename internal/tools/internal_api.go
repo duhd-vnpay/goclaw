@@ -64,11 +64,37 @@ func (t *InternalAPITool) SetSettingsGetter(fn func(ctx context.Context, name st
 func (t *InternalAPITool) Name() string { return "internal_api" }
 
 func (t *InternalAPITool) Description() string {
-	return "Call GoClaw's project management API. Auth is handled automatically. " +
-		"Allowed: GET /v1/projects/by-chat (resolve project from channel/chat_id), " +
-		"POST /v1/projects (create project), " +
-		"PUT /v1/projects/{id}/mcp/{server} (set MCP overrides). " +
-		"Allowed routes are configurable via Admin → Builtin Tools → internal_api."
+	return `Call GoClaw's project management API. Auth is handled automatically.
+
+ENDPOINTS:
+
+1. GET /v1/projects/by-chat?channel_type=telegram&chat_id=-100123
+   → Returns project JSON or 404 if no project is linked to this chat.
+
+2. POST /v1/projects  (body required)
+   Body: {"name":"My Project","slug":"my-project","channel_type":"telegram","chat_id":"-100123"}
+   - name (required): display name
+   - slug (required): lowercase alphanumeric + hyphens, e.g. "my-project"
+   - channel_type: "telegram", "zalo_oa", "discord", etc.
+   - chat_id: the channel's chat/group ID as string
+   - description: optional text
+   → Returns 201 with created project, 409 if slug already exists.
+
+3. PUT /v1/projects/{id}  (body required)
+   Body: {"description":"updated desc","status":"active"}
+   - Partial update: only include fields to change (name, slug, description, status).
+   → Returns 200.
+
+4. PUT /v1/projects/{id}/mcp/{serverName}  (body required)
+   Body: {"GITLAB_TOKEN":"glpat-xxx","GITLAB_URL":"https://git.example.com"}
+   - Flat key-value map of environment variable overrides for the MCP server.
+   → Returns 200.
+
+5. GET /v1/projects  → List all projects.
+6. GET /v1/projects/{id}  → Get project by UUID.
+7. GET /v1/projects/{id}/mcp  → List MCP overrides for project.
+
+Allowed routes are configurable via Admin → Builtin Tools → internal_api.`
 }
 
 func (t *InternalAPITool) Parameters() map[string]any {
@@ -88,8 +114,11 @@ func (t *InternalAPITool) Parameters() map[string]any {
 - PUT  /v1/projects/{id}/mcp/{serverName}`,
 			},
 			"body": map[string]any{
-				"type":        "object",
-				"description": "JSON request body (for POST/PUT). Omit for GET.",
+				"type": "object",
+				"description": `JSON request body (for POST/PUT). Omit for GET.
+For POST /v1/projects: {"name":"...","slug":"...","channel_type":"telegram","chat_id":"...","description":"..."}
+For PUT /v1/projects/{id}: {"field":"value"} partial update map.
+For PUT /v1/projects/{id}/mcp/{server}: {"ENV_KEY":"value"} flat env var map.`,
 			},
 		},
 		"required": []string{"method", "path"},

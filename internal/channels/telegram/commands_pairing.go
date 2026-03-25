@@ -49,7 +49,10 @@ func (c *Channel) sendPairingReply(ctx context.Context, chatID int64, userID, us
 	} else {
 		c.pairingReplySent.Store(userID, time.Now())
 		slog.Info("telegram pairing reply sent",
-			"user_id", userID, "username", username, "code", code,
+			"user_id", userID, "username", username,
+		)
+		slog.Debug("telegram pairing code generated",
+			"user_id", userID, "code", code,
 		)
 	}
 }
@@ -88,7 +91,8 @@ func (c *Channel) sendGroupPairingReply(ctx context.Context, chatID int64, chatI
 		slog.Warn("failed to send group pairing reply", "chat_id", chatIDStr, "error", err)
 	} else {
 		c.pairingReplySent.Store(chatIDStr, time.Now())
-		slog.Info("telegram group pairing reply sent", "chat_id", chatIDStr, "code", code)
+		slog.Info("telegram group pairing reply sent", "chat_id", chatIDStr)
+		slog.Debug("telegram group pairing code generated", "chat_id", chatIDStr, "code", code)
 	}
 }
 
@@ -124,10 +128,18 @@ func (c *Channel) SendPairingApproved(ctx context.Context, chatID, botName strin
 	return err
 }
 
-// SyncMenuCommands registers bot commands with Telegram via setMyCommands.
+// SyncMenuCommands registers bot commands with Telegram via setMyCommands
+// for both private chats and group chats (so /setup etc. appear in group menus).
 func (c *Channel) SyncMenuCommands(ctx context.Context, commands []telego.BotCommand) error {
-	if err := c.bot.DeleteMyCommands(ctx, nil); err != nil {
-		slog.Debug("deleteMyCommands failed (may not exist)", "error", err)
+	// Clear existing commands for all scopes.
+	for _, scope := range []telego.BotCommandScope{
+		&telego.BotCommandScopeDefault{Type: telego.ScopeTypeDefault},
+		&telego.BotCommandScopeAllPrivateChats{Type: telego.ScopeTypeAllPrivateChats},
+		&telego.BotCommandScopeAllGroupChats{Type: telego.ScopeTypeAllGroupChats},
+	} {
+		if err := c.bot.DeleteMyCommands(ctx, &telego.DeleteMyCommandsParams{Scope: scope}); err != nil {
+			slog.Debug("deleteMyCommands failed (may not exist)", "scope", scope.ScopeType(), "error", err)
+		}
 	}
 
 	if len(commands) == 0 {
@@ -138,9 +150,21 @@ func (c *Channel) SyncMenuCommands(ctx context.Context, commands []telego.BotCom
 		commands = commands[:100]
 	}
 
-	return c.bot.SetMyCommands(ctx, &telego.SetMyCommandsParams{
-		Commands: commands,
-	})
+	// Register for all scopes: default (fallback), private chats, and group chats.
+	scopes := []telego.BotCommandScope{
+		&telego.BotCommandScopeDefault{Type: telego.ScopeTypeDefault},
+		&telego.BotCommandScopeAllPrivateChats{Type: telego.ScopeTypeAllPrivateChats},
+		&telego.BotCommandScopeAllGroupChats{Type: telego.ScopeTypeAllGroupChats},
+	}
+	for _, scope := range scopes {
+		if err := c.bot.SetMyCommands(ctx, &telego.SetMyCommandsParams{
+			Commands: commands,
+			Scope:    scope,
+		}); err != nil {
+			return fmt.Errorf("setMyCommands scope=%s: %w", scope.ScopeType(), err)
+		}
+	}
+	return nil
 }
 
 // DefaultMenuCommands returns the default bot menu commands.
@@ -157,5 +181,15 @@ func DefaultMenuCommands() []telego.BotCommand {
 		{Command: "writers", Description: "List file writers for this group"},
 		{Command: "addwriter", Description: "Add a file writer (reply to their message)"},
 		{Command: "removewriter", Description: "Remove a file writer (reply to their message)"},
+		// Project channel commands (handled by agent, not intercepted)
+		{Command: "setup", Description: "Setup project workspace for this group"},
+		{Command: "connect", Description: "Connect Jira/GitLab/Confluence"},
+		{Command: "config", Description: "View/edit project config"},
+		{Command: "monitor", Description: "Show project health status"},
+		{Command: "enable_monitor", Description: "Enable project heartbeat"},
+		{Command: "disable_monitor", Description: "Disable project heartbeat"},
+		{Command: "report", Description: "Generate weekly status report"},
+		{Command: "retro", Description: "Sprint retrospective"},
+		{Command: "pipeline", Description: "Run SDLC pipeline on a task"},
 	}
 }

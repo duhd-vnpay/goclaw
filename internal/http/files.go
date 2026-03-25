@@ -110,8 +110,12 @@ func (h *FilesHandler) handleServe(w http.ResponseWriter, r *http.Request) {
 	if err != nil || info.IsDir() {
 		// Fallback: search workspace for file by basename (handles LLM-hallucinated paths).
 		// Generated filenames (goclaw_gen_*) include nanosecond timestamps and are globally unique.
-		// Workspace scoped to tenant to prevent cross-tenant file discovery.
+		// For ft= signed requests, search from workspace root (no tenant context available);
+		// for bearer requests, scope to tenant workspace.
 		ws := h.tenantWorkspace(r)
+		if r.URL.Query().Get("ft") != "" {
+			ws = h.workspace // ft= auth has no tenant context; path is cryptographically bound
+		}
 		if resolved := h.findInWorkspace(ws, filepath.Base(absPath)); resolved != "" {
 			absPath = resolved
 			info, _ = os.Stat(absPath)

@@ -70,12 +70,21 @@ var fileURLRe = regexp.MustCompile(`(/v1/(?:files|media)/[^\s)"'<>]+)`)
 
 // SignFileURLs finds all /v1/files/ and /v1/media/ URLs in content and appends
 // a signed ?ft= token. Used at delivery time (WS events, HTTP responses) to avoid
-// persisting tokens in session messages. Strips any stale ?ft= tokens from legacy
-// data before re-signing with a fresh token.
+// persisting tokens in session messages. Also heals legacy data issues:
+//   - Strips stale ?ft= tokens and re-signs with fresh tokens
+//   - Fixes double /v1/files/v1/files/ prefix from old media mutation bug
+//   - Cleans ?ft= from markdown link display text [name?ft=xxx](url) → [name](url)
 func SignFileURLs(content, secret string) string {
 	if secret == "" || !strings.Contains(content, "/v1/") {
 		return content
 	}
+	// Heal legacy: deduplicate /v1/files/v1/files/ → /v1/files/ and /v1/media/v1/media/ → /v1/media/
+	content = strings.ReplaceAll(content, "/v1/files/v1/files/", "/v1/files/")
+	content = strings.ReplaceAll(content, "/v1/files/v1/media/", "/v1/media/")
+	content = strings.ReplaceAll(content, "/v1/media/v1/media/", "/v1/media/")
+	// Heal legacy: clean ?ft=... from markdown link display text [name?ft=xxx](...) → [name](...)
+	content = linkTextFtRe.ReplaceAllString(content, "[$1]")
+	// Sign URLs
 	return fileURLRe.ReplaceAllStringFunc(content, func(url string) string {
 		// Strip stale ft= token if present (legacy data may have persisted tokens).
 		cleanURL := stripFileToken(url)
@@ -87,6 +96,10 @@ func SignFileURLs(content, secret string) string {
 		return cleanURL + sep + "ft=" + ft
 	})
 }
+
+// linkTextFtRe matches markdown link text containing ?ft=... e.g. [filename.md?ft=xxx](...)
+// Captures the clean name before ?ft= for replacement.
+var linkTextFtRe = regexp.MustCompile(`\[([^\]\s?]+)\?ft=[^\]]*\]`)
 
 // staleTokenRe matches ?ft=... or &ft=... query parameter (greedy to end of URL segment).
 var staleTokenRe = regexp.MustCompile(`[?&]ft=[^\s)"'<>&]*`)

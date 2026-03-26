@@ -27,8 +27,8 @@ func localBuiltinTools() []store.BuiltinToolDef {
 		},
 
 		// gateway — internal_api for project management
-		{Name: "internal_api", DisplayName: "Internal API", Description: "Call GoClaw's REST API (allowlist-controlled). Agents use this to check health, resolve projects, and query agents.", Category: "gateway", Enabled: true,
-			Settings: json.RawMessage(`{"allowed_routes":[{"method":"GET","prefix":"/health"},{"method":"GET","prefix":"/v1/agents"},{"method":"GET","prefix":"/v1/projects"},{"method":"GET","prefix":"/v1/projects/by-chat"},{"method":"POST","prefix":"/v1/projects"},{"method":"PUT","prefix":"/v1/projects/"}]}`),
+		{Name: "internal_api", DisplayName: "Internal API", Description: "Call GoClaw's project management REST API (allowlist-controlled). Agents use this to resolve projects and configure MCP overrides.", Category: "gateway", Enabled: true,
+			Settings: json.RawMessage(`{"allowed_routes":[{"method":"GET","prefix":"/v1/projects/by-chat"},{"method":"POST","prefix":"/v1/projects"},{"method":"PUT","prefix":"/v1/projects/"}]}`),
 			Metadata: json.RawMessage(`{"config_hint":"Edit allowed_routes to control which endpoints agents can call"}`),
 		},
 	}

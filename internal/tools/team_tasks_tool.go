@@ -89,6 +89,10 @@ func (t *TeamTasksTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Agent key to assign task to (REQUIRED for create). Auto-dispatches to that team member.",
 			},
+			"team": map[string]any{
+				"type":        "string",
+				"description": "Team name to operate on (optional). Required when agent belongs to multiple teams. Resolved by name from database.",
+			},
 			"page": map[string]any{
 				"type":        "number",
 				"description": "Page number for list/search (default 1, 30 per page)",
@@ -100,6 +104,26 @@ func (t *TeamTasksTool) Parameters() map[string]any {
 
 func (t *TeamTasksTool) Execute(ctx context.Context, args map[string]any) *Result {
 	action, _ := args["action"].(string)
+
+	// If explicit team name provided, resolve to team ID and inject into context.
+	// This prevents wrong team resolution when an agent belongs to multiple teams.
+	if teamName, _ := args["team"].(string); teamName != "" {
+		teams, err := t.manager.teamStore.ListTeams(ctx)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("failed to list teams: %v", err))
+		}
+		var found bool
+		for _, td := range teams {
+			if td.Name == teamName {
+				ctx = WithToolTeamID(ctx, td.ID.String())
+				found = true
+				break
+			}
+		}
+		if !found {
+			return ErrorResult(fmt.Sprintf("team %q not found", teamName))
+		}
+	}
 
 	// Block mutations during notification runs — leader may only relay status.
 	if RunKindFromCtx(ctx) == RunKindNotification {

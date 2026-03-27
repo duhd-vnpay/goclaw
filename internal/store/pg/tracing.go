@@ -490,17 +490,6 @@ func (s *PGTracingStore) GetMonthlyAgentCost(ctx context.Context, agentID uuid.U
 	return cost, err
 }
 
-func (s *PGTracingStore) SweepOrphanTraces(ctx context.Context, maxAge time.Duration) (int, error) {
-	cutoff := time.Now().Add(-maxAge)
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE traces SET status = 'error', error = 'orphan: process crashed', end_time = NOW()
-		 WHERE status = 'running' AND created_at < $1`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
-}
 
 func (s *PGTracingStore) GetCostSummary(ctx context.Context, opts store.CostSummaryOpts) ([]store.CostSummaryRow, error) {
 	var conditions []string

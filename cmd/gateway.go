@@ -150,7 +150,8 @@ func runGateway() {
 	// Sweep orphan traces left by previous crashes (running > 1h)
 	if pgStores.Tracing != nil {
 		go func() {
-			n, err := pgStores.Tracing.SweepOrphanTraces(context.Background(), time.Hour)
+			cutoff := time.Now().Add(-time.Hour)
+			n, err := pgStores.Tracing.DeleteTracesOlderThan(context.Background(), cutoff)
 			if err != nil {
 				slog.Warn("orphan trace sweep failed", "error", err)
 			} else if n > 0 {

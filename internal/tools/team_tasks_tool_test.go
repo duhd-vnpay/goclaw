@@ -106,7 +106,7 @@ func TestExecuteCreate_SenderIDTracking(t *testing.T) {
 		"test-member": {BaseModel: store.BaseModel{ID: memberID}, AgentKey: "test-member"},
 	}}
 	mgr := NewTeamToolManager(ts, as, nil, "")
-	tool := NewTeamTasksTool(mgr)
+	tool := NewTeamTasksTool(mgr, FullTeamPolicy{})
 
 	ctx := makeCtx(leadID, "group:telegram:chat123", "user-456", "telegram")
 	args := map[string]any{
@@ -147,7 +147,7 @@ func TestExecuteCreate_NoSenderID(t *testing.T) {
 		"test-member": {BaseModel: store.BaseModel{ID: memberID}, AgentKey: "test-member"},
 	}}
 	mgr := NewTeamToolManager(ts, as, nil, "")
-	tool := NewTeamTasksTool(mgr)
+	tool := NewTeamTasksTool(mgr, FullTeamPolicy{})
 
 	// No sender ID in context (delegate channel, internal agent-to-agent)
 	ctx := makeCtx(leadID, "delegate:system", "", "delegate")
@@ -177,7 +177,7 @@ func TestExecuteCreate_RequireLead_Rejected(t *testing.T) {
 
 	ts := &mockTeamStore{team: team}
 	mgr := NewTeamToolManager(ts, &mockAgentStore{}, nil, "")
-	tool := NewTeamTasksTool(mgr)
+	tool := NewTeamTasksTool(mgr, FullTeamPolicy{})
 
 	// Non-lead agent trying to create task via telegram (member_requests not enabled)
 	ctx := makeCtx(nonLeadID, "group:telegram:chat123", "user-789", "telegram")
@@ -209,7 +209,7 @@ func TestExecuteCreate_RequireLead_DelegateBypass(t *testing.T) {
 		"test-member": {BaseModel: store.BaseModel{ID: memberID}, AgentKey: "test-member"},
 	}}
 	mgr := NewTeamToolManager(ts, as, nil, "")
-	tool := NewTeamTasksTool(mgr)
+	tool := NewTeamTasksTool(mgr, FullTeamPolicy{})
 
 	// Non-lead agent via teammate channel (internal agent-to-agent) should bypass — acts as lead
 	ctx := makeCtx(nonLeadID, "delegate:system", "", ChannelTeammate)

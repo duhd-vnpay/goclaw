@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -234,6 +235,35 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		return ErrorResult("failed to create task: " + err.Error())
 	}
 
+	// Persist media files copied during task creation as DB attachments,
+	// so the UI and queries see them in team_task_attachments table.
+	// (Members get auto-attached via WorkspaceInterceptor, but leaders
+	// don't run inside a task context — handle explicitly here.)
+	if files, ok := taskMeta["attached_files"].([]any); ok {
+		for _, f := range files {
+			filePath, ok := f.(string)
+			if !ok || filePath == "" {
+				continue
+			}
+			var fileSize int64
+			if info, err := os.Stat(filePath); err == nil {
+				fileSize = info.Size()
+			}
+			att := &store.TeamTaskAttachmentData{
+				TaskID:           task.ID,
+				TeamID:           team.ID,
+				ChatID:           chatID,
+				Path:             filePath,
+				FileSize:         fileSize,
+				MimeType:         mimeFromExt(filepath.Ext(filePath)),
+				CreatedByAgentID: &agentID,
+			}
+			if err := t.manager.teamStore.AttachFileToTask(ctx, att); err != nil {
+				slog.Warn("executeCreate: auto-attach media failed", "task_id", task.ID, "path", filePath, "error", err)
+			}
+		}
+	}
+
 	agentKey := t.manager.agentKeyFromID(ctx, agentID)
 	t.manager.broadcastTeamEvent(ctx, protocol.EventTeamTaskCreated, protocol.TeamTaskEventPayload{
 		TeamID:    team.ID.String(),
@@ -279,7 +309,21 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 	if assigneeName == "" {
 		assigneeName = t.manager.agentKeyFromID(ctx, assigneeID)
 	}
-	return NewResult(fmt.Sprintf("Task created: %s (id=%s, task_number=%d, status=%s, assignee=%s)", subject, task.ID, task.TaskNumber, status, assigneeName))
+	msg := fmt.Sprintf("Task created: %s (id=%s, task_number=%d, status=%s, assignee=%s)", subject, task.ID, task.TaskNumber, status, assigneeName)
+
+	// Soft guardrail: warn if subject suggests multiple deliverables.
+	// Only checks subject (not description) — detailed descriptions are fine.
+	if subject != "" {
+		subjLower := strings.ToLower(subject)
+		hasCompound := strings.Contains(subjLower, " and ") &&
+			(strings.Contains(subjLower, "implement") || strings.Contains(subjLower, "create") ||
+				strings.Contains(subjLower, "build") || strings.Contains(subjLower, "design") ||
+				strings.Contains(subjLower, "write") || strings.Contains(subjLower, "develop"))
+		if hasCompound {
+			msg += "\n\nWarning: This task subject suggests multiple deliverables. Consider splitting into separate tasks if they need different skills."
+		}
+	}
+	return NewResult(msg)
 }
 
 func (t *TeamTasksTool) executeComment(ctx context.Context, args map[string]any) *Result {
@@ -399,12 +443,40 @@ func (t *TeamTasksTool) executeProgress(ctx context.Context, args map[string]any
 		return ErrorResult("only the assigned task owner can update progress. As team lead, task results arrive automatically when members complete their work.")
 	}
 
+	// Early exit: task already terminal — skip DB write entirely.
+	// Reuses the task fetched above (line 391) so no extra query needed.
+	switch task.Status {
+	case store.TeamTaskStatusCompleted, store.TeamTaskStatusFailed, store.TeamTaskStatusCancelled:
+		return SilentResult(fmt.Sprintf("Task already %s — progress update skipped.", task.Status))
+	}
+
 	// Prevent progress regression — keep the higher value.
 	if percent < task.ProgressPercent {
 		percent = task.ProgressPercent
 	}
 
 	if err := t.manager.teamStore.UpdateTaskProgress(ctx, taskID, team.ID, percent, step); err != nil {
+		// Status may have changed between GetTask and UpdateTaskProgress.
+		// Fast path: check in-memory turn flags before hitting DB again.
+		if flags := TaskActionFlagsFromCtx(ctx); flags != nil && flags.Completed {
+			return SilentResult("Task already completed — progress update skipped.")
+		}
+		// Slow path: re-query for stale recovery (pending) or concurrent status change.
+		if current, getErr := t.manager.teamStore.GetTask(ctx, taskID); getErr == nil && current != nil {
+			switch current.Status {
+			case store.TeamTaskStatusCompleted, store.TeamTaskStatusFailed, store.TeamTaskStatusCancelled:
+				return SilentResult(fmt.Sprintf("Task already %s — progress update skipped.", current.Status))
+			case store.TeamTaskStatusPending:
+				// Task was reset by stale recovery — re-assign and retry once.
+				if t.manager.teamStore.AssignTask(ctx, taskID, agentID, team.ID) == nil {
+					if t.manager.teamStore.UpdateTaskProgress(ctx, taskID, team.ID, percent, step) == nil {
+						slog.Info("executeProgress: re-assigned stale-recovered task", "task_id", taskID)
+						recordTaskAction(ctx, func(f *TaskActionFlags) { f.Progressed = true })
+						return SilentResult(fmt.Sprintf("Progress updated: %d%% %s", percent, step))
+					}
+				}
+			}
+		}
 		return ErrorResult("failed to update progress: " + err.Error())
 	}
 	// Record action flag after successful store operation.

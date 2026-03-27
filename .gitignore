@@ -42,6 +42,9 @@ ui/desktop/frontend/package.json.md5
 ui/desktop/build/bin/
 ui/desktop/desktop
 goclaw-lite
+goclaw-lite-*.dmg
+goclaw-lite-*.tar.gz
+goclaw-lite-*.zip
 /desktop
 
 .mcp.json
@@ -60,6 +63,13 @@ k8s-*/*
 tests/**/creds.json
 ui/simple-saas
 *.tar
+# SQLite database files
+goclaw.db
+goclaw.db-wal
+goclaw.db-shm
+# Update backup files
+*.app.bak
+*.exe.bak
 # AI tool config directories (user-specific)
 .gemini/
 .opencode/

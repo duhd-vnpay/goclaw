@@ -2,7 +2,7 @@ VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo dev)
 LDFLAGS  = -s -w -X github.com/nextlevelbuilder/goclaw/cmd.Version=$(VERSION)
 BINARY   = goclaw
 
-.PHONY: build run clean version net up down logs reset test vet check-web dev migrate setup ci
+.PHONY: build run clean version net up down logs reset test vet check-web dev migrate setup ci desktop-dev desktop-build desktop-dmg
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BINARY) .
@@ -76,3 +76,22 @@ setup:
 	cd ui/web && pnpm install --frozen-lockfile
 
 ci: build test vet check-web
+
+# ── Desktop (Wails + SQLite) ──
+
+desktop-dev:
+	cd ui/desktop && wails dev -tags sqliteonly
+
+desktop-build:
+	cd ui/desktop && wails build -tags sqliteonly -ldflags="-s -w -X github.com/nextlevelbuilder/goclaw/cmd.Version=$(VERSION)"
+
+desktop-dmg: desktop-build
+	@echo "Creating DMG..."
+	rm -rf /tmp/goclaw-dmg-staging
+	mkdir -p /tmp/goclaw-dmg-staging
+	cp -R ui/desktop/build/bin/goclaw-lite.app /tmp/goclaw-dmg-staging/
+	ln -s /Applications /tmp/goclaw-dmg-staging/Applications
+	hdiutil create -volname "GoClaw Lite $(VERSION)" -srcfolder /tmp/goclaw-dmg-staging \
+		-ov -format UDZO "goclaw-lite-$(VERSION)-darwin-$$(uname -m | sed 's/x86_64/amd64/').dmg"
+	rm -rf /tmp/goclaw-dmg-staging
+	@echo "DMG created: goclaw-lite-$(VERSION)-darwin-$$(uname -m | sed 's/x86_64/amd64/').dmg"

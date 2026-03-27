@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { useUiStore } from '../../stores/ui-store'
 import { Sidebar } from './Sidebar'
+import { UpdateBanner } from './UpdateBanner'
 import { SettingsView } from '../settings/SettingsView'
 
 const TeamBoard = lazy(() => import('../teams/TeamBoard').then((m) => ({ default: m.TeamBoard })))
@@ -39,6 +40,7 @@ export function AppShell({ children }: AppShellProps) {
 
       {/* Main panel — chat, settings, or team board */}
       <div className="floating-panel m-3 ml-2 flex-1 flex flex-col min-w-0">
+        <UpdateBanner />
         {mainContent}
       </div>
     </div>

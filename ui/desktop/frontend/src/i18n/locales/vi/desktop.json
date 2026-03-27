@@ -138,5 +138,14 @@
     "saveFailed": "Failed to save",
     "deleteFailed": "Failed to delete",
     "createFailed": "Failed to create"
+  },
+  "update": {
+    "available": "GoClaw Lite v{{version}} đã có bản mới",
+    "now": "Cập nhật ngay",
+    "downloading": "Đang tải bản cập nhật...",
+    "ready": "Đã cài đặt! Khởi động lại để áp dụng.",
+    "restart": "Khởi động lại",
+    "failed": "Cập nhật thất bại.",
+    "retry": "Thử lại"
   }
 }

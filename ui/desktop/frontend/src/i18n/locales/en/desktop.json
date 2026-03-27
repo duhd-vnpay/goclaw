@@ -134,5 +134,14 @@
     "saveFailed": "Failed to save",
     "deleteFailed": "Failed to delete",
     "createFailed": "Failed to create"
+  },
+  "update": {
+    "available": "GoClaw Lite v{{version}} is available",
+    "now": "Update Now",
+    "downloading": "Downloading update...",
+    "ready": "Update installed! Restart to apply.",
+    "restart": "Restart Now",
+    "failed": "Update failed.",
+    "retry": "Retry"
   }
 }

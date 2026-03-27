@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nextlevelbuilder/goclaw/cmd"
+	"github.com/nextlevelbuilder/goclaw/internal/updater"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -25,6 +26,7 @@ type App struct {
 	cancelGw     context.CancelFunc
 	gatewayToken string
 	gatewayPort  int
+	lastUpdate   *updater.UpdateInfo // cached update info from last check
 }
 
 // NewApp creates a new App instance with default port.
@@ -87,6 +89,9 @@ func (a *App) startup(ctx context.Context) {
 	}()
 
 	a.waitForGateway()
+
+	// Check for updates after gateway is ready, then every 6 hours.
+	go a.updateLoop()
 }
 
 // waitForGateway polls the health endpoint until the gateway is ready or times out.
@@ -178,6 +183,93 @@ func (a *App) SaveFile(srcPath string) error {
 	defer dst.Close()
 	_, err = io.Copy(dst, src)
 	return err
+}
+
+// CheckForUpdate queries GitHub for a newer desktop release.
+func (a *App) CheckForUpdate() (*updater.UpdateInfo, error) {
+	info, err := updater.CheckForUpdate(cmd.Version)
+	if err != nil {
+		return nil, err
+	}
+	if info.Available {
+		a.lastUpdate = info // cache for ApplyUpdate
+	}
+	return info, nil
+}
+
+// ApplyUpdate downloads and installs the cached update.
+// Uses server-side cached UpdateInfo — does NOT accept URL from frontend (security).
+func (a *App) ApplyUpdate() error {
+	if a.lastUpdate == nil || !a.lastUpdate.Available {
+		return fmt.Errorf("no update available")
+	}
+	appPath, err := updater.ResolveAppPath()
+	if err != nil {
+		return fmt.Errorf("resolve app path: %w", err)
+	}
+	if err := updater.DownloadAndApply(a.lastUpdate, appPath); err != nil {
+		return fmt.Errorf("apply update: %w", err)
+	}
+	return nil
+}
+
+// RestartApp gracefully shuts down the gateway, relaunches the app, and exits.
+func (a *App) RestartApp() error {
+	appPath, err := updater.ResolveAppPath()
+	if err != nil {
+		return err
+	}
+	// Graceful gateway shutdown before exit
+	if a.cancelGw != nil {
+		a.cancelGw()
+		time.Sleep(500 * time.Millisecond) // brief wait for WAL checkpoint
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		exec.Command("open", "-n", appPath).Start()
+	case "windows":
+		exec.Command(appPath).Start()
+	}
+	os.Exit(0)
+	return nil
+}
+
+// updateLoop checks for updates on startup (5s delay) then every 6 hours.
+// Respects app context for clean shutdown.
+func (a *App) updateLoop() {
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		a.checkAndEmitUpdate()
+	case <-a.ctx.Done():
+		return
+	}
+
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			a.checkAndEmitUpdate()
+		case <-a.ctx.Done():
+			return
+		}
+	}
+}
+
+func (a *App) checkAndEmitUpdate() {
+	info, err := updater.CheckForUpdate(cmd.Version)
+	if err != nil {
+		slog.Debug("update check failed", "error", err)
+		return
+	}
+	if info.Available {
+		a.lastUpdate = info
+		slog.Info("update available", "version", info.Version)
+		wailsRuntime.EventsEmit(a.ctx, "update:available", info)
+	}
 }
 
 // DownloadURL fetches a URL with Bearer auth and opens a Save As dialog.

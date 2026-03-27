@@ -138,5 +138,14 @@
     "saveFailed": "Failed to save",
     "deleteFailed": "Failed to delete",
     "createFailed": "Failed to create"
+  },
+  "update": {
+    "available": "GoClaw Lite v{{version}} 新版本可用",
+    "now": "立即更新",
+    "downloading": "正在下载更新...",
+    "ready": "更新已安装！重启以应用。",
+    "restart": "立即重启",
+    "failed": "更新失败。",
+    "retry": "重试"
   }
 }

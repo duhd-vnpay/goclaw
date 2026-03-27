@@ -1,8 +1,16 @@
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { BrowserOpenURL } from '../../../wailsjs/runtime/runtime'
+import { wails } from '../../lib/wails'
 
 export function AboutTab() {
   const { t } = useTranslation('desktop')
+  const [version, setVersion] = useState('...')
+
+  useEffect(() => {
+    wails.getVersion().then(setVersion).catch(() => setVersion('unknown'))
+  }, [])
+
   return (
     <div className="space-y-6 max-w-lg">
       <div className="flex items-center gap-4">
@@ -16,7 +24,7 @@ export function AboutTab() {
       <div className="rounded-lg border border-border p-4 space-y-3">
         <div className="flex justify-between text-xs">
           <span className="text-text-muted">{t('about.version')}</span>
-          <span className="text-text-primary font-mono">0.1.0-beta</span>
+          <span className="text-text-primary font-mono">{version}</span>
         </div>
         <div className="flex justify-between text-xs">
           <span className="text-text-muted">{t('about.edition')}</span>

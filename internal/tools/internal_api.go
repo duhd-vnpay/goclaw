@@ -205,6 +205,10 @@ func (t *InternalAPITool) Execute(ctx context.Context, args map[string]any) *Res
 	if t.token != "" {
 		req.Header.Set("Authorization", "Bearer "+t.token)
 	}
+	// Internal API always runs as "system" — agents cannot choose user identity.
+	// This is safe because: (1) allowlist restricts to GET-only routes,
+	// (2) gateway token already grants admin access, (3) user_id is not from agent input.
+	req.Header.Set("X-GoClaw-User-Id", "system")
 	if bodyReader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

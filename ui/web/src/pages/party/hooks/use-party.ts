@@ -277,7 +277,7 @@ export function useParty() {
   const handleSummaryReady = useCallback((payload: unknown) => {
     // Backend: { session_id, summary: { markdown, ... } }
     const raw = payload as { summary?: PartySummary; markdown?: string };
-    const s: PartySummary = raw.summary ?? raw as PartySummary;
+    const s: PartySummary = raw.summary ?? { markdown: raw.markdown };
     setSummary(s);
     addMessage({
       type: "summary",

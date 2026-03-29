@@ -142,6 +142,9 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 	if req.TeamID != "" {
 		ctx = tools.WithToolTeamID(ctx, req.TeamID)
 	}
+	if req.LeaderAgentID != "" {
+		ctx = tools.WithLeaderAgentID(ctx, req.LeaderAgentID)
+	}
 
 	// Team workspace: auto-resolve for agents with team membership (not dispatched).
 	// Lead agents default to team workspace; non-lead members keep own workspace.
@@ -256,6 +259,7 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 		WorkspaceChannel:    req.WorkspaceChannel,
 		WorkspaceChatID:     req.WorkspaceChatID,
 		TeamTaskID:          req.TeamTaskID,
+		LeaderAgentID:       tools.LeaderAgentIDFromCtx(ctx),
 		AgentToolKey:        l.id,
 	}
 	ctx = store.WithRunContext(ctx, rc)

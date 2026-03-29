@@ -8,6 +8,14 @@ param([string]$Version = "")
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"  # Speeds up Invoke-WebRequest significantly
+
+function Exit-WithPause {
+    param([int]$Code = 0)
+    Write-Host ""
+    Write-Host "Press any key to exit..." -ForegroundColor Gray
+    try { $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") } catch { Start-Sleep -Seconds 5 }
+    exit $Code
+}
 $Repo = "nextlevelbuilder/goclaw"
 $InstallDir = Join-Path $env:LOCALAPPDATA "GoClaw Lite"
 
@@ -15,17 +23,17 @@ $InstallDir = Join-Path $env:LOCALAPPDATA "GoClaw Lite"
 if (-not $Version) {
     Write-Host "-> Fetching latest desktop release..." -ForegroundColor Cyan
     try {
-        $releases = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases" -ErrorAction Stop
+        $releases = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=100" -ErrorAction Stop
     } catch {
         Write-Host "Failed to fetch releases: $_" -ForegroundColor Red
         Write-Host "Check: https://github.com/$Repo/releases" -ForegroundColor Yellow
-        exit 1
+        Exit-WithPause 1
     }
     $latest = $releases | Where-Object { $_.tag_name -like "lite-v*" -and -not $_.prerelease -and -not $_.draft } | Select-Object -First 1
     if (-not $latest) {
         Write-Host "No desktop release found." -ForegroundColor Red
         Write-Host "Check: https://github.com/$Repo/releases" -ForegroundColor Yellow
-        exit 1
+        Exit-WithPause 1
     }
     $Version = $latest.tag_name
 }
@@ -44,7 +52,7 @@ try {
 } catch {
     Write-Host "Download failed: $_" -ForegroundColor Red
     Write-Host "URL: $Url" -ForegroundColor Yellow
-    exit 1
+    Exit-WithPause 1
 }
 
 # ── Extract ──
@@ -77,3 +85,4 @@ Write-Host "  Location: $InstallDir" -ForegroundColor Gray
 Write-Host ""
 Write-Host "-> Launching GoClaw Lite..."
 if (Test-Path $ExePath) { Start-Process $ExePath }
+Exit-WithPause 0

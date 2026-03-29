@@ -44,6 +44,7 @@ func SeedToStore(ctx context.Context, agentStore store.AgentStore, agentID uuid.
 
 	existing, err := agentStore.GetAgentContextFiles(ctx, agentID)
 	if err != nil {
+		slog.Warn("bootstrap: failed to check existing agent files", "agent", agentID, "error", err)
 		return nil, err
 	}
 
@@ -145,12 +146,14 @@ func SeedUserFiles(ctx context.Context, agentStore store.AgentStore, agentID uui
 	// Check existing per-user files to avoid overwriting personalized content
 	existing, err := agentStore.GetUserContextFiles(ctx, agentID, userID)
 	if err != nil {
+		slog.Warn("bootstrap: failed to check existing user files", "agent", agentID, "user", userID, "error", err)
 		return nil, err
 	}
 
 	// Early exit: user already has files → not a brand-new user.
 	// Avoids re-seeding BOOTSTRAP.md after auto-cleanup on server restart.
 	if skipIfAnyExist && len(existing) > 0 {
+		slog.Debug("bootstrap: skip user seed (existing files)", "agent", agentID, "user", userID, "existing", len(existing))
 		return nil, nil
 	}
 
@@ -220,4 +223,27 @@ func SeedUserFiles(ctx context.Context, agentStore store.AgentStore, agentID uui
 	}
 
 	return seeded, nil
+}
+
+// EmbeddedUserFiles returns in-memory context files from embedded templates.
+// Used as a fallback when DB seeding fails (e.g. SQLITE_BUSY) so the first
+// turn still gets bootstrap onboarding without waiting for DB recovery.
+func EmbeddedUserFiles(agentType string) []ContextFile {
+	files := userSeedFilesOpen
+	if agentType == store.AgentTypePredefined {
+		files = userSeedFilesPredefined
+	}
+	var result []ContextFile
+	for _, name := range files {
+		templateName := name
+		if agentType == store.AgentTypePredefined && name == BootstrapFile {
+			templateName = "BOOTSTRAP_PREDEFINED.md"
+		}
+		content, err := templateFS.ReadFile(filepath.Join("templates", templateName))
+		if err != nil {
+			continue
+		}
+		result = append(result, ContextFile{Path: name, Content: string(content)})
+	}
+	return result
 }

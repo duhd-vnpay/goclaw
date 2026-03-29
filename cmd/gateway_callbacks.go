@@ -73,6 +73,18 @@ func buildBootstrapCleanup(as store.AgentStore) agent.BootstrapCleanupFunc {
 	}
 }
 
+// buildCacheInvalidate creates a callback that invalidates the context file cache
+// for a user after SeedUserFiles writes via raw agentStore. Without this,
+// LoadContextFiles may return stale (empty) cached results on the first turn.
+func buildCacheInvalidate(intc *tools.ContextFileInterceptor) agent.CacheInvalidateFunc {
+	if intc == nil {
+		return nil
+	}
+	return func(agentID uuid.UUID, userID string) {
+		intc.InvalidateUser(agentID, userID)
+	}
+}
+
 // buildContextFileLoader creates the per-request context file loader callback.
 // Delegates to the ContextFileInterceptor for type-aware routing.
 func buildContextFileLoader(intc *tools.ContextFileInterceptor) agent.ContextFileLoaderFunc {

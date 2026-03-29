@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
@@ -91,6 +92,15 @@ func (l *Loop) getOrCreateUserSetup(ctx context.Context, userID, channel string,
 			// Passes isNew so SeedUserFiles knows whether to skip existing files.
 			if err := l.seedUserFiles(ctx, l.agentUUID, userID, l.agentType, isNew); err != nil {
 				slog.Warn("failed to seed user context files", "error", err)
+				// Seeding failed (e.g. SQLITE_BUSY after retries). Inject
+				// embedded bootstrap templates in-memory so the first turn
+				// still gets onboarding. DB seed will retry next session.
+				setup.fallbackBootstrap = bootstrap.EmbeddedUserFiles(l.agentType)
+			} else if l.cacheInvalidate != nil {
+				// SeedUserFiles writes via raw agentStore, bypassing the
+				// ContextFileInterceptor cache. Invalidate so LoadContextFiles
+				// sees newly seeded BOOTSTRAP.md/USER.md on the first turn.
+				l.cacheInvalidate(l.agentUUID, userID)
 			}
 			setup.seeded = true
 		} else if l.ensureUserFiles != nil {

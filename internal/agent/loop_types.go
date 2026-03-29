@@ -28,8 +28,9 @@ const bootstrapAutoCleanupTurns = 3
 // Consolidates workspace resolution and context file seeding into one struct
 // to prevent desync between the two concerns.
 type userSetup struct {
-	workspace string // effective workspace from user_agent_profiles (expanded, absolute)
-	seeded    bool   // whether SeedUserFiles has been called this instance
+	workspace          string                 // effective workspace from user_agent_profiles (expanded, absolute)
+	seeded             bool                   // whether SeedUserFiles has been called this instance
+	fallbackBootstrap  []bootstrap.ContextFile // in-memory fallback when DB seed fails (e.g. SQLITE_BUSY)
 }
 
 // EnsureUserProfileFunc creates/resolves a user's profile and workspace.
@@ -54,6 +55,11 @@ type ContextFileLoaderFunc func(ctx context.Context, agentID uuid.UUID, userID, 
 // BootstrapCleanupFunc removes BOOTSTRAP.md after a successful first run.
 // Called automatically so the system doesn't rely on the LLM to delete it.
 type BootstrapCleanupFunc func(ctx context.Context, agentID uuid.UUID, userID string) error
+
+// CacheInvalidateFunc invalidates the context file cache for a user after seeding.
+// SeedUserFiles writes via raw agentStore (bypassing ContextFileInterceptor cache),
+// so this callback ensures LoadContextFiles sees the newly seeded files.
+type CacheInvalidateFunc func(agentID uuid.UUID, userID string)
 
 // Loop is the agent execution loop for one agent instance.
 // Think → Act → Observe cycle with tool execution.
@@ -80,7 +86,7 @@ type Loop struct {
 
 	eventPub        bus.EventPublisher // currently unused by Loop; kept for future use
 	sessions        store.SessionStore
-	tools           *tools.Registry
+	tools           tools.ToolExecutor
 	toolPolicy      *tools.PolicyEngine    // optional: filters tools sent to LLM
 	agentToolPolicy *config.ToolPolicySpec // per-agent tool policy from DB (nil = no restrictions)
 	activeRuns      atomic.Int32           // number of currently executing runs
@@ -101,6 +107,7 @@ type Loop struct {
 	ensureUserFiles   EnsureUserFilesFunc   // legacy combined callback (fallback)
 	contextFileLoader ContextFileLoaderFunc
 	bootstrapCleanup  BootstrapCleanupFunc
+	cacheInvalidate   CacheInvalidateFunc   // invalidate context file cache after seeding
 	userSetups sync.Map // userID → *userSetup (workspace + seeding state, per Loop instance)
 
 	// Compaction config (memory flush settings)
@@ -170,7 +177,7 @@ type Loop struct {
 
 // AgentEvent is emitted during agent execution for WS broadcasting.
 type AgentEvent struct {
-	Type    string `json:"type"` // "run.started", "run.completed", "run.failed", "chunk", "tool.call", "tool.result"
+	Type    string `json:"type"` // "run.started", "run.completed", "run.failed", "run.cancelled", "chunk", "tool.call", "tool.result"
 	AgentID string `json:"agentId"`
 	RunID   string `json:"runId"`
 	RunKind string `json:"runKind,omitempty"` // "delegation", "announce" — omitted for user-initiated runs
@@ -250,6 +257,7 @@ type LoopConfig struct {
 	EnsureUserFiles   EnsureUserFilesFunc   // legacy: combined (used when above are nil)
 	ContextFileLoader ContextFileLoaderFunc
 	BootstrapCleanup  BootstrapCleanupFunc
+	CacheInvalidate   CacheInvalidateFunc   // invalidate context file cache after seeding
 
 	// Tracing collector (nil = no tracing)
 	TraceCollector *tracing.Collector
@@ -365,6 +373,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		ensureUserFiles:        cfg.EnsureUserFiles,
 		contextFileLoader:      cfg.ContextFileLoader,
 		bootstrapCleanup:       cfg.BootstrapCleanup,
+		cacheInvalidate:        cfg.CacheInvalidate,
 		compactionCfg:          cfg.CompactionCfg,
 		contextPruningCfg:      cfg.ContextPruningCfg,
 		sandboxEnabled:         cfg.SandboxEnabled,
@@ -418,8 +427,9 @@ type RunRequest struct {
 	TraceName         string          // override trace name (default: "chat <agentID>")
 	TraceTags         []string        // additional tags for the trace (e.g. "cron")
 	MaxIterations     int             // per-request override (0 = use agent default, must be lower)
-	ModelOverride     string          // per-request model override (heartbeat uses cheaper model)
-	LightContext      bool            // skip loading context files (only inject ExtraSystemPrompt)
+	ModelOverride    string            // per-request model override (heartbeat uses cheaper model)
+	ProviderOverride providers.Provider // per-request provider override (heartbeat uses different provider)
+	LightContext     bool              // skip loading context files (only inject ExtraSystemPrompt)
 
 	// Run classification
 	RunKind       string // "delegation", "announce" — empty for user-initiated runs
@@ -436,6 +446,7 @@ type RunRequest struct {
 	TeamID        string // team ID (if delegation is team-scoped)
 	TeamTaskID    string // team task ID (if delegation has an associated task)
 	ParentAgentID string // parent agent key that initiated the delegation
+	LeaderAgentID string // leader agent UUID for member memory read fallback
 
 	// Workspace scope propagation (set by delegation, read by workspace tools)
 	WorkspaceChannel string
@@ -459,6 +470,7 @@ type RunResult struct {
 	Deliverables   []string         `json:"deliverables,omitempty"`   // actual content from tool outputs (for team task results)
 	BlockReplies   int              `json:"blockReplies,omitempty"`   // number of block.reply events emitted
 	LastBlockReply string           `json:"lastBlockReply,omitempty"` // last block reply content (for dedup)
+	LoopKilled     bool             `json:"loopKilled,omitempty"`     // true when run was terminated by loop detector
 }
 
 // MediaResult represents a media file produced by a tool during the agent run.
@@ -494,8 +506,11 @@ type runState struct {
 	// Crash safety
 	checkpointFlushedMsgs int
 
-	// Mid-loop compaction
-	midLoopCompacted bool
+	// Mid-loop compaction and overhead calibration
+	midLoopCompacted   bool
+	midLoopPruned      bool
+	overheadTokens     int  // non-history token overhead (system prompt + tools + context files)
+	overheadCalibrated bool
 
 	// Bootstrap detection
 	bootstrapWriteDetected bool
@@ -508,4 +523,8 @@ type runState struct {
 	skillNudge70Sent    bool
 	skillNudge90Sent    bool
 	skillPostscriptSent bool
+
+	// Loop detector kill flag — set when any detector triggers critical level.
+	// Propagated to RunResult.LoopKilled so the consumer can auto-fail team tasks.
+	loopKilled bool
 }

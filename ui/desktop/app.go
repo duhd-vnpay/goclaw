@@ -73,20 +73,8 @@ func (a *App) startup(ctx context.Context) {
 	}
 	os.MkdirAll(dataDir, 0755)
 
-	// Start gateway in background with a cancel context for graceful shutdown.
-	gwCtx, cancel := context.WithCancel(context.Background())
-	a.cancelGw = cancel
-
-	go func() {
-		// When context is cancelled, interrupt the process to trigger gateway shutdown.
-		go func() {
-			<-gwCtx.Done()
-			p, _ := os.FindProcess(os.Getpid())
-			p.Signal(os.Interrupt)
-		}()
-		slog.Info("starting embedded gateway", "port", a.gatewayPort)
-		cmd.RunGateway()
-	}()
+	// Start gateway in background.
+	a.startGateway()
 
 	a.waitForGateway()
 
@@ -270,6 +258,52 @@ func (a *App) checkAndEmitUpdate() {
 		slog.Info("update available", "version", info.Version)
 		wailsRuntime.EventsEmit(a.ctx, "update:available", info)
 	}
+}
+
+// GetDataDir returns the path to the data directory containing the SQLite database.
+func (a *App) GetDataDir() string {
+	dir := os.Getenv("GOCLAW_DATA_DIR")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = home + "/.goclaw/data"
+	}
+	return dir
+}
+
+// startGateway launches the embedded gateway in a background goroutine.
+func (a *App) startGateway() {
+	gwCtx, cancel := context.WithCancel(context.Background())
+	a.cancelGw = cancel
+
+	go func() {
+		go func() {
+			<-gwCtx.Done()
+			p, _ := os.FindProcess(os.Getpid())
+			p.Signal(os.Interrupt)
+		}()
+		slog.Info("starting embedded gateway", "port", a.gatewayPort)
+		cmd.RunGateway()
+	}()
+}
+
+// ResetDatabase deletes the SQLite DB files and restarts the entire app.
+// On macOS/Linux, os.Remove works on open files (unlinks inode).
+// The gateway holds the DB open and cancelGw sends SIGINT to the process,
+// so we delete first, then restart the app cleanly.
+func (a *App) ResetDatabase() error {
+	dataDir := a.GetDataDir()
+	dbPath := filepath.Join(dataDir, "goclaw.db")
+
+	// Delete DB + WAL/SHM (works on Unix even while file is open).
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		p := dbPath + suffix
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			slog.Warn("database reset: failed to remove", "path", p, "error", err)
+		}
+	}
+	slog.Info("database reset: files deleted, restarting app", "path", dbPath)
+
+	return a.RestartApp()
 }
 
 // DownloadURL fetches a URL with Bearer auth and opens a Save As dialog.

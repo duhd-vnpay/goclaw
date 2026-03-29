@@ -9,11 +9,11 @@ import (
 // TeamTasksTool exposes the shared team task list to agents.
 // Actions are filtered by TeamActionPolicy (full in standard, limited in lite).
 type TeamTasksTool struct {
-	manager *TeamToolManager
+	manager TeamToolBackend
 	policy  TeamActionPolicy
 }
 
-func NewTeamTasksTool(manager *TeamToolManager, policy TeamActionPolicy) *TeamTasksTool {
+func NewTeamTasksTool(manager TeamToolBackend, policy TeamActionPolicy) *TeamTasksTool {
 	return &TeamTasksTool{manager: manager, policy: policy}
 }
 
@@ -120,7 +120,7 @@ func (t *TeamTasksTool) Execute(ctx context.Context, args map[string]any) *Resul
 	// If explicit team name provided, resolve to team ID and inject into context.
 	// This prevents wrong team resolution when an agent belongs to multiple teams.
 	if teamName, _ := args["team"].(string); teamName != "" {
-		teams, err := t.manager.teamStore.ListTeams(ctx)
+		teams, err := t.manager.Store().ListTeams(ctx)
 		if err != nil {
 			return ErrorResult(fmt.Sprintf("failed to list teams: %v", err))
 		}

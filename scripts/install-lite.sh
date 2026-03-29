@@ -46,7 +46,7 @@ fi
 # ── Resolve version ──
 if [[ -z "$VERSION" ]]; then
   echo "→ Fetching latest desktop release..."
-  VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases" \
+  VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=100" \
     | grep '"tag_name": "lite-v' \
     | head -1 \
     | sed 's/.*"tag_name": "\(lite-v[^"]*\)".*/\1/' || true)

@@ -144,6 +144,7 @@ func wireExtras(
 		SeedUserFiles:          seedUserFiles,
 		ContextFileLoader:      contextFileLoader,
 		BootstrapCleanup:       buildBootstrapCleanup(stores.Agents),
+		CacheInvalidate:        buildCacheInvalidate(contextFileInterceptor),
 		InjectionAction:        injectionAction,
 		MaxMessageChars:        appCfg.Gateway.MaxMessageChars,
 		CompactionCfg:          appCfg.Agents.Defaults.Compaction,

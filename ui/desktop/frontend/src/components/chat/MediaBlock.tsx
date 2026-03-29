@@ -48,7 +48,7 @@ export function MediaBlock({ items }: MediaBlockProps) {
               onClick={() => setLightboxIndex(i)}
               className="group relative overflow-hidden rounded-lg border border-border cursor-pointer"
             >
-              <AuthImage src={item.url} alt="" className="h-40 w-full object-cover" />
+              <AuthImage src={item.url} alt="" className="max-h-72 w-full object-contain" />
               <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
             </button>
           ))}

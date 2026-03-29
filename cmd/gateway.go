@@ -217,18 +217,18 @@ func runGateway() {
 					label = fmt.Sprintf("%d tasks", len(items))
 				}
 				batchMeta := map[string]string{
-					"origin_channel":      meta.OriginChannel,
-					"origin_peer_kind":    meta.OriginPeerKind,
-					"parent_agent":        meta.ParentAgent,
-					"subagent_label":      label,
-					"origin_trace_id":     meta.OriginTraceID,
-					"origin_root_span_id": meta.OriginRootSpanID,
+					tools.MetaOriginChannel:    meta.OriginChannel,
+					tools.MetaOriginPeerKind:   meta.OriginPeerKind,
+					tools.MetaParentAgent:      meta.ParentAgent,
+					tools.MetaSubagentLabel:    label,
+					tools.MetaOriginTraceID:    meta.OriginTraceID,
+					tools.MetaOriginRootSpanID: meta.OriginRootSpanID,
 				}
 				if meta.OriginLocalKey != "" {
-					batchMeta["origin_local_key"] = meta.OriginLocalKey
+					batchMeta[tools.MetaOriginLocalKey] = meta.OriginLocalKey
 				}
 				if meta.OriginSessionKey != "" {
-					batchMeta["origin_session_key"] = meta.OriginSessionKey
+					batchMeta[tools.MetaOriginSessionKey] = meta.OriginSessionKey
 				}
 				// Collect media from all items in the batch.
 				var batchMedia []bus.MediaFile
@@ -940,7 +940,7 @@ func runGateway() {
 	defer sched.Stop()
 
 	// Start cron service with job handler (routes through scheduler's cron lane)
-	pgStores.Cron.SetOnJob(makeCronJobHandler(sched, msgBus, cfg, channelMgr, pgStores.Sessions))
+	pgStores.Cron.SetOnJob(makeCronJobHandler(sched, msgBus, cfg, channelMgr, pgStores.Sessions, pgStores.Agents))
 	pgStores.Cron.SetOnEvent(func(event store.CronEvent) {
 		server.BroadcastEvent(*protocol.NewEvent(protocol.EventCron, event))
 	})
@@ -950,12 +950,14 @@ func runGateway() {
 
 	// Start heartbeat ticker (routes through scheduler's cron lane)
 	heartbeatTicker := heartbeat.NewTicker(heartbeat.TickerConfig{
-		Store:    pgStores.Heartbeats,
-		Agents:   pgStores.Agents,
-		Sessions: pgStores.Sessions,
-		MsgBus:   msgBus,
-		Sched:    sched,
-		RunAgent: makeHeartbeatRunFn(sched),
+		Store:         pgStores.Heartbeats,
+		Agents:        pgStores.Agents,
+		Sessions:      pgStores.Sessions,
+		ProviderStore: pgStores.Providers,
+		ProviderReg:   providerRegistry,
+		MsgBus:        msgBus,
+		Sched:         sched,
+		RunAgent:      makeHeartbeatRunFn(sched),
 	})
 	heartbeatTicker.SetOnEvent(func(event store.HeartbeatEvent) {
 		server.BroadcastEvent(*protocol.NewEvent(protocol.EventHeartbeat, event))
@@ -1020,7 +1022,7 @@ func runGateway() {
 		}
 
 		// Clear activity on terminal events
-		if agentEvent.Type == protocol.AgentEventRunCompleted || agentEvent.Type == protocol.AgentEventRunFailed {
+		if agentEvent.Type == protocol.AgentEventRunCompleted || agentEvent.Type == protocol.AgentEventRunFailed || agentEvent.Type == protocol.AgentEventRunCancelled {
 			if sessionKey := agentRouter.SessionKeyForRun(agentEvent.RunID); sessionKey != "" {
 				agentRouter.ClearActivity(sessionKey)
 			}

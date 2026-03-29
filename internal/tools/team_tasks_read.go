@@ -90,7 +90,7 @@ func (t *TeamTasksTool) resolveBlockers(ctx context.Context, blockedBy []uuid.UU
 	if len(blockedBy) == 0 {
 		return nil
 	}
-	tasks, err := t.manager.teamStore.GetTasksByIDs(ctx, blockedBy)
+	tasks, err := t.manager.Store().GetTasksByIDs(ctx, blockedBy)
 	if err != nil {
 		return nil
 	}
@@ -113,9 +113,9 @@ func (t *TeamTasksTool) toListItem(ctx context.Context, task store.TeamTaskData)
 		Subject:              task.Subject,
 		Status:               task.Status,
 		OwnerAgentKey:        task.OwnerAgentKey,
-		OwnerDisplayName:     t.manager.agentDisplayName(ctx, task.OwnerAgentKey),
+		OwnerDisplayName:     t.manager.AgentDisplayName(ctx, task.OwnerAgentKey),
 		CreatedByAgentKey:    task.CreatedByAgentKey,
-		CreatedByDisplayName: t.manager.agentDisplayName(ctx, task.CreatedByAgentKey),
+		CreatedByDisplayName: t.manager.AgentDisplayName(ctx, task.CreatedByAgentKey),
 		ProgressPercent:      task.ProgressPercent,
 		ProgressStep:         task.ProgressStep,
 		BlockedBy:            t.resolveBlockers(ctx, task.BlockedBy),
@@ -132,9 +132,9 @@ func (t *TeamTasksTool) toDetailItem(ctx context.Context, task *store.TeamTaskDa
 		Status:               task.Status,
 		Result:               task.Result,
 		OwnerAgentKey:        task.OwnerAgentKey,
-		OwnerDisplayName:     t.manager.agentDisplayName(ctx, task.OwnerAgentKey),
+		OwnerDisplayName:     t.manager.AgentDisplayName(ctx, task.OwnerAgentKey),
 		CreatedByAgentKey:    task.CreatedByAgentKey,
-		CreatedByDisplayName: t.manager.agentDisplayName(ctx, task.CreatedByAgentKey),
+		CreatedByDisplayName: t.manager.AgentDisplayName(ctx, task.CreatedByAgentKey),
 		ProgressPercent:      task.ProgressPercent,
 		ProgressStep:         task.ProgressStep,
 		BlockedBy:            t.resolveBlockers(ctx, task.BlockedBy),
@@ -148,7 +148,7 @@ func (t *TeamTasksTool) toDetailItem(ctx context.Context, task *store.TeamTaskDa
 // Injected into search/list results so weaker models (MiniMax, Qwen) get
 // actionable hints before calling create.
 func (t *TeamTasksTool) buildCreateHint(ctx context.Context, teamID, leadAgentID, callerAgentID uuid.UUID) string {
-	members, err := t.manager.cachedListMembers(ctx, teamID, callerAgentID)
+	members, err := t.manager.CachedListMembers(ctx, teamID, callerAgentID)
 	if err != nil || len(members) == 0 {
 		return ""
 	}
@@ -160,7 +160,7 @@ func (t *TeamTasksTool) buildCreateHint(ctx context.Context, teamID, leadAgentID
 			continue // skip lead from member list
 		}
 		model := ""
-		if ag, err := t.manager.cachedGetAgentByID(ctx, m.AgentID); err == nil {
+		if ag, err := t.manager.CachedGetAgentByID(ctx, m.AgentID); err == nil {
 			model = ag.Model
 		}
 		entry := fmt.Sprintf("- %s (%s)", m.AgentKey, model)
@@ -182,7 +182,7 @@ func (t *TeamTasksTool) buildCreateHint(ctx context.Context, teamID, leadAgentID
 }
 
 func (t *TeamTasksTool) executeList(ctx context.Context, args map[string]any) *Result {
-	team, agentID, err := t.manager.resolveTeam(ctx)
+	team, agentID, err := t.manager.ResolveTeam(ctx)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -216,7 +216,7 @@ func (t *TeamTasksTool) executeList(ctx context.Context, args map[string]any) *R
 		ptd.MarkListed()
 	}
 
-	tasks, err := t.manager.teamStore.ListTasks(ctx, team.ID, "priority", statusFilter, filterUserID, "", listChatID, 0, offset)
+	tasks, err := t.manager.Store().ListTasks(ctx, team.ID, "priority", statusFilter, filterUserID, "", listChatID, 0, offset)
 	if err != nil {
 		return ErrorResult("failed to list tasks: " + err.Error())
 	}
@@ -231,7 +231,7 @@ func (t *TeamTasksTool) executeList(ctx context.Context, args map[string]any) *R
 	for _, task := range tasks {
 		agentKeys = append(agentKeys, task.OwnerAgentKey, task.CreatedByAgentKey)
 	}
-	t.manager.preWarmAgentKeyCache(ctx, agentKeys)
+	t.manager.PreWarmAgentKeyCache(ctx, agentKeys)
 
 	items := make([]taskListItem, 0, len(tasks))
 	for _, task := range tasks {
@@ -281,7 +281,7 @@ func resolveTaskID(ctx context.Context, args map[string]any) (uuid.UUID, error) 
 }
 
 func (t *TeamTasksTool) executeGet(ctx context.Context, args map[string]any) *Result {
-	team, _, err := t.manager.resolveTeam(ctx)
+	team, _, err := t.manager.ResolveTeam(ctx)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -291,7 +291,7 @@ func (t *TeamTasksTool) executeGet(ctx context.Context, args map[string]any) *Re
 		return ErrorResult(err.Error())
 	}
 
-	task, err := t.manager.teamStore.GetTask(ctx, taskID)
+	task, err := t.manager.Store().GetTask(ctx, taskID)
 	if err != nil {
 		return ErrorResult("failed to get task: " + err.Error())
 	}
@@ -310,14 +310,14 @@ func (t *TeamTasksTool) executeGet(ctx context.Context, args map[string]any) *Re
 	}
 
 	// Pre-warm cache for task owner + creator display names.
-	t.manager.preWarmAgentKeyCache(ctx, []string{task.OwnerAgentKey, task.CreatedByAgentKey})
+	t.manager.PreWarmAgentKeyCache(ctx, []string{task.OwnerAgentKey, task.CreatedByAgentKey})
 
 	detail := t.toDetailItem(ctx, task)
 
 	// Load and slim comments/events/attachments
 	resp := map[string]any{"task": detail}
 
-	if comments, _ := t.manager.teamStore.ListTaskComments(ctx, taskID); len(comments) > 0 {
+	if comments, _ := t.manager.Store().ListTaskComments(ctx, taskID); len(comments) > 0 {
 		// Pre-warm agent cache to avoid N+1 queries for comment agent keys.
 		commentAgentIDs := make([]uuid.UUID, 0, len(comments))
 		for _, c := range comments {
@@ -325,13 +325,13 @@ func (t *TeamTasksTool) executeGet(ctx context.Context, args map[string]any) *Re
 				commentAgentIDs = append(commentAgentIDs, *c.AgentID)
 			}
 		}
-		t.manager.preWarmAgentIDCache(ctx, commentAgentIDs)
+		t.manager.PreWarmAgentIDCache(ctx, commentAgentIDs)
 
 		slim := make([]slimComment, 0, len(comments))
 		for _, c := range comments {
 			key := ""
 			if c.AgentID != nil {
-				key = t.manager.agentKeyFromID(ctx, *c.AgentID)
+				key = t.manager.AgentKeyFromID(ctx, *c.AgentID)
 			}
 			slim = append(slim, slimComment{
 				AgentKey:  key,
@@ -342,7 +342,7 @@ func (t *TeamTasksTool) executeGet(ctx context.Context, args map[string]any) *Re
 		resp["comments"] = slim
 	}
 
-	if events, _ := t.manager.teamStore.ListTaskEvents(ctx, taskID); len(events) > 0 {
+	if events, _ := t.manager.Store().ListTaskEvents(ctx, taskID); len(events) > 0 {
 		slim := make([]slimEvent, 0, len(events))
 		for _, e := range events {
 			slim = append(slim, slimEvent{
@@ -354,7 +354,7 @@ func (t *TeamTasksTool) executeGet(ctx context.Context, args map[string]any) *Re
 		resp["events"] = slim
 	}
 
-	if attachments, _ := t.manager.teamStore.ListTaskAttachments(ctx, taskID); len(attachments) > 0 {
+	if attachments, _ := t.manager.Store().ListTaskAttachments(ctx, taskID); len(attachments) > 0 {
 		resp["attachments"] = attachments
 	}
 
@@ -363,7 +363,7 @@ func (t *TeamTasksTool) executeGet(ctx context.Context, args map[string]any) *Re
 }
 
 func (t *TeamTasksTool) executeSearch(ctx context.Context, args map[string]any) *Result {
-	team, agentID, err := t.manager.resolveTeam(ctx)
+	team, agentID, err := t.manager.ResolveTeam(ctx)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -389,7 +389,7 @@ func (t *TeamTasksTool) executeSearch(ctx context.Context, args map[string]any) 
 		ptd.MarkListed()
 	}
 
-	tasks, err := t.manager.teamStore.SearchTasks(ctx, team.ID, query, searchPageSize, filterUserID)
+	tasks, err := t.manager.Store().SearchTasks(ctx, team.ID, query, searchPageSize, filterUserID)
 	if err != nil {
 		return ErrorResult("failed to search tasks: " + err.Error())
 	}

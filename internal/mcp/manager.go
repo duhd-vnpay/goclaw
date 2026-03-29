@@ -148,6 +148,128 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
+// resolvedServer holds a server config with merged credentials ready for connection.
+type resolvedServer struct {
+	info             store.MCPAccessInfo
+	args             []string
+	env              map[string]string
+	headers          map[string]string
+	hasUserCreds     bool
+	projectID        string
+	projectOverrides map[string]string
+}
+
+// resolveServerCredentials merges server defaults with per-user credentials.
+// Returns nil if the server should be skipped (disabled or missing required creds).
+func (m *Manager) resolveServerCredentials(ctx context.Context, info store.MCPAccessInfo, userID string) *resolvedServer {
+	srv := info.Server
+	if !srv.Enabled {
+		return nil
+	}
+
+	// Skip server if it requires per-user credentials and user has none
+	if requireUserCreds(srv.Settings) {
+		if userID == "" {
+			return nil
+		}
+		uc, _ := m.store.GetUserCredentials(ctx, srv.ID, userID)
+		if uc == nil || (uc.APIKey == "" && len(uc.Headers) == 0 && len(uc.Env) == 0) {
+			slog.Debug("mcp.skip_no_user_credentials", "server", srv.Name, "user", userID)
+			return nil
+		}
+	}
+
+	args := jsonBytesToStringSlice(srv.Args)
+	env := jsonBytesToStringMap(srv.Env)
+	headers := jsonBytesToStringMap(srv.Headers)
+
+	// Inject APIKey into headers if present (bug fix: was never passed to connections)
+	if srv.APIKey != "" && headers["Authorization"] == "" {
+		if headers == nil {
+			headers = make(map[string]string)
+		}
+		headers["Authorization"] = "Bearer " + srv.APIKey
+	}
+
+	// Merge per-user credentials (user overrides server defaults)
+	if userID != "" && m.store != nil {
+		if userCreds, err := m.store.GetUserCredentials(ctx, srv.ID, userID); err == nil && userCreds != nil {
+			if userCreds.APIKey != "" {
+				if headers == nil {
+					headers = make(map[string]string)
+				}
+				headers["Authorization"] = "Bearer " + userCreds.APIKey
+			}
+			for k, v := range userCreds.Headers {
+				if headers == nil {
+					headers = make(map[string]string)
+				}
+				headers[k] = v
+			}
+			for k, v := range userCreds.Env {
+				if env == nil {
+					env = make(map[string]string)
+				}
+				env[k] = v
+			}
+		}
+	}
+
+	// Per-user credentials change connection params → can't share pool connection.
+	// Fall back to per-agent mode when user has custom credentials.
+	hasUserCreds := userID != "" && m.store != nil
+	if hasUserCreds {
+		if uc, _ := m.store.GetUserCredentials(ctx, srv.ID, userID); uc != nil && (uc.APIKey != "" || len(uc.Headers) > 0 || len(uc.Env) > 0) {
+			hasUserCreds = true
+		} else {
+			hasUserCreds = false
+		}
+	}
+
+	return &resolvedServer{
+		info:         info,
+		args:         args,
+		env:          env,
+		headers:      headers,
+		hasUserCreds: hasUserCreds,
+	}
+}
+
+// connectAndFilter establishes the MCP connection (pool or per-agent mode)
+// and applies tool allow/deny filtering from server grants.
+func (m *Manager) connectAndFilter(ctx context.Context, rs *resolvedServer) error {
+	srv := rs.info.Server
+
+	if m.pool != nil && !rs.hasUserCreds {
+		// Pool mode: acquire shared connection, create per-agent BridgeTools
+		tid := store.TenantIDFromContext(ctx)
+		if err := m.connectViaPool(ctx, tid, srv.Name, srv.Transport, srv.Command,
+			rs.args, rs.env, srv.URL, rs.headers, srv.ToolPrefix, srv.TimeoutSec,
+			rs.projectID, rs.projectOverrides); err != nil {
+			return err
+		}
+	} else {
+		// Per-agent mode: create per-agent connection
+		if err := m.connectServer(ctx, srv.Name, srv.Transport, srv.Command,
+			rs.args, rs.env, srv.URL, rs.headers,
+			srv.ToolPrefix, srv.TimeoutSec); err != nil {
+			return err
+		}
+	}
+
+	// Apply tool filtering from grants
+	// Use poolKey for pool-backed servers so filterTools finds the right entries
+	poolKey := srv.Name
+	if m.pool != nil && rs.projectID != "" {
+		poolKey = srv.Name + ":" + rs.projectID
+	}
+	if len(rs.info.ToolAllow) > 0 || len(rs.info.ToolDeny) > 0 {
+		m.filterTools(poolKey, rs.info.ToolAllow, rs.info.ToolDeny)
+	}
+
+	return nil
+}
+
 // LoadForAgent connects MCP servers accessible by a specific agent+user.
 // Previously registered MCP tools for this manager are cleared and reloaded.
 // projectID and projectOverrides enable per-project MCP process isolation:
@@ -166,101 +288,17 @@ func (m *Manager) LoadForAgent(ctx context.Context, agentID uuid.UUID, userID st
 	m.unregisterAllTools()
 
 	for _, info := range accessible {
-		srv := info.Server
-		if !srv.Enabled {
+		rs := m.resolveServerCredentials(ctx, info, userID)
+		if rs == nil {
 			continue
 		}
-
-		// Skip server if it requires per-user credentials and user has none
-		if requireUserCreds(srv.Settings) {
-			if userID == "" {
-				continue
-			}
-			uc, _ := m.store.GetUserCredentials(ctx, srv.ID, userID)
-			if uc == nil || (uc.APIKey == "" && len(uc.Headers) == 0 && len(uc.Env) == 0) {
-				slog.Debug("mcp.skip_no_user_credentials", "server", srv.Name, "user", userID)
-				continue
-			}
+		// Inject project context for per-project MCP process isolation
+		rs.projectID = projectID
+		if projectOverrides != nil {
+			rs.projectOverrides = projectOverrides[info.Server.Name]
 		}
-
-		args := jsonBytesToStringSlice(srv.Args)
-		env := jsonBytesToStringMap(srv.Env)
-		headers := jsonBytesToStringMap(srv.Headers)
-
-		// Inject APIKey into headers if present (bug fix: was never passed to connections)
-		if srv.APIKey != "" && headers["Authorization"] == "" {
-			if headers == nil {
-				headers = make(map[string]string)
-			}
-			headers["Authorization"] = "Bearer " + srv.APIKey
-		}
-
-		// Merge per-user credentials (user overrides server defaults)
-		if userID != "" && m.store != nil {
-			if userCreds, err := m.store.GetUserCredentials(ctx, srv.ID, userID); err == nil && userCreds != nil {
-				if userCreds.APIKey != "" {
-					if headers == nil {
-						headers = make(map[string]string)
-					}
-					headers["Authorization"] = "Bearer " + userCreds.APIKey
-				}
-				for k, v := range userCreds.Headers {
-					if headers == nil {
-						headers = make(map[string]string)
-					}
-					headers[k] = v
-				}
-				for k, v := range userCreds.Env {
-					if env == nil {
-						env = make(map[string]string)
-					}
-					env[k] = v
-				}
-			}
-		}
-
-		// Per-user credentials change connection params → can't share pool connection.
-		// Fall back to per-agent mode when user has custom credentials.
-		hasUserCreds := userID != "" && m.store != nil
-		if hasUserCreds {
-			if uc, _ := m.store.GetUserCredentials(ctx, srv.ID, userID); uc != nil && (uc.APIKey != "" || len(uc.Headers) > 0 || len(uc.Env) > 0) {
-				hasUserCreds = true
-			} else {
-				hasUserCreds = false
-			}
-		}
-
-		if m.pool != nil && !hasUserCreds {
-			// Pool mode: acquire shared connection, create per-agent BridgeTools
-			tid := store.TenantIDFromContext(ctx)
-			var serverOverrides map[string]string
-			if projectOverrides != nil {
-				serverOverrides = projectOverrides[srv.Name]
-			}
-			if err := m.connectViaPool(ctx, tid, srv.Name, srv.Transport, srv.Command,
-				args, env, srv.URL, headers, srv.ToolPrefix, srv.TimeoutSec,
-				projectID, serverOverrides); err != nil {
-				slog.Warn("mcp.server.connect_failed", "server", srv.Name, "error", err)
-				continue
-			}
-		} else {
-			// Per-agent mode: create per-agent connection
-			if err := m.connectServer(ctx, srv.Name, srv.Transport, srv.Command,
-				args, env, srv.URL, headers,
-				srv.ToolPrefix, srv.TimeoutSec); err != nil {
-				slog.Warn("mcp.server.connect_failed", "server", srv.Name, "error", err)
-				continue
-			}
-		}
-
-		// Apply tool filtering from grants
-		// Use poolKey for pool-backed servers so filterTools finds the right entries
-		poolKey := srv.Name
-		if m.pool != nil && projectID != "" {
-			poolKey = srv.Name + ":" + projectID
-		}
-		if len(info.ToolAllow) > 0 || len(info.ToolDeny) > 0 {
-			m.filterTools(poolKey, info.ToolAllow, info.ToolDeny)
+		if err := m.connectAndFilter(ctx, rs); err != nil {
+			slog.Warn("mcp.server.connect_failed", "server", info.Server.Name, "error", err)
 		}
 	}
 

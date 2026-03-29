@@ -144,6 +144,17 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 	var contextFiles []bootstrap.ContextFile
 	if !lightContext {
 		contextFiles = l.resolveContextFiles(ctx, userID)
+
+		// Fallback: if DB seeding failed (e.g. SQLITE_BUSY) but we have
+		// in-memory embedded templates, merge them so the first turn still
+		// gets bootstrap onboarding. Only applies when DB returned no user files.
+		if val, ok := l.userSetups.Load(userID); ok {
+			if fb := val.(*userSetup).fallbackBootstrap; len(fb) > 0 {
+				contextFiles = l.mergeContextFallback(contextFiles, fb)
+				// Clear after first use — next turn should read from DB.
+				val.(*userSetup).fallbackBootstrap = nil
+			}
+		}
 	}
 	hadBootstrap := false
 	for _, cf := range contextFiles {
@@ -323,6 +334,21 @@ func (l *Loop) resolveContextFiles(ctx context.Context, userID string) []bootstr
 		}
 	}
 	return merged
+}
+
+// mergeContextFallback adds fallback (in-memory) files into contextFiles,
+// skipping any that already exist. Used when DB seeding failed.
+func (l *Loop) mergeContextFallback(contextFiles, fallback []bootstrap.ContextFile) []bootstrap.ContextFile {
+	existing := make(map[string]struct{}, len(contextFiles))
+	for _, f := range contextFiles {
+		existing[f.Path] = struct{}{}
+	}
+	for _, fb := range fallback {
+		if _, ok := existing[fb.Path]; !ok {
+			contextFiles = append(contextFiles, fb)
+		}
+	}
+	return contextFiles
 }
 
 // bootstrapToolAllowlist is the set of tools available during bootstrap onboarding.
@@ -525,22 +551,25 @@ func sanitizeHistory(msgs []providers.Message) ([]providers.Message, int) {
 func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 	history := l.sessions.GetHistory(ctx, sessionKey)
 
-	// Use calibrated token estimation when available.
+	// Use calibrated token estimation, adjusted for overhead.
+	// lastPromptTokens includes everything (system prompt, tools, context files, history).
+	// We subtract estimated overhead so the threshold comparison is history-only.
 	lastPT, lastMC := l.sessions.GetLastPromptTokens(ctx, sessionKey)
-	tokenEstimate := EstimateTokensWithCalibration(history, lastPT, lastMC)
+	adjustedLastPT := lastPT - l.estimateOverhead(history, lastPT, lastMC)
+	if adjustedLastPT < 0 {
+		adjustedLastPT = 0
+	}
+	tokenEstimate := EstimateTokensWithCalibration(history, adjustedLastPT, lastMC)
 
-	// Resolve compaction thresholds from config with sensible defaults.
+	// Resolve compaction threshold from config: token-only (no message count guard).
+	// Industry standard — Claude Code, Anthropic API, LangChain all use token-based thresholds.
 	historyShare := config.DefaultHistoryShare
 	if l.compactionCfg != nil && l.compactionCfg.MaxHistoryShare > 0 {
 		historyShare = l.compactionCfg.MaxHistoryShare
 	}
-	minMessages := 200
-	if l.compactionCfg != nil && l.compactionCfg.MinMessages > 0 {
-		minMessages = l.compactionCfg.MinMessages
-	}
 
 	threshold := int(float64(l.contextWindow) * historyShare)
-	if len(history) <= minMessages && tokenEstimate <= threshold {
+	if tokenEstimate <= threshold {
 		return
 	}
 
@@ -637,6 +666,37 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 		l.sessions.IncrementCompaction(sctx, sessionKey)
 		l.sessions.Save(sctx, sessionKey)
 	}()
+}
+
+// estimateOverhead derives the non-history token overhead (system prompt + tool definitions +
+// context files) from calibration data. Used by maybeSummarize to compare history-only tokens
+// against the compaction threshold.
+func (l *Loop) estimateOverhead(history []providers.Message, lastPromptTokens, lastMsgCount int) int {
+	if lastPromptTokens <= 0 || lastMsgCount <= 0 {
+		// No calibration data — use conservative default (20% of context, capped at 40k).
+		fallback := int(float64(l.contextWindow) * 0.2)
+		if fallback > 40000 {
+			fallback = 40000
+		}
+		return fallback
+	}
+
+	// Overhead = total prompt tokens - estimated history tokens at calibration time.
+	count := lastMsgCount
+	if count > len(history) {
+		count = len(history)
+	}
+	historyEstAtCalibration := EstimateHistoryTokens(history[:count])
+	overhead := lastPromptTokens - historyEstAtCalibration
+	if overhead < 0 {
+		overhead = 0
+	}
+	// Clamp: overhead shouldn't exceed 40% of context window.
+	maxOverhead := int(float64(l.contextWindow) * 0.4)
+	if overhead > maxOverhead {
+		overhead = maxOverhead
+	}
+	return overhead
 }
 
 // buildGroupWriterPrompt builds the system prompt section for group file writer restrictions.

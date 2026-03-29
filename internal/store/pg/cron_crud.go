@@ -185,90 +185,35 @@ func (s *PGCronStore) EnableJob(ctx context.Context, jobID string, enabled bool)
 		return fmt.Errorf("invalid job ID: %s", jobID)
 	}
 
-	now := time.Now()
-
-	// Build tenant filter clause
-	tenantClause := ""
-	var tenantArg []any
-	if !store.IsCrossTenant(ctx) {
-		tid := store.TenantIDFromContext(ctx)
-		if tid == uuid.Nil {
-			return fmt.Errorf("tenant_id required")
-		}
-		tenantClause = " AND tenant_id = $%TENANT%"
-		tenantArg = []any{tid}
-	}
-
-	if !enabled {
-		// Disable: clear next_run_at so GetDueJobs skips it immediately.
-		q := "UPDATE cron_jobs SET enabled = false, next_run_at = NULL, updated_at = $1 WHERE id = $2"
-		args := []any{now, id}
-		if tenantClause != "" {
-			q += fmt.Sprintf(" AND tenant_id = $%d", len(args)+1)
-			args = append(args, tenantArg...)
-		}
-		res, err := s.db.ExecContext(ctx, q, args...)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return fmt.Errorf("job not found")
-		}
-		s.mu.Lock()
-		s.cacheLoaded = false
-		s.mu.Unlock()
-		return nil
-	}
-
-	// Enable: read the schedule fields so we can compute next_run_at inline,
-	// matching the same logic used at AddJob and recomputeStaleJobs.
-	var scheduleKind string
-	var cronExpr, tz *string
-	var runAt *time.Time
-	var intervalMS *int64
-	row := s.db.QueryRow(
-		`SELECT schedule_kind, cron_expression, run_at, timezone, interval_ms
-		 FROM cron_jobs WHERE id = $1`, id,
-	)
-	if err = row.Scan(&scheduleKind, &cronExpr, &runAt, &tz, &intervalMS); err != nil {
-		return fmt.Errorf("load job schedule: %w", err)
-	}
-
-	schedule := store.CronSchedule{Kind: scheduleKind}
-	if cronExpr != nil {
-		schedule.Expr = *cronExpr
-	}
-	if runAt != nil {
-		ms := runAt.UnixMilli()
-		schedule.AtMS = &ms
-	}
-	if intervalMS != nil {
-		schedule.EveryMS = intervalMS
-	}
-	if tz != nil {
-		schedule.TZ = *tz
-	}
-
-	s.mu.Lock()
-	defaultTZ := s.defaultTZ
-	s.mu.Unlock()
-
-	next := computeNextRun(&schedule, now, defaultTZ)
-	q := "UPDATE cron_jobs SET enabled = true, next_run_at = $1, updated_at = $2 WHERE id = $3"
-	args := []any{next, now, id}
-	if tenantClause != "" {
-		q += fmt.Sprintf(" AND tenant_id = $%d", len(args)+1)
-		args = append(args, tenantArg...)
-	}
-	res, err := s.db.ExecContext(ctx, q, args...)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("job not found")
+	defer tx.Rollback()
+
+	current, err := s.lockCronJobForMutation(ctx, tx, id, false)
+	if err != nil {
+		return err
 	}
-	s.mu.Lock()
-	s.cacheLoaded = false
-	s.mu.Unlock()
+
+	now := time.Now()
+	nextRun, err := store.NextRunForToggle(&current.Schedule, enabled, current.Enabled, current.NextRunAt, now, s.defaultTZ)
+	if err != nil {
+		return err
+	}
+
+	if err := execCronJobUpdateTx(ctx, tx, id, map[string]any{
+		"enabled":     enabled,
+		"next_run_at": nextRun,
+		"updated_at":  now,
+	}); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	s.InvalidateCache()
 	return nil
 }

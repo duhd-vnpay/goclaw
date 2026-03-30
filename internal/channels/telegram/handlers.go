@@ -331,7 +331,9 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 			// Collect contact even when bot is not mentioned (cache prevents DB spam).
 			if cc := c.ContactCollector(); cc != nil {
 				contactName := strings.TrimSpace(user.FirstName + " " + user.LastName)
-				cc.EnsureContact(ctx, c.Type(), c.Name(), userID, userID, contactName, user.Username, "group")
+				cc.EnsureContact(ctx, c.Type(), c.Name(), userID, userID, contactName, user.Username, "group", "user")
+				// Also collect group chat itself as a contact (for group permission / merge).
+				cc.EnsureContact(ctx, c.Type(), c.Name(), chatIDStr, "", message.Chat.Title, "", "group", "group")
 			}
 
 			slog.Debug("telegram group message recorded (no mention)",
@@ -480,7 +482,7 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 				}
 				if len(histMedia) > 0 {
 					histTags := buildMediaTags(histMedia)
-					annotated = histTags + "\n\n" + annotated
+					annotated = "[Media from recent group messages — only analyze if user asks about them]\n" + histTags + "\n[/Media]\n\n" + annotated
 				}
 				for _, e := range histErrors {
 					slog.Warn("telegram: history media download failed",
@@ -591,7 +593,11 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 
 	// Collect contact for processed messages (DM + group-mentioned).
 	if cc := c.ContactCollector(); cc != nil {
-		cc.EnsureContact(ctx, c.Type(), c.Name(), senderID, userID, user.FirstName, user.Username, peerKind)
+		cc.EnsureContact(ctx, c.Type(), c.Name(), senderID, userID, user.FirstName, user.Username, peerKind, "user")
+		// Also collect group chat itself as a contact (for group permission / merge).
+		if isGroup {
+			cc.EnsureContact(ctx, c.Type(), c.Name(), chatIDStr, "", message.Chat.Title, "", "group", "group")
+		}
 	}
 
 	c.Bus().PublishInbound(bus.InboundMessage{
@@ -605,6 +611,7 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		AgentID:      targetAgentID,
 		HistoryLimit: c.historyLimit,
 		ToolAllow:    topicCfg.tools,
+		TenantID:     c.TenantID(),
 		Metadata:     metadata,
 	})
 
@@ -613,4 +620,3 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		c.groupHistory.Clear(localKey)
 	}
 }
-

@@ -78,3 +78,14 @@ goclaw.db-shm
 VERSION
 ui/desktop/frontend/dist/index.html
 .gitnexus
+
+# Local compose modules
+compose.d/*
+!compose.d/.gitkeep
+!compose.d/0*
+
+# Mise-en-place
+/.miserc.toml
+/mise.*.toml
+/mise
+/.mise

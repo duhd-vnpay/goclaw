@@ -100,6 +100,7 @@ const (
 	TopicPairingRevoked        = "pairing:revoked"
 	TopicAgentStatusChanged    = "agent:status_changed"
 	TopicFileAccess            = "file:access"
+	TopicAgentDeleted          = "agent:deleted"
 )
 
 // EventPairingRevoked is the event name broadcast when a paired device is revoked.
@@ -122,6 +123,13 @@ type AgentStatusChangedPayload struct {
 	AgentID   string `json:"agent_id"`
 	OldStatus string `json:"old_status"`
 	NewStatus string `json:"new_status"`
+}
+
+// AgentDeletedPayload carries agent deletion info for async cleanup (e.g. orphaned provider removal).
+type AgentDeletedPayload struct {
+	AgentKey string    `json:"agent_key"`
+	Provider string    `json:"provider,omitempty"` // provider name for orphan cleanup
+	TenantID uuid.UUID `json:"tenant_id,omitempty"`
 }
 
 // AuditEventPayload carries audit log data emitted by handlers.

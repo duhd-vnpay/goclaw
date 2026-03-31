@@ -34,4 +34,5 @@ type Stores struct {
 	BuiltinToolTenantCfgs  BuiltinToolTenantConfigStore
 	SkillTenantCfgs        SkillTenantConfigStore
 	SystemConfigs          SystemConfigStore
+	SubagentTasks          SubagentTaskStore
 }

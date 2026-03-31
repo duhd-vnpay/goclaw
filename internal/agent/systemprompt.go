@@ -235,10 +235,11 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 
 	// 4.5. ## MCP Tools (full only) — skip during bootstrap
 	if !isMinimal && !cfg.IsBootstrap {
+		if len(cfg.MCPToolDescs) > 0 {
+			lines = append(lines, buildMCPToolsInlineSection(cfg.MCPToolDescs)...)
+		}
 		if cfg.HasMCPToolSearch {
 			lines = append(lines, buildMCPToolsSearchSection()...)
-		} else if len(cfg.MCPToolDescs) > 0 {
-			lines = append(lines, buildMCPToolsInlineSection(cfg.MCPToolDescs)...)
 		}
 	}
 
@@ -389,7 +390,7 @@ func buildToolingSection(toolNames []string, hasSandbox bool, shellDenyGroups ma
 			"",
 			"### Media Files",
 			"When users send images, videos, audio, or documents, you see tags like:",
-			`  <media:image id="..." path="...">`,
+			`  <media:image id="..." path="..." url="...">`,
 			`  <media:video id="...">, <media:audio id="...">, <media:document path="...">`,
 			"Use the corresponding read_* tool (with the path or media_id) to analyze them when the user asks about them or when understanding the media is needed to answer.",
 			"You have full vision/audio/video capabilities through these tools.",

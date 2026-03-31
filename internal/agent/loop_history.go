@@ -209,10 +209,9 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		}
 		toolNames = filtered
 	}
-	var mcpToolDescs map[string]string
-	if !hasMCPToolSearch {
-		mcpToolDescs = l.buildMCPToolDescs(toolNames)
-	}
+	// Always build MCP tool descriptions for inline tools — in hybrid search
+	// mode the kept inline tools still need descriptions in the system prompt.
+	mcpToolDescs := l.buildMCPToolDescs(toolNames)
 
 	// Bootstrap DM mode: only restrict tools for open agents (identity being created).
 	// Predefined agents keep full capabilities — BOOTSTRAP.md guides behavior.
@@ -373,7 +372,7 @@ func filterBootstrapTools(toolNames []string) []string {
 // these limits, inline all skills as XML in the system prompt (like TS).
 // Above these limits, only include skill_search instructions.
 const (
-	skillInlineMaxCount  = 40   // max skills to inline
+	skillInlineMaxCount  = 60   // max skills to inline
 	skillInlineMaxTokens = 5000 // max estimated tokens for skill descriptions
 )
 
@@ -625,14 +624,14 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 		}
 
 		var prompt strings.Builder
-		prompt.WriteString("Provide a concise summary of this conversation, preserving key context:\n")
+		prompt.WriteString(compactionSummaryPrompt)
 		if len(mediaKinds) > 0 {
 			// Deduplicate and count media types for a compact note.
 			counts := make(map[string]int)
 			for _, k := range mediaKinds {
 				counts[k]++
 			}
-			prompt.WriteString("\nNote: user shared media files (")
+			prompt.WriteString("Note: user shared media files (")
 			first := true
 			for k, n := range counts {
 				if !first {
@@ -641,12 +640,12 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 				prompt.WriteString(fmt.Sprintf("%d %s(s)", n, k))
 				first = false
 			}
-			prompt.WriteString(") which are no longer in context. Mention briefly if relevant.\n")
+			prompt.WriteString(") which are no longer in context. Mention briefly if relevant.\n\n")
 		}
 		if summary != "" {
-			prompt.WriteString("Existing context: " + summary + "\n")
+			prompt.WriteString("Existing context: " + summary + "\n\n")
 		}
-		prompt.WriteString("\n" + sb.String())
+		prompt.WriteString(sb.String())
 
 		resp, err := l.provider.Chat(sctx, providers.ChatRequest{
 			Messages: []providers.Message{{Role: "user", Content: prompt.String()}},

@@ -11,25 +11,35 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
+// mcpOptionalParamInstruction is the shared instruction for MCP tool optional parameters.
+// Includes a concrete WRONG/RIGHT example because some models (GPT-5.4) ignore prose-only guidance
+// and fill every optional field with hallucinated values.
+const mcpOptionalParamInstruction = "**Optional parameters:** Only include parameters where you have a SPECIFIC value from the user. " +
+	"Do NOT fill in optional fields with guessed values, empty strings, or placeholder text like \"optional\". " +
+	"If unsure, OMIT the field — the tool will use sensible defaults.\n" +
+	"WRONG: {\"url\": \"https://example.com\", \"debug\": true, \"timeout\": 10000, \"format\": \"bullet\"}\n" +
+	"RIGHT: {\"url\": \"https://example.com\"}"
+
 // mcpToolDescMaxLen is the max character length for MCP tool descriptions
 // in the system prompt inline section. ~200 chars ≈ ~50 tokens, balancing
 // discoverability with prompt budget.
 const mcpToolDescMaxLen = 200
 
-// buildMCPToolsSearchSection generates the MCP tools instruction block for search mode.
-// Shown when mcp_tool_search is registered instead of individual MCP tools.
+// buildMCPToolsSearchSection generates the MCP tools search instruction block.
+// Shown when mcp_tool_search is registered — may appear alongside the inline
+// section in hybrid mode (some tools inline, rest discoverable via search).
 func buildMCPToolsSearchSection() []string {
 	return []string{
-		"## MCP Tools (mandatory — prefer over core tools)",
+		"## Additional MCP Tools (use mcp_tool_search to discover)",
 		"",
-		"You have access to external tool integrations (MCP servers) with many specialized tools.",
-		"Not all tools are loaded by default — use `mcp_tool_search` to discover them.",
+		"Additional external tool integrations are available beyond those listed above.",
+		"Use `mcp_tool_search` to discover them.",
 		"**When an MCP tool overlaps with a core tool (e.g. database query, file ops, messaging), always prefer the MCP tool** — it has richer context and tighter integration.",
 		"1. Before performing external operations (database, API, file management, messaging), run `mcp_tool_search` with descriptive English keywords.",
 		"2. Matching tools are activated immediately and can be called right away in the same turn.",
 		"3. If no match found, proceed with other available tools.",
 		"",
-		"**Optional parameters:** Only include if you have a concrete value from user context. Do not send empty strings or placeholders — omit the field entirely. The tool will use sensible defaults.",
+		mcpOptionalParamInstruction,
 		"",
 	}
 }
@@ -42,7 +52,7 @@ func buildMCPToolsInlineSection(descs map[string]string) []string {
 		"",
 		"External tool integrations (MCP servers). **When an MCP tool overlaps with a core tool, always prefer the MCP tool.**",
 		"",
-		"**Optional parameters:** Only include if you have a concrete value from user context. Do not send empty strings or placeholders — omit the field entirely. The tool will use sensible defaults.",
+		mcpOptionalParamInstruction,
 		"",
 	}
 	for name, desc := range descs {
@@ -398,7 +408,9 @@ func buildTeamWorkspaceSection(teamWsPath string, isLeadWorkspace bool) []string
 		fmt.Sprintf("- Use read_file(path=\"%s/filename.md\") to read team files", teamWsPath),
 		fmt.Sprintf("- Use write_file(path=\"%s/filename.md\", content=\"...\") to write team files", teamWsPath),
 		"- All files in the team workspace are visible to all team members",
+		"- When you delegate tasks, members can ONLY access team workspace files",
 		defaultWsNote,
+		"- Files referenced in task descriptions are auto-copied to team workspace",
 		"- To delete a team file, use write_file with empty content",
 		"",
 		"## Auto-Status Updates",

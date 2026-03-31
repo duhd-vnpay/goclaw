@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -126,18 +125,21 @@ func (p *CodexProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk
 			continue
 		}
 		args := make(map[string]any)
+		var parseErr string
 		if err := json.Unmarshal([]byte(acc.rawArgs), &args); err != nil && acc.rawArgs != "" {
-			slog.Warn("truncated tool call arguments (codex stream)",
-				"tool", acc.name, "error", err, "raw_len", len(acc.rawArgs))
+			parseErr = fmt.Sprintf("malformed JSON (%d chars): %v", len(acc.rawArgs), err)
 		}
 		result.ToolCalls = append(result.ToolCalls, ToolCall{
-			ID:        acc.callID,
-			Name:      acc.name,
-			Arguments: args,
+			ID:         acc.callID,
+			Name:       acc.name,
+			Arguments:  args,
+			ParseError: parseErr,
 		})
 	}
 
-	if len(result.ToolCalls) > 0 {
+	// Only override finish_reason when response wasn't truncated.
+	// Preserve "length" so agent loop can detect truncation and retry.
+	if len(result.ToolCalls) > 0 && result.FinishReason != "length" {
 		result.FinishReason = "tool_calls"
 	}
 

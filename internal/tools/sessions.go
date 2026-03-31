@@ -58,11 +58,12 @@ func (t *SessionsListTool) Execute(ctx context.Context, args map[string]any) *Re
 		activeMinutes = int(v)
 	}
 
-	agentID := resolveAgentIDString(ctx)
-	if agentID == "" {
+	// Session keys use agent_key (e.g. "agent:victoria:..."), not UUID.
+	agentKey := ToolAgentKeyFromCtx(ctx)
+	if agentKey == "" {
 		return ErrorResult("agent context required")
 	}
-	sessions := t.sessions.List(ctx, agentID)
+	sessions := t.sessions.List(ctx, agentKey)
 
 	// Filter by active_minutes
 	if activeMinutes > 0 {
@@ -155,12 +156,13 @@ func (t *SessionStatusTool) Execute(ctx context.Context, args map[string]any) *R
 		sessionKey = currentSession
 	}
 
-	// Security: validate session belongs to current agent (fail-closed)
-	agentID := resolveAgentIDString(ctx)
-	if agentID == "" {
+	// Security: validate session belongs to current agent (fail-closed).
+	// Session keys use agent_key (e.g. "agent:victoria:..."), not UUID.
+	agentKey := ToolAgentKeyFromCtx(ctx)
+	if agentKey == "" {
 		return ErrorResult("agent context required")
 	}
-	if !strings.HasPrefix(sessionKey, "agent:"+agentID+":") {
+	if !strings.HasPrefix(sessionKey, "agent:"+agentKey+":") {
 		return ErrorResult("access denied: session belongs to a different agent")
 	}
 

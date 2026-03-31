@@ -28,6 +28,7 @@ type ConsumerDeps struct {
 	ContactCollector *store.ContactCollector
 	ProjectStore     store.ProjectStore
 	TaskRunSessions  sync.Map
+	SubagentMgr      *tools.SubagentManager
 	BgWg             sync.WaitGroup
 	GetAnnounceMu    func(string) *sync.Mutex
 }

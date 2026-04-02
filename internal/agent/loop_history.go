@@ -479,7 +479,6 @@ func sanitizeHistory(msgs []providers.Message) ([]providers.Message, int) {
 			"tool_call_id", msgs[start].ToolCallID)
 		dropped++
 		start++
-		dropped++
 	}
 
 	if start >= len(msgs) {

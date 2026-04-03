@@ -138,13 +138,17 @@ func (m *ConfigMethods) handlePatch(ctx context.Context, client *gateway.Client,
 		json.Unmarshal(req.Params, &params)
 	}
 
+	slog.Info("config.patch called", "raw_len", len(params.Raw), "baseHash", params.BaseHash, "currentHash", m.cfg.Hash())
+
 	if params.Raw == "" {
+		slog.Warn("config.patch: empty raw")
 		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgRawPatchRequired)))
 		return
 	}
 
 	// Optimistic concurrency
 	if params.BaseHash != "" && params.BaseHash != m.cfg.Hash() {
+		slog.Warn("config.patch: hash mismatch", "client", params.BaseHash, "server", m.cfg.Hash())
 		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgConfigHashMismatch)))
 		return
 	}
@@ -175,9 +179,11 @@ func (m *ConfigMethods) handlePatch(ctx context.Context, client *gateway.Client,
 
 	// Save to disk
 	if err := config.Save(m.cfgPath, merged); err != nil {
+		slog.Error("config.patch: failed to save", "path", m.cfgPath, "error", err)
 		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, i18n.T(locale, i18n.MsgFailedToSave, "config", err.Error())))
 		return
 	}
+	slog.Info("config.patch: saved to disk", "path", m.cfgPath)
 
 	// Update in-memory config and restore secrets
 	m.cfg.ReplaceFrom(merged)

@@ -9,7 +9,7 @@ import (
 )
 
 // wireHTTP creates HTTP handlers (agents + skills + traces + MCP + channel instances + providers + builtin tools + pending messages + projects + team events + secure CLI + MCP user credentials).
-func wireHTTP(stores *store.Stores, token, defaultWorkspace, dataDir, bundledSkillsDir string, msgBus *bus.MessageBus, toolsReg *tools.Registry, providerReg *providers.Registry, isOwner func(string) bool, gatewayAddr string, mcpToolLister httpapi.MCPToolLister) (*httpapi.AgentsHandler, *httpapi.SkillsHandler, *httpapi.TracesHandler, *httpapi.MCPHandler, *httpapi.ChannelInstancesHandler, *httpapi.ProvidersHandler, *httpapi.BuiltinToolsHandler, *httpapi.PendingMessagesHandler, *httpapi.ProjectHandler, *httpapi.TeamEventsHandler, *httpapi.SecureCLIHandler, *httpapi.MCPUserCredentialsHandler) {
+func wireHTTP(stores *store.Stores, defaultWorkspace, dataDir, bundledSkillsDir string, msgBus *bus.MessageBus, toolsReg *tools.Registry, providerReg *providers.Registry, isOwner func(string) bool, gatewayAddr string, mcpToolLister httpapi.MCPToolLister) (*httpapi.AgentsHandler, *httpapi.SkillsHandler, *httpapi.TracesHandler, *httpapi.MCPHandler, *httpapi.ChannelInstancesHandler, *httpapi.ProvidersHandler, *httpapi.BuiltinToolsHandler, *httpapi.PendingMessagesHandler, *httpapi.ProjectHandler, *httpapi.TeamEventsHandler, *httpapi.SecureCLIHandler, *httpapi.SecureCLIGrantHandler, *httpapi.MCPUserCredentialsHandler) {
 	var agentsH *httpapi.AgentsHandler
 	var skillsH *httpapi.SkillsHandler
 	var tracesH *httpapi.TracesHandler
@@ -20,6 +20,7 @@ func wireHTTP(stores *store.Stores, token, defaultWorkspace, dataDir, bundledSki
 	var pendingMessagesH *httpapi.PendingMessagesHandler
 	var projectsH *httpapi.ProjectHandler
 	var secureCLIH *httpapi.SecureCLIHandler
+	var secureCLIGrantH *httpapi.SecureCLIGrantHandler
 
 	if stores != nil && stores.Agents != nil {
 		var summoner *httpapi.AgentSummoner
@@ -90,12 +91,15 @@ func wireHTTP(stores *store.Stores, token, defaultWorkspace, dataDir, bundledSki
 	}
 
 	if stores != nil && stores.Projects != nil {
-		projectsH = httpapi.NewProjectHandler(stores.Projects, token)
+		projectsH = httpapi.NewProjectHandler(stores.Projects)
 	}
 
 	if stores != nil && stores.SecureCLI != nil {
 		secureCLIH = httpapi.NewSecureCLIHandler(stores.SecureCLI, msgBus)
 	}
+	if stores != nil && stores.SecureCLIGrants != nil {
+		secureCLIGrantH = httpapi.NewSecureCLIGrantHandler(stores.SecureCLIGrants, msgBus)
+	}
 
-	return agentsH, skillsH, tracesH, mcpH, channelInstancesH, providersH, builtinToolsH, pendingMessagesH, projectsH, teamEventsH, secureCLIH, mcpUserCredsH
+	return agentsH, skillsH, tracesH, mcpH, channelInstancesH, providersH, builtinToolsH, pendingMessagesH, projectsH, teamEventsH, secureCLIH, secureCLIGrantH, mcpUserCredsH
 }

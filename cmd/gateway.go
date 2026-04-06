@@ -394,7 +394,8 @@ func runGateway() {
 	if mcpMgr != nil {
 		mcpToolLister = mcpMgr
 	}
-	agentsH, skillsH, tracesH, mcpH, channelInstancesH, providersH, builtinToolsH, pendingMessagesH, projectsH, teamEventsH, secureCLIH, mcpUserCredsH := wireHTTP(pgStores, cfg.Gateway.Token, cfg.Agents.Defaults.Workspace, dataDir, bundledSkillsDir, msgBus, toolsReg, providerRegistry, permPE.IsOwner, gatewayAddr, mcpToolLister)
+	httpapi.InitGatewayToken(cfg.Gateway.Token)
+	agentsH, skillsH, tracesH, mcpH, channelInstancesH, providersH, builtinToolsH, pendingMessagesH, projectsH, teamEventsH, secureCLIH, secureCLIGrantH, mcpUserCredsH := wireHTTP(pgStores, cfg.Agents.Defaults.Workspace, dataDir, bundledSkillsDir, msgBus, toolsReg, providerRegistry, permPE.IsOwner, gatewayAddr, mcpToolLister)
 	if providersH != nil {
 		providersH.SetAPIBaseFallback(cfg.Providers.APIBaseForType)
 	}
@@ -452,6 +453,9 @@ func runGateway() {
 
 	if secureCLIH != nil {
 		server.SetSecureCLIHandler(secureCLIH)
+	}
+	if secureCLIGrantH != nil {
+		server.SetSecureCLIGrantHandler(secureCLIGrantH)
 	}
 
 	// Activity audit log API

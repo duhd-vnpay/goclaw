@@ -15,12 +15,11 @@ import (
 // ProjectHandler handles project CRUD and MCP override HTTP endpoints.
 type ProjectHandler struct {
 	store store.ProjectStore
-	token string
 }
 
 // NewProjectHandler creates a handler for project management endpoints.
-func NewProjectHandler(store store.ProjectStore, token string) *ProjectHandler {
-	return &ProjectHandler{store: store, token: token}
+func NewProjectHandler(store store.ProjectStore) *ProjectHandler {
+	return &ProjectHandler{store: store}
 }
 
 // RegisterRoutes registers all project routes on the given mux.
@@ -41,8 +40,8 @@ func (h *ProjectHandler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *ProjectHandler) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if h.token != "" {
-			if extractBearerToken(r) != h.token {
+		if pkgGatewayToken != "" {
+			if extractBearerToken(r) != pkgGatewayToken {
 				locale := extractLocale(r)
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": i18n.T(locale, i18n.MsgUnauthorized)})
 				return

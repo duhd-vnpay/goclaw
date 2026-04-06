@@ -26,8 +26,9 @@ type Stores struct {
 	Snapshots        SnapshotStore
 	Party            PartyStore
 	Projects         ProjectStore
-	SecureCLI        SecureCLIStore
-	APIKeys           APIKeyStore
+	SecureCLI           SecureCLIStore
+	SecureCLIGrants     SecureCLIAgentGrantStore
+	APIKeys             APIKeyStore
 	Heartbeats        HeartbeatStore
 	ConfigPermissions      ConfigPermissionStore
 	Tenants                TenantStore

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
+	harnessConstraints "github.com/nextlevelbuilder/goclaw/internal/harness/constraints"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
@@ -249,6 +250,28 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 					"agent", l.id, "user", req.UserID,
 					"patterns", matchStr, "message_len", len(req.Message),
 				)
+			}
+		}
+	}
+
+	// Harness L1: run BeforeRun guards (superset of InputGuard — additional constraints).
+	if l.harness != nil && l.harness.Enabled() {
+		guardCtx := harnessConstraints.GuardContext{
+			AgentID:   l.agentUUID.String(),
+			AgentKey:  l.id,
+			UserID:    req.UserID,
+			SessionID: req.SessionKey,
+			TenantID:  l.tenantID.String(),
+		}
+		for _, r := range l.harness.Guards().RunPhase(harnessConstraints.BeforeRun, guardCtx) {
+			if r.Action == "block" {
+				slog.Warn("harness.guard_blocked",
+					"agent", l.id, "guard", r.GuardName, "feedback", r.Feedback)
+				return contextSetupResult{}, fmt.Errorf("harness guard blocked: %s — %s", r.GuardName, r.Feedback)
+			}
+			if r.Action == "warn" {
+				slog.Warn("harness.guard_warning",
+					"agent", l.id, "guard", r.GuardName, "feedback", r.Feedback)
 			}
 		}
 	}

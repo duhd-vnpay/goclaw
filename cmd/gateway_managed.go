@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"path/filepath"
 
@@ -14,14 +13,12 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
-	"github.com/nextlevelbuilder/goclaw/internal/orchestration"
 	"github.com/nextlevelbuilder/goclaw/internal/edition"
-	"github.com/nextlevelbuilder/goclaw/internal/eventbus"
+	"github.com/nextlevelbuilder/goclaw/internal/harness"
 	httpapi "github.com/nextlevelbuilder/goclaw/internal/http"
 	kg "github.com/nextlevelbuilder/goclaw/internal/knowledgegraph"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
-	memorypkg "github.com/nextlevelbuilder/goclaw/internal/memory"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
@@ -54,7 +51,6 @@ func wireExtras(
 	appCfg *config.Config,
 	sandboxMgr sandbox.Manager,
 	redisClient any, // nil when built without -tags redis or when Redis is unconfigured
-	domainBus eventbus.DomainEventBus,
 ) (*tools.ContextFileInterceptor, *mcpbridge.Pool, *media.Store, tools.PostTurnProcessor) {
 	// 1. Build cache instances (in-memory or Redis depending on build tags)
 	agentCtxCache, userCtxCache := makeCaches(redisClient)
@@ -128,16 +124,19 @@ func wireExtras(
 		mcpPool = mcpbridge.NewPool(mcpbridge.DefaultPoolConfig())
 	}
 
+	// 5b. Harness layer manager (nil when disabled — zero overhead)
+	var harnessMgr *harness.Manager
+	if appCfg.Harness.Enabled {
+		harnessMgr = harness.NewManager(appCfg.Harness, stores.DB)
+		slog.Info("harness layer enabled",
+			"dependency_enforcement", appCfg.Harness.DependencyLayers.Enforcement,
+			"context_strategy", appCfg.Harness.Continuity.Strategy)
+	}
+
 	// 6. Set up agent resolver: lazy-creates Loops from DB
 	var skillAccessStore store.SkillAccessStore
 	if sas, ok := stores.Skills.(store.SkillAccessStore); ok {
 		skillAccessStore = sas
-	}
-
-	// V3 auto-inject: create AutoInjector if episodic store is available.
-	var autoInjector memorypkg.AutoInjector
-	if stores.Episodic != nil {
-		autoInjector = memorypkg.NewAutoInjector(stores.Episodic, stores.EvolutionMetrics)
 	}
 
 	resolver := agent.NewManagedResolver(agent.ResolverDeps{
@@ -176,14 +175,11 @@ func wireExtras(
 		ModelPricing:           appCfg.Telemetry.ModelPricing,
 		TracingStore:           stores.Tracing,
 		MemoryStore:            stores.Memory,
-		ContactStore:           stores.Contacts,
 		TenantStore:            stores.Tenants,
 		BuiltinToolTenantCfgs:  stores.BuiltinToolTenantCfgs,
 		SkillTenantCfgs:        stores.SkillTenantCfgs,
 		Workspace:              workspace,
-		AutoInjector:           autoInjector,
-		EvolutionMetricsStore:  stores.EvolutionMetrics,
-		DomainBus:              domainBus,
+		Harness:                harnessMgr,
 		OnEvent: func(event agent.AgentEvent) {
 			// Sign /v1/files/ and /v1/media/ URLs in content before delivery.
 			// Sessions store clean paths; signing happens only at delivery time.
@@ -304,24 +300,6 @@ func wireExtras(
 		slog.Info("memory layering enabled")
 	}
 
-	// V3: Wire episodic store + evolution metrics on memory tools (search + expand)
-	if stores.Episodic != nil {
-		if searchTool, ok := toolsReg.Get("memory_search"); ok {
-			if mst, ok := searchTool.(*tools.MemorySearchTool); ok {
-				mst.SetEpisodicStore(stores.Episodic)
-				if stores.EvolutionMetrics != nil {
-					mst.SetEvolutionMetricsStore(stores.EvolutionMetrics)
-				}
-			}
-		}
-		if expandTool, ok := toolsReg.Get("memory_expand"); ok {
-			if met, ok := expandTool.(*tools.MemoryExpandTool); ok {
-				met.SetEpisodicStore(stores.Episodic)
-			}
-		}
-		slog.Info("v3 episodic memory wired to tools")
-	}
-
 	// Wire knowledge graph store on KG tool + hint in memory_search results
 	if stores.KnowledgeGraph != nil {
 		if kgTool, ok := toolsReg.Get("knowledge_graph_search"); ok {
@@ -336,45 +314,6 @@ func wireExtras(
 			}
 		}
 		slog.Info("knowledge graph tool wired (Postgres)")
-	}
-
-	// Wire vault tools and interceptors (conditional on vault store availability)
-	wireVault(stores, toolsReg, workspace, domainBus)
-
-	// Wire delegate tool for inter-agent delegation via agent_links.
-	if stores.AgentLinks != nil && stores.Agents != nil {
-		delegateRunFn := func(ctx context.Context, req tools.DelegateRequest) (tools.DelegateResult, error) {
-			loop, err := agentRouter.Get(ctx, req.ToAgentKey)
-			if err != nil {
-				return tools.DelegateResult{}, fmt.Errorf("target agent %q not found: %w", req.ToAgentKey, err)
-			}
-			sessionKey := fmt.Sprintf("delegate:%s:%s:%s",
-				req.FromAgentID.String()[:8], req.ToAgentKey, req.DelegationID)
-
-			// Link delegate trace to parent trace
-			delegateCtx := tracing.WithDelegateParentTraceID(ctx, tracing.TraceIDFromContext(ctx))
-
-			runReq := agent.RunRequest{
-				RunID:         uuid.New().String(),
-				SessionKey:    sessionKey,
-				Message:       req.Task,
-				UserID:        req.UserID,
-				Channel:       "delegate",
-				RunKind:       "delegate",
-				DelegationID:  req.DelegationID,
-				ParentAgentID: req.FromAgentKey,
-			}
-			result, err := loop.Run(delegateCtx, runReq)
-			if err != nil {
-				return tools.DelegateResult{}, err
-			}
-			cr := orchestration.CaptureFromRunResult(result, 0)
-			return tools.DelegateResult{Content: cr.Content, Media: cr.Media}, nil
-		}
-		delegateTool := tools.NewDelegateTool(stores.AgentLinks, stores.Agents, domainBus, delegateRunFn)
-		delegateTool.SetMsgBus(msgBus)
-		toolsReg.Register(delegateTool)
-		slog.Info("delegate tool wired")
 	}
 
 	// --- Cache invalidation event subscribers ---
@@ -509,12 +448,6 @@ func wireExtras(
 			applyBuiltinToolDisables(context.Background(), stores.BuiltinTools, toolsReg)
 			agentRouter.InvalidateAll()
 		})
-	}
-
-	// V3 evolution: daily suggestion engine + weekly evaluation cron (background goroutine).
-	if stores.EvolutionMetrics != nil && stores.EvolutionSuggestions != nil {
-		sugEngine := agent.NewSuggestionEngine(stores.EvolutionMetrics, stores.EvolutionSuggestions)
-		go runEvolutionCron(stores, sugEngine)
 	}
 
 	// Register team tools (team_tasks + workspace interceptor) if team store is available.

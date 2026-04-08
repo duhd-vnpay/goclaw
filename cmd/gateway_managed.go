@@ -14,6 +14,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/edition"
+	"github.com/nextlevelbuilder/goclaw/internal/harness"
 	httpapi "github.com/nextlevelbuilder/goclaw/internal/http"
 	kg "github.com/nextlevelbuilder/goclaw/internal/knowledgegraph"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
@@ -123,6 +124,15 @@ func wireExtras(
 		mcpPool = mcpbridge.NewPool(mcpbridge.DefaultPoolConfig())
 	}
 
+	// 5b. Harness layer manager (nil when disabled — zero overhead)
+	var harnessMgr *harness.Manager
+	if appCfg.Harness.Enabled {
+		harnessMgr = harness.NewManager(appCfg.Harness, stores.DB)
+		slog.Info("harness layer enabled",
+			"dependency_enforcement", appCfg.Harness.DependencyLayers.Enforcement,
+			"context_strategy", appCfg.Harness.Continuity.Strategy)
+	}
+
 	// 6. Set up agent resolver: lazy-creates Loops from DB
 	var skillAccessStore store.SkillAccessStore
 	if sas, ok := stores.Skills.(store.SkillAccessStore); ok {
@@ -169,6 +179,7 @@ func wireExtras(
 		BuiltinToolTenantCfgs:  stores.BuiltinToolTenantCfgs,
 		SkillTenantCfgs:        stores.SkillTenantCfgs,
 		Workspace:              workspace,
+		Harness:                harnessMgr,
 		OnEvent: func(event agent.AgentEvent) {
 			// Sign /v1/files/ and /v1/media/ URLs in content before delivery.
 			// Sessions store clean paths; signing happens only at delivery time.

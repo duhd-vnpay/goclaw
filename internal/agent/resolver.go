@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
+	"github.com/nextlevelbuilder/goclaw/internal/harness"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
@@ -101,6 +102,9 @@ type ResolverDeps struct {
 
 	// Global workspace root (GOCLAW_WORKSPACE)
 	Workspace string
+
+	// Harness layer manager (nil = harness disabled)
+	Harness *harness.Manager
 }
 
 // NewManagedResolver creates a ResolverFunc that builds Loops from DB agent data.
@@ -421,6 +425,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			MCPStore:               deps.MCPStore,
 			MCPPool:                deps.MCPPool,
 			MCPUserCredSrvs:        mcpUserCredSrvs,
+			Harness:                deps.Harness,
 		})
 
 		slog.Info("resolved agent from DB", "agent", agentKey, "model", ag.Model, "provider", ag.Provider)

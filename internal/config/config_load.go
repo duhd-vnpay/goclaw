@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nextlevelbuilder/goclaw/internal/harness"
 	"github.com/titanous/json5"
 )
 
@@ -60,6 +61,7 @@ func Default() *Config {
 			RateLimitPerHour: 150,
 		},
 		Sessions: SessionsConfig{},
+		Harness:  harness.DefaultConfig(),
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nextlevelbuilder/goclaw/internal/cron"
+	"github.com/nextlevelbuilder/goclaw/internal/harness"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 )
 
@@ -53,6 +54,7 @@ type Config struct {
 	Telemetry TelemetryConfig `json:"telemetry"`
 	Tailscale TailscaleConfig `json:"tailscale"`
 	Bindings  []AgentBinding  `json:"bindings,omitempty"`
+	Harness   harness.Config  `json:"harness"`
 	mu        sync.RWMutex
 }
 

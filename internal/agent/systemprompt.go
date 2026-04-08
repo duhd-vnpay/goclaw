@@ -88,6 +88,10 @@ type SystemPromptConfig struct {
 	// Bootstrap mode: BOOTSTRAP.md is present — slim prompt with only write_file tool.
 	// Skips skills, MCP, team workspace, spawn, sandbox, self-evolve, recency reminders.
 	IsBootstrap bool
+
+	// HarnessResumeContext is injected by L2 continuity layer — structured handoff from previous session.
+	// Empty string when no artifact exists (first session or harness disabled).
+	HarnessResumeContext string
 }
 
 // coreToolSummaries maps tool names to one-line descriptions.
@@ -207,6 +211,11 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 	personaFiles, otherFiles := splitPersonaFiles(cfg.ContextFiles)
 	if len(personaFiles) > 0 {
 		lines = append(lines, buildPersonaSection(personaFiles, cfg.AgentType)...)
+	}
+
+	// 1.8. Harness resume context — structured handoff from previous session (L2 continuity)
+	if cfg.HarnessResumeContext != "" {
+		lines = append(lines, cfg.HarnessResumeContext, "")
 	}
 
 	// 2. ## Tooling

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
+	"github.com/nextlevelbuilder/goclaw/internal/harness"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
@@ -184,6 +185,9 @@ type Loop struct {
 
 	// Memory store for extractive memory fallback (writes directly when LLM flush fails)
 	memStore store.MemoryStore
+
+	// Harness layer manager (nil = harness disabled)
+	harness *harness.Manager
 }
 
 // AgentEvent is emitted during agent execution for WS broadcasting.
@@ -321,6 +325,9 @@ type LoopConfig struct {
 	MCPStore        store.MCPServerStore  // for credential lookup
 	MCPPool         *mcpbridge.Pool       // user-keyed connection pool
 	MCPUserCredSrvs []store.MCPAccessInfo // servers needing per-user creds
+
+	// Harness layer manager (nil = harness disabled)
+	Harness *harness.Manager
 }
 
 const defaultMaxTokens = config.DefaultMaxTokens
@@ -419,6 +426,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		mcpStore:               cfg.MCPStore,
 		mcpPool:                cfg.MCPPool,
 		mcpUserCredSrvs:        cfg.MCPUserCredSrvs,
+		harness:                cfg.Harness,
 	}
 }
 

@@ -27,14 +27,31 @@ type Engine struct {
 	orchestrator *Orchestrator
 }
 
+// EngineOptions holds optional components for the Ardenn engine.
+type EngineOptions struct {
+	Constraints  *ConstraintEngine
+	EvalPipeline *ArdennEvalPipeline
+}
+
 // NewEngine creates a fully wired Ardenn engine.
-func NewEngine(events EventStore, hands *HandRegistry) *Engine {
+// opts is variadic for backward compatibility — existing callers without opts still work.
+func NewEngine(events EventStore, hands *HandRegistry, opts ...EngineOptions) *Engine {
 	projector := NewProjector(events)
 	gates := NewGateKeeper(events)
+
+	var constraints *ConstraintEngine
+	var evalPipeline *ArdennEvalPipeline
+	if len(opts) > 0 {
+		constraints = opts[0].Constraints
+		evalPipeline = opts[0].EvalPipeline
+	}
+
 	executor := &StepExecutor{
-		events: events,
-		hands:  hands,
-		gates:  gates,
+		events:       events,
+		hands:        hands,
+		gates:        gates,
+		constraints:  constraints,
+		evalPipeline: evalPipeline,
 	}
 	orchestrator := NewOrchestrator(events, projector, executor)
 

@@ -3,6 +3,7 @@ package ardenn
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 )
@@ -21,16 +22,18 @@ import (
 //
 // Engine is the unified entry point for Ardenn. Wires all components.
 type Engine struct {
-	events       EventStore
-	projector    *Projector
-	executor     *StepExecutor
-	orchestrator *Orchestrator
+	events         EventStore
+	projector      *Projector
+	executor       *StepExecutor
+	orchestrator   *Orchestrator
+	resourceLoader ProjectResourceLoader
 }
 
 // EngineOptions holds optional components for the Ardenn engine.
 type EngineOptions struct {
-	Constraints  *ConstraintEngine
-	EvalPipeline *ArdennEvalPipeline
+	Constraints    *ConstraintEngine
+	EvalPipeline   *ArdennEvalPipeline
+	ResourceLoader ProjectResourceLoader
 }
 
 // NewEngine creates a fully wired Ardenn engine.
@@ -41,9 +44,11 @@ func NewEngine(events EventStore, hands *HandRegistry, opts ...EngineOptions) *E
 
 	var constraints *ConstraintEngine
 	var evalPipeline *ArdennEvalPipeline
+	var resourceLoader ProjectResourceLoader
 	if len(opts) > 0 {
 		constraints = opts[0].Constraints
 		evalPipeline = opts[0].EvalPipeline
+		resourceLoader = opts[0].ResourceLoader
 	}
 
 	executor := &StepExecutor{
@@ -56,10 +61,11 @@ func NewEngine(events EventStore, hands *HandRegistry, opts ...EngineOptions) *E
 	orchestrator := NewOrchestrator(events, projector, executor)
 
 	return &Engine{
-		events:       events,
-		projector:    projector,
-		executor:     executor,
-		orchestrator: orchestrator,
+		events:         events,
+		projector:      projector,
+		executor:       executor,
+		orchestrator:   orchestrator,
+		resourceLoader: resourceLoader,
 	}
 }
 
@@ -80,6 +86,18 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (uuid.UUID, 
 	tier, err := ParseTier(req.Tier)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("invalid tier: %w", err)
+	}
+
+	// Inject project resources into variables
+	if req.ProjectID != nil && e.resourceLoader != nil {
+		projectVars, err := ResolveProjectVariables(ctx, e.resourceLoader, *req.ProjectID)
+		if err != nil {
+			// Non-fatal: log and continue without project vars
+			slog.Warn("ardenn: failed to resolve project variables",
+				"project_id", req.ProjectID, "error", err)
+		} else {
+			req.Variables = MergeVariables(req.Variables, projectVars)
+		}
 	}
 
 	// Emit run.created

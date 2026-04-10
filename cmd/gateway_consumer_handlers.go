@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
+	"github.com/nextlevelbuilder/goclaw/internal/ardenn/hands"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/safego"
@@ -269,6 +270,18 @@ func handleTeammateMessage(
 		// Stop lock renewal now that the agent has finished.
 		if lockStop != nil {
 			lockStop()
+		}
+
+		// Ardenn: resolve agent completion if dispatched by Ardenn engine.
+		if deps.ArdennCompletion != nil {
+			var resultText string
+			var resultErr error
+			if outcome.Err != nil {
+				resultErr = outcome.Err
+			} else if outcome.Result != nil {
+				resultText = outcome.Result.Content
+			}
+			hands.ResolveAgentCompletion(inMeta, resultText, resultErr, deps.ArdennCompletion)
 		}
 
 		// Auto-complete/fail the associated team task (v2 only).

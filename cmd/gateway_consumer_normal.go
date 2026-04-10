@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
+	"github.com/nextlevelbuilder/goclaw/internal/ardenn/hands"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels/telegram/voiceguard"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
@@ -220,6 +221,13 @@ func processNormalMessage(
 		}
 	}
 
+	// Propagate Ardenn dispatch metadata for post-turn completion.
+	for _, k := range []string{"ardenn_run_id", "ardenn_step_run_id", "ardenn_hand_type"} {
+		if v := msg.Metadata[k]; v != "" {
+			outMeta[k] = v
+		}
+	}
+
 	// Register run with channel manager for streaming/reaction event forwarding.
 	// Use localKey (composite key with topic suffix) so streaming/reaction events
 	// route to the correct per-topic state in the channel.
@@ -372,6 +380,18 @@ func processNormalMessage(
 	// Handle result asynchronously to not block the flush callback.
 	go func(agentKey, channel, chatID, session, rID, peerKind, inboundContent string, meta map[string]string, blockReplyEnabled bool, ptd *tools.PendingTeamDispatch) {
 		outcome := <-outCh
+
+		// Ardenn: resolve agent completion if dispatched by Ardenn engine.
+		if deps.ArdennCompletion != nil {
+			var resultText string
+			var resultErr error
+			if outcome.Err != nil {
+				resultErr = outcome.Err
+			} else if outcome.Result != nil {
+				resultText = outcome.Result.Content
+			}
+			hands.ResolveAgentCompletion(meta, resultText, resultErr, deps.ArdennCompletion)
+		}
 
 		// Release team create lock — tasks already visible in DB, other goroutines can list.
 		ptd.ReleaseTeamLock()

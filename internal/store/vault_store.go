@@ -93,6 +93,7 @@ type VaultStore interface {
 	GetBacklinks(ctx context.Context, tenantID, docID string) ([]VaultBacklink, error)
 	DeleteDocLinks(ctx context.Context, tenantID, docID string) error
 	DeleteDocLinksByType(ctx context.Context, tenantID, docID, linkType string) error
+	DeleteDocLinksByTypes(ctx context.Context, tenantID, docID string, types []string) error
 
 	// Enrichment
 	// UpdateSummaryAndReembed updates summary text and re-generates embedding from title+path+summary.

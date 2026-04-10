@@ -126,6 +126,12 @@ const DomainsPage = lazyWithRetry(() =>
 const WorkflowBuilderPage = lazyWithRetry(() =>
   import("@/pages/ardenn/builder/workflow-builder-page").then((m) => ({ default: m.WorkflowBuilderPage })),
 );
+const RunPage = lazyWithRetry(() =>
+  import("@/pages/ardenn/runs/run-page").then((m) => ({ default: m.RunPage })),
+);
+const MyTasksPage = lazyWithRetry(() =>
+  import("@/pages/ardenn/tasks/my-tasks-page").then((m) => ({ default: m.MyTasksPage })),
+);
 
 function PageLoader() {
   return (
@@ -180,7 +186,8 @@ export function AppRoutes() {
           <Route path={ROUTES.WORKFLOW_NEW} element={<WorkflowBuilderPage key="new" />} />
           <Route path={ROUTES.WORKFLOW_EDIT} element={<WorkflowBuilderPage key="edit" />} />
           <Route path={ROUTES.WORKFLOW_DETAIL} element={<WorkflowsPage key="detail" />} />
-          <Route path={ROUTES.MY_TASKS} element={<WorkflowsPage key="my-tasks" />} />
+          <Route path={ROUTES.WORKFLOW_RUN_DETAIL} element={<RunPage />} />
+          <Route path={ROUTES.MY_TASKS} element={<MyTasksPage />} />
           <Route path={ROUTES.DOMAINS} element={<RequireAdmin><DomainsPage /></RequireAdmin>} />
           <Route path={ROUTES.SESSIONS} element={<SessionsPage key="list" />} />
           <Route path={ROUTES.SESSION_DETAIL} element={<SessionsPage key="detail" />} />

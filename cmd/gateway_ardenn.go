@@ -8,6 +8,8 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/ardenn"
 	"github.com/nextlevelbuilder/goclaw/internal/ardenn/hands"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/gateway"
+	"github.com/nextlevelbuilder/goclaw/internal/gateway/methods"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	pgardenn "github.com/nextlevelbuilder/goclaw/internal/store/pg/ardenn"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
@@ -65,4 +67,24 @@ func registerArdennTool(
 	}
 	toolsReg.Register(tools.NewArdennWorkflowTool(engine, defStore, projStore))
 	slog.Info("ardenn_workflow tool registered")
+}
+
+// RegisterArdennMethods wires Ardenn RPC handlers into the gateway method router.
+func RegisterArdennMethods(router *gateway.MethodRouter, eng *ardenn.Engine, stores *store.Stores) {
+	if eng == nil {
+		slog.Debug("ardenn: skipping RPC method registration (engine nil)")
+		return
+	}
+	defStore, ok := stores.ArdennDefinitions.(*pgardenn.PGDefinitionStore)
+	if !ok {
+		slog.Warn("ardenn: cannot register RPC methods — definition store unavailable")
+		return
+	}
+	projStore, ok := stores.ArdennProjections.(*pgardenn.PGProjectionStore)
+	if !ok {
+		slog.Warn("ardenn: cannot register RPC methods — projection store unavailable")
+		return
+	}
+	methods.NewArdennMethods(defStore, projStore, eng).Register(router)
+	slog.Info("ardenn: registered gateway RPC methods")
 }

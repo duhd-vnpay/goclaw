@@ -101,3 +101,71 @@ func (s *PGProjectionStore) GetStepRuns(ctx context.Context, runID uuid.UUID) ([
 		`SELECT * FROM ardenn_step_runs WHERE run_id = $1 ORDER BY created_at`, runID)
 	return stepRuns, err
 }
+
+// --- Query methods for gateway RPC ---
+
+type ListRunsFilter struct {
+	WorkflowID *uuid.UUID
+	Status     *string
+	Limit      int
+	Offset     int
+}
+
+func (s *PGProjectionStore) ListRuns(ctx context.Context, tenantID uuid.UUID, f ListRunsFilter) ([]RunRow, error) {
+	query := `SELECT * FROM ardenn_runs WHERE tenant_id = $1`
+	args := []any{tenantID}
+	idx := 2
+
+	if f.WorkflowID != nil {
+		query += fmt.Sprintf(" AND workflow_id = $%d", idx)
+		args = append(args, *f.WorkflowID)
+		idx++
+	}
+	if f.Status != nil {
+		query += fmt.Sprintf(" AND status = $%d", idx)
+		args = append(args, *f.Status)
+		idx++
+	}
+	query += " ORDER BY created_at DESC"
+	if f.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", f.Limit)
+	}
+	if f.Offset > 0 {
+		query += fmt.Sprintf(" OFFSET %d", f.Offset)
+	}
+
+	var runs []RunRow
+	err := s.db.SelectContext(ctx, &runs, query, args...)
+	return runs, err
+}
+
+type MyTask struct {
+	StepRunID    uuid.UUID `db:"id"              json:"id"`
+	RunID        uuid.UUID `db:"run_id"          json:"runId"`
+	StepID       uuid.UUID `db:"step_id"         json:"stepId"`
+	StepName     string    `db:"step_name"       json:"stepName"`
+	WorkflowName string   `db:"workflow_name"    json:"workflowName"`
+	WorkflowID   uuid.UUID `db:"workflow_id"     json:"workflowId"`
+	Status       string    `db:"status"          json:"status"`
+	GateStatus   *string   `db:"gate_status"     json:"gateStatus"`
+	HandType     *string   `db:"hand_type"       json:"handType"`
+	CreatedAt    string    `db:"created_at"      json:"createdAt"`
+}
+
+func (s *PGProjectionStore) GetMyTasks(ctx context.Context, tenantID uuid.UUID, userID string) ([]MyTask, error) {
+	var tasks []MyTask
+	err := s.db.SelectContext(ctx, &tasks,
+		`SELECT sr.id, sr.run_id, sr.step_id, st.name AS step_name,
+		        w.name AS workflow_name, w.id AS workflow_id,
+		        sr.status, sr.gate_status, sr.hand_type, sr.created_at
+		 FROM ardenn_step_runs sr
+		 JOIN ardenn_steps st ON sr.step_id = st.id
+		 JOIN ardenn_runs r ON sr.run_id = r.id
+		 JOIN ardenn_workflows w ON r.workflow_id = w.id
+		 WHERE r.tenant_id = $1
+		   AND (sr.assigned_user = $2::uuid OR (sr.gate_status = 'pending'))
+		   AND sr.status IN ('running', 'waiting_gate')
+		 ORDER BY sr.created_at DESC`,
+		tenantID, userID)
+	return tasks, err
+}

@@ -187,3 +187,28 @@ const (
 	// WhatsApp
 	MethodWhatsAppQRStart = "whatsapp.qr.start"
 )
+
+// Ardenn — Enterprise Workflow Engine
+const (
+	MethodArdennDomainsList      = "ardenn.domains.list"
+	MethodArdennDomainsCreate    = "ardenn.domains.create"
+	MethodArdennDomainsUpdate    = "ardenn.domains.update"
+	MethodArdennDomainsDelete    = "ardenn.domains.delete"
+
+	MethodArdennWorkflowsList    = "ardenn.workflows.list"
+	MethodArdennWorkflowsGet     = "ardenn.workflows.get"
+	MethodArdennWorkflowsCreate  = "ardenn.workflows.create"
+	MethodArdennWorkflowsUpdate  = "ardenn.workflows.update"
+	MethodArdennWorkflowsPublish = "ardenn.workflows.publish"
+	MethodArdennWorkflowsDelete  = "ardenn.workflows.delete"
+
+	MethodArdennRunsList         = "ardenn.runs.list"
+	MethodArdennRunsGet          = "ardenn.runs.get"
+	MethodArdennRunsStart        = "ardenn.runs.start"
+	MethodArdennRunsCancel       = "ardenn.runs.cancel"
+	MethodArdennRunsApprove      = "ardenn.runs.approve"
+	MethodArdennRunsReject       = "ardenn.runs.reject"
+
+	MethodArdennEventsStream     = "ardenn.events.stream"
+	MethodArdennMyTasks          = "ardenn.tasks.my"
+)

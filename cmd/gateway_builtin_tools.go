@@ -113,6 +113,16 @@ func builtinToolSeedData() []store.BuiltinToolDef {
 		{Name: "harness_resume", DisplayName: "Harness Resume", Description: "Load the most recent handoff artifact to resume from a previous session's progress", Category: "harness", Enabled: true},
 		{Name: "harness_reset", DisplayName: "Harness Reset", Description: "Request context reset: saves current state, clears history, reloads with fresh context and handoff artifact", Category: "harness", Enabled: true},
 		{Name: "harness_workflow", DisplayName: "Harness Workflow", Description: "Start, query status, or manage a declarative workflow execution (multi-step agent pipeline with gates)", Category: "harness", Enabled: true},
+
+		// ardenn
+		{
+			Name:        "ardenn_workflow",
+			DisplayName: "Ardenn Workflow",
+			Description: "Start, monitor, and manage Ardenn workflow runs",
+			Category:    "ardenn",
+			Enabled:     true,
+			Requires:    []string{"managed_mode"},
+		},
 	}
 
 	// Lite edition: remove skill management tools — not available on desktop.

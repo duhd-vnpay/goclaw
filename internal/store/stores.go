@@ -38,4 +38,9 @@ type Stores struct {
 	Episodic               EpisodicStore
 	EvolutionMetrics       EvolutionMetricsStore
 	EvolutionSuggestions   EvolutionSuggestionStore
+
+	// Ardenn workflow engine stores
+	ArdennEvents      interface{} // ardenn.EventStore — uses interface{} to avoid import cycle
+	ArdennDefinitions interface{} // *pgardenn.PGDefinitionStore
+	ArdennProjections interface{} // *pgardenn.PGProjectionStore
 }

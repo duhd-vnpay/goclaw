@@ -5,6 +5,7 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	pgardenn "github.com/nextlevelbuilder/goclaw/internal/store/pg/ardenn"
 )
 
 // NewPGStores creates all stores backed by Postgres.
@@ -58,5 +59,10 @@ func NewPGStores(cfg store.StoreConfig) (*store.Stores, error) {
 		Episodic:              NewPGEpisodicStore(db),
 		EvolutionMetrics:      NewPGEvolutionMetricsStore(db),
 		EvolutionSuggestions:  NewPGEvolutionSuggestionStore(db),
+
+		// Ardenn workflow engine
+		ArdennEvents:      pgardenn.NewPGEventStore(db),
+		ArdennDefinitions: pgardenn.NewPGDefinitionStore(db),
+		ArdennProjections: pgardenn.NewPGProjectionStore(db),
 	}, nil
 }

@@ -1,0 +1,100 @@
+{
+  "workflows": {
+    "title": "Quy trinh",
+    "description": "Quan ly va chay cac quy trinh doanh nghiep",
+    "createNew": "Tao quy trinh",
+    "search": "Tim quy trinh...",
+    "filterDomain": "Linh vuc",
+    "filterTier": "Cap do",
+    "filterStatus": "Trang thai",
+    "allDomains": "Tat ca linh vuc",
+    "allTiers": "Tat ca cap do",
+    "allStatuses": "Tat ca trang thai",
+    "columns": {
+      "name": "Ten",
+      "tier": "Cap do",
+      "domain": "Linh vuc",
+      "steps": "Buoc",
+      "runs": "Lan chay",
+      "status": "Trang thai",
+      "lastRun": "Lan chay cuoi"
+    },
+    "empty": "Chua co quy trinh nao",
+    "emptyDescription": "Tao quy trinh dau tien de tu dong hoa nghiep vu.",
+    "tierLight": "Nhe",
+    "tierStandard": "Chuan",
+    "tierFull": "Day du"
+  },
+  "domains": {
+    "title": "Linh vuc",
+    "description": "Quan ly linh vuc quy trinh Ardenn",
+    "createNew": "Tao linh vuc",
+    "columns": {
+      "name": "Ten",
+      "slug": "Slug",
+      "tier": "Cap do mac dinh",
+      "department": "Phong ban",
+      "workflows": "Quy trinh"
+    },
+    "dialog": {
+      "createTitle": "Tao linh vuc",
+      "name": "Ten",
+      "namePlaceholder": "VD: Nhan su",
+      "slug": "Slug",
+      "slugPlaceholder": "VD: hr",
+      "description": "Mo ta",
+      "defaultTier": "Cap do mac dinh",
+      "department": "Phong ban",
+      "create": "Tao",
+      "cancel": "Huy"
+    },
+    "empty": "Chua co linh vuc",
+    "emptyDescription": "Tao linh vuc de phan loai quy trinh theo nghiep vu."
+  },
+  "myTasks": {
+    "title": "Cong viec cua toi",
+    "description": "Cac phe duyet va nhiem vu duoc giao",
+    "sections": {
+      "approvals": "Phe duyet",
+      "assigned": "Duoc giao cho toi",
+      "completed": "Hoan thanh hom nay"
+    },
+    "actions": {
+      "approve": "Phe duyet",
+      "reject": "Tu choi",
+      "open": "Mo",
+      "complete": "Hoan thanh",
+      "escalate": "Bao cap tren"
+    },
+    "empty": "Khong co cong viec nao",
+    "emptyDescription": "Nhiem vu duoc giao hoac can phe duyet se hien o day."
+  },
+  "runs": {
+    "title": "Lan chay",
+    "pipeline": "Pipeline",
+    "eventLog": "Nhat ky su kien",
+    "stepDetail": "Chi tiet buoc",
+    "controls": {
+      "pause": "Tam dung",
+      "resume": "Tiep tuc",
+      "cancel": "Huy"
+    },
+    "gate": {
+      "approve": "Phe duyet",
+      "reject": "Tu choi",
+      "feedback": "Phan hoi (tuy chon)",
+      "feedbackPlaceholder": "Gui phan hoi cho nguoi thuc hien..."
+    },
+    "status": {
+      "pending": "Cho xu ly",
+      "running": "Dang chay",
+      "completed": "Hoan thanh",
+      "failed": "That bai",
+      "cancelled": "Da huy",
+      "paused": "Tam dung",
+      "waiting_gate": "Cho phe duyet",
+      "blocked": "Bi chan",
+      "skipped": "Bo qua"
+    }
+  }
+}

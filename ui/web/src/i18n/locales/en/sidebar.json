@@ -6,7 +6,8 @@
     "capabilities": "Capabilities",
     "data": "Data",
     "monitoring": "Monitoring",
-    "system": "System"
+    "system": "System",
+    "ardenn": "Ardenn"
   },
   "nav": {
     "overview": "Overview",
@@ -42,6 +43,9 @@
     "apiDocs": "API Docs",
     "packages": "Packages",
     "tenants": "Tenants",
-    "backupRestore": "Backup & Restore"
+    "backupRestore": "Backup & Restore",
+    "workflows": "Workflows",
+    "myTasks": "My Tasks",
+    "domains": "Domains"
   }
 }

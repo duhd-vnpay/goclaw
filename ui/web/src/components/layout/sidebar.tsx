@@ -29,6 +29,9 @@ import {
   ArrowLeftRight,
   FileArchive,
   DatabaseBackup,
+  Route,
+  CheckSquare,
+  Layers,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SidebarGroup } from "./sidebar-group";
@@ -89,6 +92,11 @@ export function Sidebar({ collapsed, onNavItemClick }: SidebarProps) {
           <SidebarItem to={ROUTES.TEAMS} icon={Users} label={t("nav.agentTeams")} collapsed={collapsed} />
         </SidebarGroup>
 
+        <SidebarGroup label={t("groups.ardenn")} collapsed={collapsed}>
+          <SidebarItem to={ROUTES.WORKFLOWS} icon={Route} label={t("nav.workflows")} collapsed={collapsed} />
+          <SidebarItem to={ROUTES.MY_TASKS} icon={CheckSquare} label={t("nav.myTasks")} collapsed={collapsed} />
+        </SidebarGroup>
+
         <SidebarGroup label={t("groups.conversations")} collapsed={collapsed}>
           <SidebarItem to={ROUTES.SESSIONS} icon={History} label={t("nav.sessions")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.PENDING_MESSAGES} icon={Inbox} label={t("nav.pendingMessages")} collapsed={collapsed} />
@@ -137,6 +145,7 @@ export function Sidebar({ collapsed, onNavItemClick }: SidebarProps) {
             <SidebarItem to={ROUTES.CONFIG} icon={Settings} label={t("nav.config")} collapsed={collapsed} />
           )}
           <SidebarItem to={ROUTES.APPROVALS} icon={ShieldCheck} label={t("nav.approvals")} collapsed={collapsed} />
+          <SidebarItem to={ROUTES.DOMAINS} icon={Layers} label={t("nav.domains")} collapsed={collapsed} />
           <SidebarItem to={ROUTES.IMPORT_EXPORT} icon={ArrowLeftRight} label={t("nav.importExport")} collapsed={collapsed} />
           {isOwner && (
             <SidebarItem to={ROUTES.BACKUP_RESTORE} icon={DatabaseBackup} label={t("nav.backupRestore")} collapsed={collapsed} />

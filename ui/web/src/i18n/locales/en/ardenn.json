@@ -1,0 +1,100 @@
+{
+  "workflows": {
+    "title": "Workflows",
+    "description": "Manage and run enterprise workflows across domains",
+    "createNew": "New Workflow",
+    "search": "Search workflows...",
+    "filterDomain": "Domain",
+    "filterTier": "Tier",
+    "filterStatus": "Status",
+    "allDomains": "All Domains",
+    "allTiers": "All Tiers",
+    "allStatuses": "All Statuses",
+    "columns": {
+      "name": "Name",
+      "tier": "Tier",
+      "domain": "Domain",
+      "steps": "Steps",
+      "runs": "Runs",
+      "status": "Status",
+      "lastRun": "Last Run"
+    },
+    "empty": "No workflows yet",
+    "emptyDescription": "Create your first workflow to automate enterprise processes.",
+    "tierLight": "Light",
+    "tierStandard": "Standard",
+    "tierFull": "Full"
+  },
+  "domains": {
+    "title": "Domains",
+    "description": "Manage Ardenn workflow domains",
+    "createNew": "New Domain",
+    "columns": {
+      "name": "Name",
+      "slug": "Slug",
+      "tier": "Default Tier",
+      "department": "Department",
+      "workflows": "Workflows"
+    },
+    "dialog": {
+      "createTitle": "Create Domain",
+      "name": "Name",
+      "namePlaceholder": "e.g., Human Resources",
+      "slug": "Slug",
+      "slugPlaceholder": "e.g., hr",
+      "description": "Description",
+      "defaultTier": "Default Tier",
+      "department": "Department",
+      "create": "Create",
+      "cancel": "Cancel"
+    },
+    "empty": "No domains configured",
+    "emptyDescription": "Create a domain to organize workflows by business area."
+  },
+  "myTasks": {
+    "title": "My Tasks",
+    "description": "Pending approvals and assigned tasks",
+    "sections": {
+      "approvals": "Approvals",
+      "assigned": "Assigned to Me",
+      "completed": "Completed Today"
+    },
+    "actions": {
+      "approve": "Approve",
+      "reject": "Reject",
+      "open": "Open",
+      "complete": "Complete",
+      "escalate": "Escalate"
+    },
+    "empty": "No pending tasks",
+    "emptyDescription": "Tasks assigned to you or requiring your approval will appear here."
+  },
+  "runs": {
+    "title": "Run",
+    "pipeline": "Pipeline",
+    "eventLog": "Event Log",
+    "stepDetail": "Step Detail",
+    "controls": {
+      "pause": "Pause",
+      "resume": "Resume",
+      "cancel": "Cancel"
+    },
+    "gate": {
+      "approve": "Approve",
+      "reject": "Reject",
+      "feedback": "Feedback (optional)",
+      "feedbackPlaceholder": "Provide feedback for the step assignee..."
+    },
+    "status": {
+      "pending": "Pending",
+      "running": "Running",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "paused": "Paused",
+      "waiting_gate": "Waiting Approval",
+      "blocked": "Blocked",
+      "skipped": "Skipped"
+    }
+  }
+}

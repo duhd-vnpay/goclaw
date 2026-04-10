@@ -117,6 +117,12 @@ const BackupRestorePage = lazyWithRetry(() =>
 const TenantSelectorPage = lazyWithRetry(() =>
   import("@/pages/login/tenant-selector").then((m) => ({ default: m.TenantSelectorPage })),
 );
+const WorkflowsPage = lazyWithRetry(() =>
+  import("@/pages/ardenn/workflows-page").then((m) => ({ default: m.WorkflowsPage })),
+);
+const DomainsPage = lazyWithRetry(() =>
+  import("@/pages/ardenn/domains-page").then((m) => ({ default: m.DomainsPage })),
+);
 
 function PageLoader() {
   return (
@@ -166,6 +172,11 @@ export function AppRoutes() {
           <Route path={ROUTES.AGENT_DETAIL} element={<AgentsPage key="detail" />} />
           <Route path={ROUTES.TEAMS} element={<TeamsPage key="list" />} />
           <Route path={ROUTES.TEAM_DETAIL} element={<TeamsPage key="detail" />} />
+          {/* Ardenn Workflow Engine */}
+          <Route path={ROUTES.WORKFLOWS} element={<WorkflowsPage key="list" />} />
+          <Route path={ROUTES.WORKFLOW_DETAIL} element={<WorkflowsPage key="detail" />} />
+          <Route path={ROUTES.MY_TASKS} element={<WorkflowsPage key="my-tasks" />} />
+          <Route path={ROUTES.DOMAINS} element={<RequireAdmin><DomainsPage /></RequireAdmin>} />
           <Route path={ROUTES.SESSIONS} element={<SessionsPage key="list" />} />
           <Route path={ROUTES.SESSION_DETAIL} element={<SessionsPage key="detail" />} />
           <Route path={ROUTES.SKILLS} element={<SkillsPage key="list" />} />

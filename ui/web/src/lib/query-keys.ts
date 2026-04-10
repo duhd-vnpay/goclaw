@@ -114,4 +114,18 @@ export const queryKeys = {
     graph: (agentId: string, userId?: string) => ["kg", "graph", agentId, userId] as const,
     dedup: (agentId: string, userId?: string) => ["kg", "dedup", agentId, userId] as const,
   },
+  ardenn: {
+    domains: ["ardenn", "domains"] as const,
+    workflows: {
+      all: ["ardenn", "workflows"] as const,
+      list: (params: Record<string, unknown>) => ["ardenn", "workflows", params] as const,
+      detail: (id: string) => ["ardenn", "workflows", id] as const,
+    },
+    runs: {
+      all: ["ardenn", "runs"] as const,
+      list: (workflowId: string) => ["ardenn", "runs", workflowId] as const,
+      detail: (runId: string) => ["ardenn", "runs", "detail", runId] as const,
+    },
+    myTasks: ["ardenn", "myTasks"] as const,
+  },
 };

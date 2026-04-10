@@ -45,4 +45,13 @@ export const ROUTES = {
   SETUP: "/setup",
   BACKUP_RESTORE: "/backup-restore",
   SELECT_TENANT: "/select-tenant",
+  // Ardenn Workflow Engine
+  WORKFLOWS: "/workflows",
+  WORKFLOW_DETAIL: "/workflows/:id",
+  WORKFLOW_NEW: "/workflows/new",
+  WORKFLOW_EDIT: "/workflows/:id/edit",
+  WORKFLOW_RUNS: "/workflows/:id/runs",
+  WORKFLOW_RUN_DETAIL: "/workflows/:workflowId/runs/:runId",
+  MY_TASKS: "/my-tasks",
+  DOMAINS: "/settings/domains",
 } as const;

@@ -1,0 +1,100 @@
+{
+  "workflows": {
+    "title": "Workflows",
+    "description": "Manage and run enterprise workflows",
+    "createNew": "New Workflow",
+    "search": "Search...",
+    "filterDomain": "Domain",
+    "filterTier": "Tier",
+    "filterStatus": "Status",
+    "allDomains": "All",
+    "allTiers": "All",
+    "allStatuses": "All",
+    "columns": {
+      "name": "Name",
+      "tier": "Tier",
+      "domain": "Domain",
+      "steps": "Steps",
+      "runs": "Runs",
+      "status": "Status",
+      "lastRun": "Last Run"
+    },
+    "empty": "No workflows",
+    "emptyDescription": "Create your first workflow.",
+    "tierLight": "Light",
+    "tierStandard": "Standard",
+    "tierFull": "Full"
+  },
+  "domains": {
+    "title": "Domains",
+    "description": "Manage workflow domains",
+    "createNew": "New Domain",
+    "columns": {
+      "name": "Name",
+      "slug": "Slug",
+      "tier": "Tier",
+      "department": "Department",
+      "workflows": "Workflows"
+    },
+    "dialog": {
+      "createTitle": "Create Domain",
+      "name": "Name",
+      "namePlaceholder": "e.g., HR",
+      "slug": "Slug",
+      "slugPlaceholder": "e.g., hr",
+      "description": "Description",
+      "defaultTier": "Default Tier",
+      "department": "Department",
+      "create": "Create",
+      "cancel": "Cancel"
+    },
+    "empty": "No domains",
+    "emptyDescription": "Create a domain."
+  },
+  "myTasks": {
+    "title": "My Tasks",
+    "description": "Pending approvals and tasks",
+    "sections": {
+      "approvals": "Approvals",
+      "assigned": "Assigned",
+      "completed": "Completed"
+    },
+    "actions": {
+      "approve": "Approve",
+      "reject": "Reject",
+      "open": "Open",
+      "complete": "Complete",
+      "escalate": "Escalate"
+    },
+    "empty": "No tasks",
+    "emptyDescription": "Tasks will appear here."
+  },
+  "runs": {
+    "title": "Run",
+    "pipeline": "Pipeline",
+    "eventLog": "Events",
+    "stepDetail": "Step",
+    "controls": {
+      "pause": "Pause",
+      "resume": "Resume",
+      "cancel": "Cancel"
+    },
+    "gate": {
+      "approve": "Approve",
+      "reject": "Reject",
+      "feedback": "Feedback",
+      "feedbackPlaceholder": "Feedback..."
+    },
+    "status": {
+      "pending": "Pending",
+      "running": "Running",
+      "completed": "Done",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "paused": "Paused",
+      "waiting_gate": "Waiting",
+      "blocked": "Blocked",
+      "skipped": "Skipped"
+    }
+  }
+}

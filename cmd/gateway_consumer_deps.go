@@ -4,6 +4,8 @@ import (
 	"sync"
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
+	"github.com/nextlevelbuilder/goclaw/internal/ardenn"
+	"github.com/nextlevelbuilder/goclaw/internal/ardenn/hands"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
@@ -30,4 +32,8 @@ type ConsumerDeps struct {
 	SubagentMgr      *tools.SubagentManager
 	BgWg             sync.WaitGroup
 	GetAnnounceMu    func(string) *sync.Mutex
+
+	// Ardenn workflow engine (nil when disabled — zero overhead)
+	ArdennEngine     *ardenn.Engine
+	ArdennCompletion *hands.CompletionRegistry
 }

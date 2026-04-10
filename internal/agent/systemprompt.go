@@ -32,13 +32,17 @@ type PromptMode string
 
 const (
 	PromptFull    PromptMode = "full"    // main agent — all sections
+	PromptTask    PromptMode = "task"    // task-focused — tools + skills + team, no identity/persona
 	PromptMinimal PromptMode = "minimal" // subagent/cron — reduced sections
+	PromptNone    PromptMode = "none"    // no system prompt (raw tool calls only)
 )
 
 // SystemPromptConfig holds all inputs for system prompt construction.
 // Matches the params of TS buildAgentSystemPrompt().
 type SystemPromptConfig struct {
 	AgentID       string
+	AgentUUID     string                 // agent UUID string for context
+	DisplayName   string                 // agent display name (shown in identity line)
 	Model         string
 	Workspace     string
 	Channel       string                 // runtime channel instance name (e.g. "my-telegram-bot")
@@ -63,7 +67,9 @@ type SystemPromptConfig struct {
 	HasSkillManage     bool              // skill_manage tool registered + skill_evolve enabled for this agent
 	HasMCPToolSearch   bool              // mcp_tool_search tool registered? (MCP search mode)
 	HasKnowledgeGraph  bool              // knowledge_graph_search tool registered?
+	HasMemoryExpand    bool              // memory_expand tool registered?
 	MCPToolDescs       map[string]string // MCP tool name → description (inline mode only)
+	PinnedSkillsSummary string           // XML for pinned skills (always inline regardless of mode)
 
 	// Sandbox info — matching TS sandboxInfo in system-prompt.ts
 	SandboxEnabled       bool   // exec tool runs inside Docker sandbox?
@@ -73,6 +79,9 @@ type SystemPromptConfig struct {
 	// ProviderType identifies the LLM provider (e.g. "openai", "anthropic", "codex").
 	// Used for provider-specific prompt adjustments (e.g. SOUL echo for GPT models).
 	ProviderType string
+
+	// ProviderContribution is provider-specific prompt contribution (stable prefix, dynamic suffix, section overrides).
+	ProviderContribution *providers.PromptContribution
 
 	// Self-evolution: predefined agents can update SOUL.md (style/tone)
 	SelfEvolve bool
@@ -92,6 +101,10 @@ type SystemPromptConfig struct {
 	// HarnessResumeContext is injected by L2 continuity layer — structured handoff from previous session.
 	// Empty string when no artifact exists (first session or harness disabled).
 	HarnessResumeContext string
+
+	// V3 orchestration: delegate targets and mode
+	DelegateTargets []DelegateTargetEntry
+	OrchMode        OrchestrationMode
 }
 
 // coreToolSummaries maps tool names to one-line descriptions.
@@ -133,6 +146,9 @@ var coreToolSummaries = map[string]string{
 	"team_tasks":              "Team task board — track progress, manage dependencies (spawn auto-creates delegation tasks)",
 	"list_group_members":      "List all members of the current group chat (Feishu/Lark only)",
 	"create_forum_topic":      "Create a forum topic in a Telegram supergroup",
+	"delegate":                "Delegate a task to a linked agent (requires agent_links). See ## Delegation Targets for available agents",
+	"memory_expand":           "Retrieve full session details from episodic memory results — use after memory_search returns episodic hits",
+	"vault_search": "Search documents in the knowledge vault (hybrid keyword + semantic)",
 
 	// Tool aliases (edit_file, sessions_spawn, Read, Write, Edit, Bash, etc.)
 	// are registered in the tool registry but excluded from the system prompt
@@ -319,7 +335,7 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 	// 12.5. ## Memory Recall — dedicated section (supplements recency reminder at end)
 	if !isMinimal && cfg.HasMemory {
 		hasMemoryGet := slices.Contains(cfg.ToolNames, "memory_get")
-		lines = append(lines, buildMemoryRecallSection(hasMemoryGet, cfg.HasKnowledgeGraph)...)
+		lines = append(lines, buildMemoryRecallSection(hasMemoryGet, cfg.HasMemoryExpand, cfg.HasKnowledgeGraph)...)
 	}
 
 	// 13. ## Sub-Agent Spawning — skipped for team context and bootstrap

@@ -10,8 +10,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
-	"github.com/nextlevelbuilder/goclaw/internal/harness"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/eventbus"
+	"github.com/nextlevelbuilder/goclaw/internal/harness"
+	memory "github.com/nextlevelbuilder/goclaw/internal/memory"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
@@ -29,6 +31,7 @@ type ResolverDeps struct {
 	AgentStore     store.AgentStore
 	ProviderStore  store.ProviderStore
 	ProviderReg    *providers.Registry
+	ModelRegistry  providers.ModelRegistry // per-model context window + capabilities lookup
 	Bus            bus.EventPublisher
 	Sessions       store.SessionStore
 	Tools          *tools.Registry
@@ -44,6 +47,7 @@ type ResolverDeps struct {
 	ContextFileLoader ContextFileLoaderFunc
 	BootstrapCleanup  BootstrapCleanupFunc
 	CacheInvalidate   CacheInvalidateFunc
+	DefaultTimezone   string // system default timezone for bootstrap pre-fill
 
 	// Security
 	InjectionAction string // "log", "warn", "block", "off"
@@ -105,6 +109,29 @@ type ResolverDeps struct {
 
 	// Harness layer manager (nil = harness disabled)
 	Harness *harness.Manager
+
+	// V3 auto-inject: episodic memory injection into system prompt (nil = disabled)
+	AutoInjector memory.AutoInjector
+
+	// V3 domain event bus for consolidation pipeline (nil = disabled)
+	DomainBus eventbus.DomainEventBus
+
+	// Evolution metrics store for auto-injector (nil = disabled)
+	EvolutionMetricsStore store.EvolutionMetricsStore
+
+	// Contact store for user identity resolution (nil = no credential merging)
+	ContactStore store.ContactStore
+
+	// Vault hook: called when a text file is uploaded by user (nil = no vault registration)
+	OnTextUploaded func(ctx context.Context, path, content string)
+}
+
+// ResolveOpts carries optional parameters for agent resolution.
+// Upstream v3.2.0 adds ProjectID + ProjectOverrides for MCP project scoping;
+// kept as a struct so the ResolverFunc signature is forward-compatible.
+type ResolveOpts struct {
+	ProjectID        string
+	ProjectOverrides map[string]map[string]string
 }
 
 // NewManagedResolver creates a ResolverFunc that builds Loops from DB agent data.
@@ -286,7 +313,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 				mcpOpts = append(mcpOpts, mcpbridge.WithPool(deps.MCPPool))
 			}
 			mcpMgr := mcpbridge.NewManager(toolsReg, mcpOpts...)
-			if err := mcpMgr.LoadForAgent(ctx, ag.ID, "", opts.ProjectID, opts.ProjectOverrides); err != nil {
+			if err := mcpMgr.LoadForAgent(ctx, ag.ID, ""); err != nil {
 				slog.Warn("failed to load MCP servers for agent", "agent", agentKey, "error", err)
 			} else {
 				mcpUserCredSrvs = mcpMgr.UserCredServers()
@@ -374,6 +401,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			IsTeamLead:             isTeamLead,
 			Provider:               provider,
 			Model:                  ag.Model,
+			ModelRegistry:          deps.ModelRegistry,
 			ContextWindow:          contextWindow,
 			MaxIterations:          maxIter,
 			MaxTokens:              maxTokens,
@@ -397,6 +425,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			ContextFileLoader:      deps.ContextFileLoader,
 			BootstrapCleanup:       deps.BootstrapCleanup,
 			CacheInvalidate:        deps.CacheInvalidate,
+			DefaultTimezone:        deps.DefaultTimezone,
 			OnEvent:                deps.OnEvent,
 			TraceCollector:         deps.TraceCollector,
 			InjectionAction:        deps.InjectionAction,
@@ -417,6 +446,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			ConfigPermStore:        deps.ConfigPermStore,
 			TeamStore:              deps.TeamStore,
 			SecureCLIStore:         deps.SecureCLIStore,
+			OnTextUploaded:         deps.OnTextUploaded,
 			MediaStore:             deps.MediaStore,
 			ModelPricing:           deps.ModelPricing,
 			BudgetMonthlyCents:     derefInt(ag.BudgetMonthlyCents),
@@ -426,6 +456,12 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			MCPPool:                deps.MCPPool,
 			MCPUserCredSrvs:        mcpUserCredSrvs,
 			Harness:                deps.Harness,
+			DomainBus:              deps.DomainBus,
+			AutoInjector:           deps.AutoInjector,
+			UserResolver:           newContactResolver(deps.ContactStore),
+			PinnedSkills:           ag.ParsePinnedSkills(),
+			OrchMode:               ResolveOrchestrationMode(ctx, ag.ID, deps.TeamStore, deps.AgentLinkStore),
+			EvolutionMetricsStore:  deps.EvolutionMetricsStore,
 		})
 
 		slog.Info("resolved agent from DB", "agent", agentKey, "model", ag.Model, "provider", ag.Provider)

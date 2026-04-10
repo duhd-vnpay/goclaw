@@ -5,13 +5,14 @@ package sqlitestore
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/cron"
+	"github.com/nextlevelbuilder/goclaw/internal/safego"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
@@ -70,6 +71,7 @@ func (s *SQLiteCronStore) InvalidateCache() {
 }
 
 // recomputeStaleJobs fixes enabled jobs on startup:
+//   - Resets any jobs stuck in 'running' state from a previous crash.
 //   - Recomputes next_run_at for jobs where it is NULL (crashed mid-execution).
 //   - Advances past-due jobs (next_run_at < now) to their next future run time,
 //     preventing a flood of all missed jobs firing simultaneously after downtime.
@@ -79,6 +81,15 @@ func (s *SQLiteCronStore) InvalidateCache() {
 // the original schedule anchor is not persisted. After the first execution cycle,
 // anchor-based scheduling in executeOneJob preserves spacing going forward.
 func (s *SQLiteCronStore) recomputeStaleJobs() {
+	// Reset stale 'running' status — jobs that were mid-execution when the app
+	// crashed will never self-recover, so mark them as interrupted on startup.
+	if res, err := s.db.ExecContext(s.baseCtx,
+		`UPDATE cron_jobs SET last_status = 'interrupted' WHERE last_status = 'running'`); err != nil {
+		slog.Warn("cron: failed to reset stale running jobs on startup", "error", err)
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		slog.Info("cron: reset stale running jobs to interrupted", "count", n)
+	}
+
 	now := time.Now()
 	rows, err := s.db.QueryContext(s.baseCtx,
 		`SELECT id, schedule_kind, cron_expression, run_at, timezone, interval_ms
@@ -144,9 +155,20 @@ func (s *SQLiteCronStore) runLoop() {
 		case <-s.stop:
 			return
 		case <-ticker.C:
-			s.checkAndRunDueJobs()
+			s.safeCheckAndRunDueJobs()
 		}
 	}
+}
+
+// safeCheckAndRunDueJobs wraps checkAndRunDueJobs with panic recovery
+// so a panic in any check/claim logic doesn't kill the runLoop goroutine.
+func (s *SQLiteCronStore) safeCheckAndRunDueJobs() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("cron: checkAndRunDueJobs panicked — runLoop continues", "panic", fmt.Sprint(r))
+		}
+	}()
+	s.checkAndRunDueJobs()
 }
 
 func (s *SQLiteCronStore) checkAndRunDueJobs() {
@@ -174,20 +196,17 @@ func (s *SQLiteCronStore) checkAndRunDueJobs() {
 		return
 	}
 
-	// Execute jobs in parallel — scheduler enforces per-session serialization.
-	var wg sync.WaitGroup
+	// Execute jobs in parallel without blocking the runLoop.
+	// Previously wg.Wait() blocked here — if any job hung (e.g. LLM timeout,
+	// agent loop stuck), the entire cron scheduler would stop checking for new
+	// due jobs. Now each job runs independently; cache is invalidated per-job.
 	for _, job := range claimedJobs {
-		wg.Add(1)
 		go func(job store.CronJob) {
-			defer wg.Done()
+			defer safego.Recover(nil, "component", "cron_job", "job_id", job.ID, "job_name", job.Name)
+			defer s.InvalidateCache()
 			s.executeOneJob(job, handler, true)
 		}(job)
 	}
-	wg.Wait()
-
-	s.mu.Lock()
-	s.cacheLoaded = false
-	s.mu.Unlock()
 }
 
 // executeOneJob runs a claimed job. When reloadClaimed is true (scheduler path),

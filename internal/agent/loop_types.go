@@ -8,11 +8,13 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
-	"github.com/nextlevelbuilder/goclaw/internal/harness"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
+	"github.com/nextlevelbuilder/goclaw/internal/eventbus"
+	"github.com/nextlevelbuilder/goclaw/internal/harness"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
+	memory "github.com/nextlevelbuilder/goclaw/internal/memory"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
@@ -44,7 +46,8 @@ type EnsureUserProfileFunc func(ctx context.Context, agentID uuid.UUID, userID, 
 // Called once per user per Loop instance, independent of workspace.
 // isNew indicates whether the profile was just created (seed all) or already existed
 // (only seed if user has zero files — avoids re-seeding after BOOTSTRAP.md cleanup).
-type SeedUserFilesFunc func(ctx context.Context, agentID uuid.UUID, userID, agentType string, isNew bool) error
+// channelMeta carries optional channel-provided contact info for bootstrap skip decisions.
+type SeedUserFilesFunc func(ctx context.Context, agentID uuid.UUID, userID, agentType string, isNew bool, channelMeta *bootstrap.ChannelMeta) error
 
 // EnsureUserFilesFunc is the legacy combined callback (profile + seed + workspace).
 // Deprecated: use EnsureUserProfileFunc + SeedUserFilesFunc separately.
@@ -70,8 +73,10 @@ type Loop struct {
 	agentUUID        uuid.UUID // set for context propagation
 	tenantID         uuid.UUID // agent's owning tenant
 	agentType        string    // "open" or "predefined"
+	defaultTimezone  string    // system default timezone for bootstrap pre-fill
 	provider         providers.Provider
 	model            string
+	modelRegistry    providers.ModelRegistry // resolves per-model context window at run time (nil = use static contextWindow)
 	contextWindow    int
 	maxTokens        int // max output tokens per LLM call (0 = default 8192)
 	maxIterations    int
@@ -173,6 +178,10 @@ type Loop struct {
 	// Secure CLI store for credentialed exec context injection
 	secureCLIStore store.SecureCLIStore
 
+	// Vault hook: called when a text file is persisted from user upload.
+	// Enables vault registration without agent package importing vault.
+	onTextUploaded func(ctx context.Context, path, content string)
+
 	// Persistent media storage for cross-turn image/document access
 	mediaStore *media.Store
 
@@ -188,6 +197,24 @@ type Loop struct {
 
 	// Harness layer manager (nil = harness disabled)
 	harness *harness.Manager
+
+	// V3 domain event bus for consolidation pipeline (nil = disabled)
+	domainBus eventbus.DomainEventBus
+
+	// V3 auto-inject: episodic memory injection into system prompt (nil = disabled)
+	autoInjector memory.AutoInjector
+
+	// User identity resolver for credential lookups (nil = use raw UserID)
+	userResolver UserIdentityResolver
+
+	// Pinned skills: always inlined in system prompt regardless of prompt mode
+	pinnedSkills []string
+
+	// V3 orchestration mode (spawn/delegate/team)
+	orchMode OrchestrationMode
+
+	// Evolution metrics store for tool metric recording (nil = disabled)
+	evolutionMetricsStore store.EvolutionMetricsStore
 }
 
 // AgentEvent is emitted during agent execution for WS broadcasting.
@@ -233,6 +260,10 @@ type LoopConfig struct {
 	MemoryCfg    *config.MemoryConfig
 	SandboxCfg   *sandbox.Config
 
+	// ModelRegistry resolves provider/model → ModelSpec for per-run context
+	// window lookup. Nil = fall back to static LoopConfig.ContextWindow.
+	ModelRegistry providers.ModelRegistry
+
 	Bus             bus.EventPublisher
 	Sessions        store.SessionStore
 	Tools           *tools.Registry
@@ -274,6 +305,7 @@ type LoopConfig struct {
 	ContextFileLoader ContextFileLoaderFunc
 	BootstrapCleanup  BootstrapCleanupFunc
 	CacheInvalidate   CacheInvalidateFunc // invalidate context file cache after seeding
+	DefaultTimezone   string              // system default timezone for bootstrap pre-fill
 
 	// Tracing collector (nil = no tracing)
 	TraceCollector *tracing.Collector
@@ -308,6 +340,9 @@ type LoopConfig struct {
 	// Secure CLI store for credentialed exec context injection
 	SecureCLIStore store.SecureCLIStore
 
+	// Vault hook: called asynchronously when a text file is persisted from user upload.
+	OnTextUploaded func(ctx context.Context, path, content string)
+
 	// Persistent media storage for cross-turn image/document access
 	MediaStore *media.Store
 
@@ -328,6 +363,24 @@ type LoopConfig struct {
 
 	// Harness layer manager (nil = harness disabled)
 	Harness *harness.Manager
+
+	// V3 domain event bus for consolidation pipeline (nil = disabled)
+	DomainBus eventbus.DomainEventBus
+
+	// V3 auto-inject: episodic memory injection into system prompt (nil = disabled)
+	AutoInjector memory.AutoInjector
+
+	// User identity resolver for credential lookups (nil = use raw UserID)
+	UserResolver UserIdentityResolver
+
+	// Pinned skills: always inlined in system prompt regardless of prompt mode
+	PinnedSkills []string
+
+	// V3 orchestration mode (spawn/delegate/team)
+	OrchMode OrchestrationMode
+
+	// Evolution metrics store for tool metric recording (nil = disabled)
+	EvolutionMetricsStore store.EvolutionMetricsStore
 }
 
 const defaultMaxTokens = config.DefaultMaxTokens
@@ -370,6 +423,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		agentType:              cfg.AgentType,
 		provider:               cfg.Provider,
 		model:                  cfg.Model,
+		modelRegistry:          cfg.ModelRegistry,
 		contextWindow:          cfg.ContextWindow,
 		maxTokens:              cfg.MaxTokens,
 		maxIterations:          cfg.MaxIterations,
@@ -392,6 +446,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		skillAllowList:         cfg.SkillAllowList,
 		hasMemory:              cfg.HasMemory,
 		contextFiles:           cfg.ContextFiles,
+		defaultTimezone:        cfg.DefaultTimezone,
 		ensureUserProfile:      cfg.EnsureUserProfile,
 		seedUserFiles:          cfg.SeedUserFiles,
 		ensureUserFiles:        cfg.EnsureUserFiles,
@@ -418,6 +473,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		configPermStore:        cfg.ConfigPermStore,
 		teamStore:              cfg.TeamStore,
 		secureCLIStore:         cfg.SecureCLIStore,
+		onTextUploaded:         cfg.OnTextUploaded,
 		mediaStore:             cfg.MediaStore,
 		modelPricing:           cfg.ModelPricing,
 		budgetMonthlyCents:     cfg.BudgetMonthlyCents,
@@ -427,6 +483,12 @@ func NewLoop(cfg LoopConfig) *Loop {
 		mcpPool:                cfg.MCPPool,
 		mcpUserCredSrvs:        cfg.MCPUserCredSrvs,
 		harness:                cfg.Harness,
+		domainBus:              cfg.DomainBus,
+		autoInjector:           cfg.AutoInjector,
+		userResolver:           cfg.UserResolver,
+		pinnedSkills:           cfg.PinnedSkills,
+		orchMode:               cfg.OrchMode,
+		evolutionMetricsStore:  cfg.EvolutionMetricsStore,
 	}
 }
 
@@ -444,6 +506,7 @@ type RunRequest struct {
 	RunID             string             // unique run identifier
 	UserID            string             // external user ID (TEXT, free-form) for multi-tenant scoping
 	SenderID          string             // original individual sender ID (preserved in group chats for permission checks)
+	SenderName        string             // display name from channel metadata (for bootstrap auto-contact)
 	Stream            bool               // whether to stream response chunks
 	ExtraSystemPrompt string             // optional: injected into system prompt (skills, subagent context, etc.)
 	SkillFilter       []string           // per-request skill override: nil=use agent default, []=no skills, ["x","y"]=whitelist
@@ -492,6 +555,7 @@ type RunRequest struct {
 // RunResult is the output of a completed agent run.
 type RunResult struct {
 	Content        string           `json:"content"`
+	Thinking       string           `json:"thinking,omitempty"`
 	RunID          string           `json:"runId"`
 	Iterations     int              `json:"iterations"`
 	Usage          *providers.Usage `json:"usage,omitempty"`

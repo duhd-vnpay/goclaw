@@ -14,7 +14,7 @@ import (
 
 // ResolverFunc is called when an agent isn't found in the cache.
 // Used to lazy-create agents from DB. Context carries tenant scope.
-type ResolverFunc func(ctx context.Context, agentKey string) (Agent, error)
+type ResolverFunc func(ctx context.Context, agentKey string, opts ResolveOpts) (Agent, error)
 
 const defaultRouterTTL = 10 * time.Minute
 
@@ -91,7 +91,7 @@ func (r *Router) Get(ctx context.Context, agentID string) (Agent, error) {
 
 	// Try resolver (create from DB)
 	if resolver != nil {
-		ag, err := resolver(ctx, agentID)
+		ag, err := resolver(ctx, agentID, ResolveOpts{})
 		if err != nil {
 			return nil, err
 		}

@@ -70,6 +70,7 @@ func (s *SQLiteCronStore) InvalidateCache() {
 }
 
 // recomputeStaleJobs fixes enabled jobs on startup:
+//   - Resets any jobs stuck in 'running' state from a previous crash.
 //   - Recomputes next_run_at for jobs where it is NULL (crashed mid-execution).
 //   - Advances past-due jobs (next_run_at < now) to their next future run time,
 //     preventing a flood of all missed jobs firing simultaneously after downtime.

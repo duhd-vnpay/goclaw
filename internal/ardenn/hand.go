@@ -17,6 +17,9 @@ const (
 	HandMCP   HandType = "mcp"
 )
 
+// MaxDispatches is the circuit breaker limit for AgentHand.
+const MaxDispatches = 3
+
 type HandRequest struct {
 	RunID     uuid.UUID
 	StepRunID uuid.UUID

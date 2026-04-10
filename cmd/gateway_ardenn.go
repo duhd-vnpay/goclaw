@@ -10,6 +10,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	pgardenn "github.com/nextlevelbuilder/goclaw/internal/store/pg/ardenn"
+	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
 // initArdenn wires the Ardenn workflow engine from PG stores.
@@ -41,4 +42,27 @@ func initArdenn(stores *store.Stores, msgBus *bus.MessageBus) (*ardenn.Engine, *
 	)
 
 	return engine, completion
+}
+
+// registerArdennTool registers the ardenn_workflow tool in the tool registry.
+func registerArdennTool(
+	engine *ardenn.Engine,
+	stores *store.Stores,
+	toolsReg *tools.Registry,
+) {
+	if engine == nil {
+		return
+	}
+	defStore, ok := stores.ArdennDefinitions.(*pgardenn.PGDefinitionStore)
+	if !ok {
+		slog.Warn("ardenn: cannot register tool — definition store unavailable")
+		return
+	}
+	projStore, ok := stores.ArdennProjections.(*pgardenn.PGProjectionStore)
+	if !ok {
+		slog.Warn("ardenn: cannot register tool — projection store unavailable")
+		return
+	}
+	toolsReg.Register(tools.NewArdennWorkflowTool(engine, defStore, projStore))
+	slog.Info("ardenn_workflow tool registered")
 }

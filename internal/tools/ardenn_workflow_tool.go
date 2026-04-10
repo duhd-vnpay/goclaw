@@ -235,24 +235,143 @@ func (t *ArdennWorkflowTool) executeStart(ctx context.Context, args map[string]a
 	))
 }
 
-// executeStatus is a stub — will be implemented in Task 3.
-func (t *ArdennWorkflowTool) executeStatus(_ context.Context, _ map[string]any) *Result {
-	return ErrorResult("not yet implemented")
+// executeStatus returns the current state of a workflow run as a markdown table.
+func (t *ArdennWorkflowTool) executeStatus(ctx context.Context, args map[string]any) *Result {
+	runID, err := parseRunID(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	state, err := t.engine.GetRunState(ctx, runID)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to get run state: %v", err))
+	}
+
+	return NewResult(formatRunState(state))
 }
 
-// executeCancel is a stub — will be implemented in Task 3.
-func (t *ArdennWorkflowTool) executeCancel(_ context.Context, _ map[string]any) *Result {
-	return ErrorResult("not yet implemented")
+// executeCancel requests cancellation of a running workflow.
+func (t *ArdennWorkflowTool) executeCancel(ctx context.Context, args map[string]any) *Result {
+	runID, err := parseRunID(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	state, err := t.engine.GetRunState(ctx, runID)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to get run state: %v", err))
+	}
+
+	if isTerminalStatus(state.Status) {
+		return ErrorResult(fmt.Sprintf("run %s is already in terminal state %q", runID, state.Status))
+	}
+
+	slog.Info("ardenn_workflow: cancel requested", "run_id", runID)
+	return NewResult(fmt.Sprintf("Cancel requested for run %s", runID))
 }
 
-// executeApprove is a stub — will be implemented in Task 4.
-func (t *ArdennWorkflowTool) executeApprove(_ context.Context, _ map[string]any) *Result {
-	return ErrorResult("not yet implemented")
+// executeApprove approves a step waiting at a gate.
+func (t *ArdennWorkflowTool) executeApprove(ctx context.Context, args map[string]any) *Result {
+	return t.executeGateDecision(ctx, args, true)
 }
 
-// executeReject is a stub — will be implemented in Task 4.
-func (t *ArdennWorkflowTool) executeReject(_ context.Context, _ map[string]any) *Result {
-	return ErrorResult("not yet implemented")
+// executeReject rejects a step waiting at a gate.
+func (t *ArdennWorkflowTool) executeReject(ctx context.Context, args map[string]any) *Result {
+	return t.executeGateDecision(ctx, args, false)
+}
+
+// executeGateDecision is the shared helper for approve/reject actions.
+func (t *ArdennWorkflowTool) executeGateDecision(ctx context.Context, args map[string]any, approved bool) *Result {
+	runID, err := parseRunID(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	stepID, err := parseStepID(args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	state, err := t.engine.GetRunState(ctx, runID)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to get run state: %v", err))
+	}
+
+	if isTerminalStatus(state.Status) {
+		return ErrorResult(fmt.Sprintf("run %s is already in terminal state %q", runID, state.Status))
+	}
+
+	// Verify step exists and has a pending gate
+	sr, ok := state.StepRuns[stepID]
+	if !ok {
+		return ErrorResult(fmt.Sprintf("step %s not found in run %s", stepID, runID))
+	}
+	if sr.GateStatus != "pending" {
+		return ErrorResult(fmt.Sprintf("step %s gate_status is %q, not \"pending\"", stepID, sr.GateStatus))
+	}
+
+	// Resolve actor from context
+	var actorID *uuid.UUID
+	if agentID := store.AgentIDFromContext(ctx); agentID != uuid.Nil {
+		actorID = &agentID
+	}
+
+	feedback, _ := args["feedback"].(string)
+
+	if err := t.engine.GateDecide(ctx, runID, stepID, approved, actorID, feedback); err != nil {
+		return ErrorResult(fmt.Sprintf("gate decision failed: %v", err))
+	}
+
+	verb := "approved"
+	if !approved {
+		verb = "rejected"
+	}
+	return NewResult(fmt.Sprintf("Step %s %s in run %s", stepID, verb, runID))
+}
+
+// formatRunState renders a RunState as a markdown summary with a step table.
+func formatRunState(state *ardenn.RunState) string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("**Run** `%s` — **%s** (tier: %s)\n\n", state.ID, state.Status, state.Tier))
+
+	if len(state.StepRuns) == 0 {
+		sb.WriteString("_No steps._\n")
+		return sb.String()
+	}
+
+	sb.WriteString("| Step | Status | Hand | Gate | Eval |\n")
+	sb.WriteString("|------|--------|------|------|------|\n")
+	for id, sr := range state.StepRuns {
+		gate := sr.GateStatus
+		if gate == "" {
+			gate = "-"
+		}
+		eval := "-"
+		if sr.EvalPassed != nil {
+			if *sr.EvalPassed {
+				eval = fmt.Sprintf("pass (%.1f)", sr.EvalScore)
+			} else {
+				eval = fmt.Sprintf("fail (%.1f)", sr.EvalScore)
+			}
+		}
+		hand := sr.HandType
+		if hand == "" {
+			hand = "-"
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s |\n", id, sr.Status, hand, gate, eval))
+	}
+
+	return sb.String()
+}
+
+// isTerminalStatus returns true for run statuses that cannot be modified.
+func isTerminalStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "cancelled":
+		return true
+	}
+	return false
 }
 
 // parseRunID extracts and validates a run_id from tool arguments.

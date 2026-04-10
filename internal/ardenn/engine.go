@@ -133,6 +133,30 @@ func (e *Engine) GetEvents(ctx context.Context, q EventQuery) ([]Event, error) {
 	return e.events.GetEvents(ctx, q)
 }
 
+// GateDecide records an approve/reject decision for a step's gate and wakes the run.
+func (e *Engine) GateDecide(ctx context.Context, runID, stepID uuid.UUID, approved bool, actorID *uuid.UUID, feedback string) error {
+	eventType := EventGateApproved
+	if !approved {
+		eventType = EventGateRejected
+	}
+	payload := map[string]any{"feedback": feedback}
+	if actorID != nil {
+		payload["decided_by"] = actorID.String()
+	}
+	_, err := e.events.Emit(ctx, Event{
+		RunID:     runID,
+		StepID:    &stepID,
+		Type:      eventType,
+		ActorType: ActorUser,
+		ActorID:   actorID,
+		Payload:   payload,
+	})
+	if err != nil {
+		return fmt.Errorf("emit gate decision: %w", err)
+	}
+	return e.Wake(ctx, runID)
+}
+
 func uuidStr(u *uuid.UUID) string {
 	if u == nil {
 		return ""

@@ -7,6 +7,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// Wiring Guide (for consumer/gateway integration):
+//
+//	completion := hands.NewCompletionRegistry()
+//	agentHand := hands.NewAgentHand(msgBus, completion)
+//	registry := ardenn.NewHandRegistry()
+//	registry.Register(agentHand)
+//	engine := ardenn.NewEngine(eventStore, registry)
+//
+// In post-turn processing:
+//
+//	hands.ResolveAgentCompletion(metadata, result, err, completion)
+//
 // Engine is the unified entry point for Ardenn. Wires all components.
 type Engine struct {
 	events       EventStore

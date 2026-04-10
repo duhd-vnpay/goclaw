@@ -34,6 +34,7 @@ type EngineOptions struct {
 	Constraints    *ConstraintEngine
 	EvalPipeline   *ArdennEvalPipeline
 	ResourceLoader ProjectResourceLoader
+	ArtifactStore  ArdennArtifactStore
 }
 
 // NewEngine creates a fully wired Ardenn engine.
@@ -45,18 +46,26 @@ func NewEngine(events EventStore, hands *HandRegistry, opts ...EngineOptions) *E
 	var constraints *ConstraintEngine
 	var evalPipeline *ArdennEvalPipeline
 	var resourceLoader ProjectResourceLoader
+	var contextBuilder *ContextBuilder
+	var checkpointer *Checkpointer
 	if len(opts) > 0 {
 		constraints = opts[0].Constraints
 		evalPipeline = opts[0].EvalPipeline
 		resourceLoader = opts[0].ResourceLoader
+		if opts[0].ArtifactStore != nil {
+			contextBuilder = NewContextBuilder(events)
+			checkpointer = NewCheckpointer(events, opts[0].ArtifactStore)
+		}
 	}
 
 	executor := &StepExecutor{
-		events:       events,
-		hands:        hands,
-		gates:        gates,
-		constraints:  constraints,
-		evalPipeline: evalPipeline,
+		events:         events,
+		hands:          hands,
+		gates:          gates,
+		constraints:    constraints,
+		evalPipeline:   evalPipeline,
+		contextBuilder: contextBuilder,
+		checkpointer:   checkpointer,
 	}
 	orchestrator := NewOrchestrator(events, projector, executor)
 

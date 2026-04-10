@@ -7,11 +7,13 @@ import (
 
 // StepExecutor handles dispatch, hand invocation, and gate checks for a single step.
 type StepExecutor struct {
-	events       EventStore
-	hands        *HandRegistry
-	gates        *GateKeeper
-	constraints  *ConstraintEngine
-	evalPipeline *ArdennEvalPipeline
+	events         EventStore
+	hands          *HandRegistry
+	gates          *GateKeeper
+	constraints    *ConstraintEngine
+	evalPipeline   *ArdennEvalPipeline
+	contextBuilder *ContextBuilder
+	checkpointer   *Checkpointer
 }
 
 // Execute runs a single step within a workflow run, respecting tier-aware layers.
@@ -61,12 +63,19 @@ func (se *StepExecutor) Execute(ctx context.Context, run *RunState, step *StepDe
 		"dispatch_count": stepRun.DispatchCount + 1,
 	})
 
+	// L2: Build step context via event slicing (full tier only)
+	var stepContext []Event
+	if se.contextBuilder != nil && run.Tier.Has(LayerContinuity) {
+		stepContext, _ = se.contextBuilder.BuildStepContext(ctx, run, step)
+	}
+
 	taskInput := ResolveTemplate(step.TaskTemplate, run.Variables)
 	result := hand.Execute(ctx, HandRequest{
 		RunID:     run.ID,
 		StepRunID: stepRun.ID,
 		Name:      target,
 		Input:     taskInput,
+		Context:   stepContext,
 		Metadata:  stepRun.Metadata,
 	})
 
@@ -112,6 +121,12 @@ func (se *StepExecutor) Execute(ctx context.Context, run *RunState, step *StepDe
 	}
 
 	se.emitStepEvent(ctx, run, step, EventStepCompleted, nil)
+
+	// L2: Checkpoint (full tier only)
+	if se.checkpointer != nil && run.Tier.Has(LayerContinuity) {
+		se.checkpointer.Checkpoint(ctx, run, step, output)
+	}
+
 	return nil
 }
 

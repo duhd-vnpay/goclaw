@@ -3,10 +3,12 @@ import { useNavigate, useLocation } from "react-router";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/stores/use-auth-store";
 import { ROUTES } from "@/lib/constants";
+import { useOidcAuth } from "@/hooks/use-oidc-auth";
 import { LoginLayout } from "./login-layout";
 import { LoginTabs, type LoginMode } from "./login-tabs";
 import { TokenForm } from "./token-form";
 import { PairingForm } from "./pairing-form";
+import { OidcLoginButton } from "./oidc-login-button";
 
 export function LoginPage() {
   const { t } = useTranslation("login");
@@ -14,6 +16,7 @@ export function LoginPage() {
 
   const setCredentials = useAuthStore((s) => s.setCredentials);
   const setPairing = useAuthStore((s) => s.setPairing);
+  const { oidcEnabled, loginWithOidc } = useOidcAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -38,6 +41,9 @@ export function LoginPage() {
         <TokenForm onSubmit={handleTokenLogin} />
       ) : (
         <PairingForm onApproved={handlePairingApproved} />
+      )}
+      {oidcEnabled && (
+        <OidcLoginButton onLogin={() => loginWithOidc(from)} />
       )}
     </LoginLayout>
   );

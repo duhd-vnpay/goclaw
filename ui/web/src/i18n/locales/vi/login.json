@@ -37,5 +37,7 @@
     "userIdHint": "Dùng \"system\" để có toàn quyền hệ thống"
   },
   "noAccessHint": "Yêu cầu quản trị viên thêm bạn vào tenant, hoặc đăng nhập bằng tài khoản khác.",
-  "logout": "Đăng xuất"
+  "logout": "Đăng xuất",
+  "signInWithGoogle": "Đăng nhập với Google",
+  "oidcDivider": "Hoặc tiếp tục với"
 }

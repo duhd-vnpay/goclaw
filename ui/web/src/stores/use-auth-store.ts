@@ -6,6 +6,17 @@ import type { TenantMembership } from "@/types/tenant";
 
 type UserRole = "owner" | "admin" | "operator" | "viewer" | "";
 
+export interface OidcUserProfile {
+  id: string;
+  email: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  auth_provider: string | null;
+  role: string;
+  realm_roles?: string[];
+  groups?: string[];
+}
+
 interface AuthState {
   token: string;
   userId: string;
@@ -19,6 +30,12 @@ interface AuthState {
   isOwner: boolean;
   availableTenants: TenantMembership[];
   tenantSelected: boolean; // true after user picks a tenant (or auto-selected)
+
+  // OIDC identity (from Keycloak)
+  oidcUser: OidcUserProfile | null;
+  oidcEnabled: boolean; // true if backend has Keycloak configured
+  setOidcUser: (user: OidcUserProfile | null) => void;
+  setOidcEnabled: (enabled: boolean) => void;
 
   setCredentials: (token: string, userId: string) => void;
   setPairing: (senderID: string, userId: string) => void;
@@ -45,6 +62,17 @@ export const useAuthStore = create<AuthState>()(
       isOwner: false,
       availableTenants: [],
       tenantSelected: !!localStorage.getItem(LOCAL_STORAGE_KEYS.TENANT_ID),
+
+      oidcUser: null,
+      oidcEnabled: false,
+
+      setOidcUser: (user) => {
+        set({ oidcUser: user });
+      },
+
+      setOidcEnabled: (enabled) => {
+        set({ oidcEnabled: enabled });
+      },
 
       setCredentials: (token, userId) => {
         set({ token, userId });
@@ -82,7 +110,7 @@ export const useAuthStore = create<AuthState>()(
         set({
           token: "", userId: "", senderID: "", connected: false, role: "", serverInfo: null,
           tenantId: "", tenantName: "", tenantSlug: "", isOwner: false, availableTenants: [],
-          tenantSelected: false,
+          tenantSelected: false, oidcUser: null, oidcEnabled: false,
         });
       },
     }),
@@ -93,6 +121,7 @@ export const useAuthStore = create<AuthState>()(
         token: state.token,
         userId: state.userId,
         senderID: state.senderID,
+        oidcUser: state.oidcUser,
       }),
     }
   )

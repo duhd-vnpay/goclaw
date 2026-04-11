@@ -32,6 +32,7 @@ import {
   Route,
   CheckSquare,
   Layers,
+  LogOut,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SidebarGroup } from "./sidebar-group";
@@ -42,6 +43,78 @@ import { cn } from "@/lib/utils";
 import { usePendingPairingsCount } from "@/hooks/use-pending-pairings-count";
 import { useAuthStore } from "@/stores/use-auth-store";
 import { useTenants } from "@/hooks/use-tenants";
+import { useOidcAuth } from "@/hooks/use-oidc-auth";
+
+function UserProfileBadge({ collapsed }: { collapsed: boolean }) {
+  const { oidcUser, oidcEnabled, logoutOidc } = useOidcAuth();
+
+  if (!oidcEnabled || !oidcUser) return null;
+
+  const initials = (oidcUser.display_name || oidcUser.email || "?")
+    .split(" ")
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+
+  if (collapsed) {
+    return (
+      <div className="flex flex-col items-center gap-2 border-t px-2 py-3">
+        {oidcUser.avatar_url ? (
+          <img
+            src={oidcUser.avatar_url}
+            alt=""
+            className="h-8 w-8 rounded-full object-cover"
+          />
+        ) : (
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+            {initials}
+          </div>
+        )}
+        <button
+          onClick={logoutOidc}
+          className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          title="Logout"
+        >
+          <LogOut className="h-4 w-4" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-3 border-t px-4 py-3">
+      {oidcUser.avatar_url ? (
+        <img
+          src={oidcUser.avatar_url}
+          alt=""
+          className="h-8 w-8 shrink-0 rounded-full object-cover"
+        />
+      ) : (
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+          {initials}
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">
+          {oidcUser.display_name || oidcUser.email}
+        </p>
+        {oidcUser.display_name && (
+          <p className="truncate text-xs text-muted-foreground">
+            {oidcUser.email}
+          </p>
+        )}
+      </div>
+      <button
+        onClick={logoutOidc}
+        className="shrink-0 rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+        title="Logout"
+      >
+        <LogOut className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
 
 interface SidebarProps {
   collapsed: boolean;
@@ -153,6 +226,9 @@ export function Sidebar({ collapsed, onNavItemClick }: SidebarProps) {
         </SidebarGroup>
         )}
       </nav>
+
+      {/* User profile badge (OIDC) */}
+      <UserProfileBadge collapsed={collapsed} />
 
       {/* Footer: connection status */}
       <div className={cn("border-t py-3", collapsed ? "px-2 flex justify-center" : "px-4")}>

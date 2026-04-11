@@ -37,5 +37,7 @@
     "userIdHint": "使用 \"system\" 获取完整系统权限"
   },
   "noAccessHint": "请联系管理员将您添加到租户，或使用其他账号登录。",
-  "logout": "退出登录"
+  "logout": "退出登录",
+  "signInWithGoogle": "使用 Google 登录",
+  "oidcDivider": "或继续使用"
 }

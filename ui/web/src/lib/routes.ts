@@ -45,6 +45,7 @@ export const ROUTES = {
   SETUP: "/setup",
   BACKUP_RESTORE: "/backup-restore",
   SELECT_TENANT: "/select-tenant",
+  AUTH_CALLBACK: "/auth/callback",
   // Ardenn Workflow Engine
   WORKFLOWS: "/workflows",
   WORKFLOW_DETAIL: "/workflows/:id",

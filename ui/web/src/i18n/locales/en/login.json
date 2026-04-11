@@ -37,5 +37,7 @@
     "approved": "Access approved! Redirecting..."
   },
   "noAccessHint": "Ask your administrator to add you to a tenant, or use a different account.",
-  "logout": "Sign Out"
+  "logout": "Sign Out",
+  "signInWithGoogle": "Sign in with Google",
+  "oidcDivider": "Or continue with"
 }

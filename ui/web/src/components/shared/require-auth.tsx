@@ -10,10 +10,20 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   const tenantSelected = useAuthStore((s) => s.tenantSelected);
   const availableTenants = useAuthStore((s) => s.availableTenants);
   const isOwner = useAuthStore((s) => s.isOwner);
+  const oidcEnabled = useAuthStore((s) => s.oidcEnabled);
   const location = useLocation();
 
   // Not authenticated
   if ((!token && !senderID) || !userId) {
+    if (oidcEnabled) {
+      // Redirect to Keycloak login with return URL
+      const returnUrl = encodeURIComponent(
+        window.location.origin + location.pathname,
+      );
+      window.location.href = `/v1/auth/login?redirect=${returnUrl}`;
+      return null;
+    }
+    // Fallback to local login page
     return <Navigate to={ROUTES.LOGIN} state={{ from: location }} replace />;
   }
 

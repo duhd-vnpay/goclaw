@@ -117,6 +117,9 @@ const BackupRestorePage = lazyWithRetry(() =>
 const TenantSelectorPage = lazyWithRetry(() =>
   import("@/pages/login/tenant-selector").then((m) => ({ default: m.TenantSelectorPage })),
 );
+const AuthCallbackPage = lazyWithRetry(() =>
+  import("@/pages/login/auth-callback-page").then((m) => ({ default: m.AuthCallbackPage })),
+);
 const WorkflowsPage = lazyWithRetry(() =>
   import("@/pages/ardenn/workflows-page").then((m) => ({ default: m.WorkflowsPage })),
 );
@@ -147,6 +150,9 @@ export function AppRoutes() {
     <Suspense fallback={<PageLoader />}>
       <Routes>
         <Route path={ROUTES.LOGIN} element={<LoginPage />} />
+
+        {/* OIDC callback — processes Keycloak redirect */}
+        <Route path={ROUTES.AUTH_CALLBACK} element={<AuthCallbackPage />} />
 
         {/* Tenant selector — accessible when authenticated but tenant not yet selected */}
         <Route path={ROUTES.SELECT_TENANT} element={<TenantSelectorPage />} />

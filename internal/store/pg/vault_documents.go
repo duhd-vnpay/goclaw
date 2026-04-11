@@ -21,14 +21,14 @@ func appendTeamFilter(q string, args []any, p int, teamID *string, teamIDs []str
 		ph := make([]string, len(teamIDs))
 		for i, id := range teamIDs {
 			ph[i] = fmt.Sprintf("$%d", p)
-			args = append(args, mustParseUUID(id))
+			args = append(args, parseUUIDOrNil(id))
 			p++
 		}
 		q += " AND (team_id IS NULL OR team_id IN (" + strings.Join(ph, ",") + "))"
 	} else if teamID != nil {
 		if *teamID != "" {
 			q += fmt.Sprintf(" AND team_id = $%d", p)
-			args = append(args, mustParseUUID(*teamID))
+			args = append(args, parseUUIDOrNil(*teamID))
 			p++
 		} else {
 			q += " AND team_id IS NULL"
@@ -495,13 +495,13 @@ func buildSearchTeamFilter(teamID *string, teamIDs []string) searchTeamFilter {
 	if len(teamIDs) > 0 {
 		uuids := make([]uuid.UUID, len(teamIDs))
 		for i, id := range teamIDs {
-			uuids[i] = mustParseUUID(id)
+			uuids[i] = parseUUIDOrNil(id)
 		}
 		return searchTeamFilter{teamIDs: uuids, active: true}
 	}
 	if teamID != nil {
 		if *teamID != "" {
-			t := mustParseUUID(*teamID)
+			t := parseUUIDOrNil(*teamID)
 			return searchTeamFilter{teamID: &t, active: true}
 		}
 		return searchTeamFilter{active: true} // personal-only

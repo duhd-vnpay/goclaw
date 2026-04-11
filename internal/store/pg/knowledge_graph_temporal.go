@@ -12,7 +12,7 @@ import (
 // ListEntitiesTemporal queries entities with temporal awareness.
 // AsOf=nil: current facts only (valid_until IS NULL). AsOf set: facts valid at that time.
 func (s *PGKnowledgeGraphStore) ListEntitiesTemporal(ctx context.Context, agentID, userID string, opts store.EntityListOptions, temporal store.TemporalQueryOptions) ([]store.Entity, error) {
-	aid := mustParseUUID(agentID)
+	aid := parseUUIDOrNil(agentID)
 	limit := opts.Limit
 	if limit <= 0 {
 		limit = 100

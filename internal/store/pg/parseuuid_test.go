@@ -70,15 +70,3 @@ func TestParseUUID_ErrorIsUnwrappable(t *testing.T) {
 	}
 }
 
-// TestMustParseUUID_AliasToParseUUIDOrNil verifies the transitional alias
-// during Phase 4 migration — mustParseUUID must behave identically to
-// parseUUIDOrNil so existing call sites are untouched until rename (4d).
-func TestMustParseUUID_AliasToParseUUIDOrNil(t *testing.T) {
-	u := uuid.New()
-	if mustParseUUID(u.String()) != u {
-		t.Error("mustParseUUID should equal parseUUIDOrNil on valid input")
-	}
-	if mustParseUUID("garbage") != uuid.Nil {
-		t.Error("mustParseUUID should return uuid.Nil on invalid input (parseUUIDOrNil semantics)")
-	}
-}

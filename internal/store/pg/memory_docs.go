@@ -505,13 +505,6 @@ func parseUUIDOrNil(s string) uuid.UUID {
 	return id
 }
 
-// mustParseUUID is an alias for parseUUIDOrNil kept during the Phase 4
-// migration window. Will be removed in sub-step 4d (single-commit rename).
-// TODO(Phase 4 4d): remove after all call sites migrate.
-func mustParseUUID(s string) uuid.UUID {
-	return parseUUIDOrNil(s)
-}
-
 func vectorToString(v []float32) string {
 	if len(v) == 0 {
 		return ""

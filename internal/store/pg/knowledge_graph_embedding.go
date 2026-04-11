@@ -121,7 +121,7 @@ func (s *PGKnowledgeGraphStore) EmbedEntity(ctx context.Context, entityID, name,
 	vecStr := vectorToString(embeddings[0])
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE kg_entities SET embedding = $1::vector WHERE id = $2`,
-		vecStr, mustParseUUID(entityID),
+		vecStr, parseUUIDOrNil(entityID),
 	); err != nil {
 		slog.Warn("kg entity embedding failed", "entity_id", entityID, "error", err)
 	}

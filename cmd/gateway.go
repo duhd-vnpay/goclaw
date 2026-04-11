@@ -291,6 +291,11 @@ func runGateway() {
 		pkgProfileResolver = pg.NewPGProfileResolver(pgStores.DB)
 	}
 
+	// Initialize project store for project-as-a-channel.
+	if pgStores.Projects != nil {
+		pkgProjectStore = pgStores.Projects
+	}
+
 	// Initialize Ardenn workflow engine (nil-safe: skips when stores unavailable)
 	ardennEngine, ardennCompletion := initArdenn(pgStores, msgBus)
 	pkgArdennEngine = ardennEngine

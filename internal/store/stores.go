@@ -45,6 +45,9 @@ type Stores struct {
 	Departments           DepartmentStore
 	ProjectMembers        ProjectMemberStore
 
+	// Project-as-a-Channel
+	Projects              ProjectStore
+
 	// Ardenn workflow engine stores
 	ArdennEvents      interface{} // ardenn.EventStore — uses interface{} to avoid import cycle
 	ArdennDefinitions interface{} // *pgardenn.PGDefinitionStore

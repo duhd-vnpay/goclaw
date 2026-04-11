@@ -36,6 +36,9 @@ type ConsumerDeps struct {
 	// Identity: user profile resolution from paired devices (nil = disabled).
 	ProfileResolver store.ProfileResolver
 
+	// Project-as-a-Channel: project lookup + MCP scope (nil = disabled).
+	ProjectStore store.ProjectStore
+
 	// Ardenn workflow engine (nil when disabled — zero overhead)
 	ArdennEngine     *ardenn.Engine
 	ArdennCompletion *hands.CompletionRegistry

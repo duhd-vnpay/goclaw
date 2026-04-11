@@ -47,6 +47,33 @@ func processNormalMessage(
 		return
 	}
 
+	// --- Project-as-a-Channel: resolve project context ---
+	// Lookup project by channel type + chat ID, inject project ID + MCP overrides.
+	var resolvedProject *store.ProjectData
+	{
+		chType := ""
+		if deps.ChannelMgr != nil {
+			chType = deps.ChannelMgr.ChannelTypeForName(msg.Channel)
+		}
+		if chType == "" {
+			chType = msg.Channel
+		}
+		ctx, resolvedProject = resolveProjectOverrides(ctx, msg, deps.ProjectStore, chType)
+
+		// Check agent allowlist/denylist for this project.
+		if blockMsg := checkProjectAgentAccess(resolvedProject, agentID); blockMsg != "" {
+			slog.Warn("project: agent blocked",
+				"agent", agentID, "project", resolvedProject.Name, "chat_id", msg.ChatID)
+			deps.MsgBus.PublishOutbound(bus.OutboundMessage{
+				Channel:  msg.Channel,
+				ChatID:   msg.ChatID,
+				Content:  blockMsg,
+				Metadata: msg.Metadata,
+			})
+			return
+		}
+	}
+
 	// Build session key based on scope config (matching TS buildAgentPeerSessionKey).
 	peerKind := msg.PeerKind
 	if peerKind == "" {

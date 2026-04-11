@@ -44,6 +44,10 @@ const (
 	CredentialUserIDKey contextKey = "goclaw_credential_user_id"
 	// SenderNameKey is the display name from channel metadata (for bootstrap auto-contact).
 	SenderNameKey contextKey = "goclaw_sender_name"
+	// ProjectIDKey is the context key for the resolved project UUID (project-as-a-channel).
+	ProjectIDKey contextKey = "goclaw_project_id"
+	// ProjectOverridesKey holds MCP server env overrides resolved from project_resources.
+	ProjectOverridesKey contextKey = "goclaw_project_overrides"
 )
 
 // WithShellDenyGroups returns a new context with shell deny group overrides.
@@ -211,6 +215,12 @@ func MemoryUserID(ctx context.Context) string {
 	return UserIDFromContext(ctx)
 }
 
+// MemoryProjectID returns the project UUID for project-scoped memory operations.
+// Returns uuid.Nil when no project is set (default: agent+user scoping only).
+func MemoryProjectID(ctx context.Context) uuid.UUID {
+	return ProjectIDFromContext(ctx)
+}
+
 // KGUserID returns the userID to use for knowledge graph operations.
 // Returns "" (agent-level scope) when shared KG is active, otherwise the per-user ID.
 func KGUserID(ctx context.Context) string {
@@ -315,4 +325,30 @@ func RoleFromContext(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// WithProjectID returns a new context with the given project UUID.
+func WithProjectID(ctx context.Context, id uuid.UUID) context.Context {
+	return context.WithValue(ctx, ProjectIDKey, id)
+}
+
+// ProjectIDFromContext extracts the project UUID from context. Returns uuid.Nil if not set.
+func ProjectIDFromContext(ctx context.Context) uuid.UUID {
+	if v, ok := ctx.Value(ProjectIDKey).(uuid.UUID); ok && v != uuid.Nil {
+		return v
+	}
+	return uuid.Nil
+}
+
+// WithProjectOverrides returns a new context with MCP server env overrides.
+// The map is keyed by server name → env var name → env var value.
+func WithProjectOverrides(ctx context.Context, overrides map[string]map[string]string) context.Context {
+	return context.WithValue(ctx, ProjectOverridesKey, overrides)
+}
+
+// ProjectOverridesFromContext extracts MCP server env overrides from context.
+// Returns nil if not set.
+func ProjectOverridesFromContext(ctx context.Context) map[string]map[string]string {
+	v, _ := ctx.Value(ProjectOverridesKey).(map[string]map[string]string)
+	return v
 }

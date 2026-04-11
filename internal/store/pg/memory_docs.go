@@ -53,29 +53,38 @@ func (s *PGMemoryStore) GetDocument(ctx context.Context, agentID, userID, path s
 	var err error
 	if store.IsSharedMemory(ctx) {
 		// Shared: no user_id filter
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 3)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 3)
 		if tcErr != nil {
 			return "", tcErr
 		}
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		allArgs := append([]any{aid, path}, tcArgs...)
+		allArgs = append(allArgs, pcArgs...)
 		err = s.db.QueryRowContext(ctx,
-			"SELECT content FROM memory_documents WHERE agent_id = $1 AND path = $2"+tc+" ORDER BY updated_at DESC LIMIT 1",
-			append([]any{aid, path}, tcArgs...)...).Scan(&content)
+			"SELECT content FROM memory_documents WHERE agent_id = $1 AND path = $2"+tc+pc+" ORDER BY updated_at DESC LIMIT 1",
+			allArgs...).Scan(&content)
 	} else if userID == "" {
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 3)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 3)
 		if tcErr != nil {
 			return "", tcErr
 		}
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		allArgs := append([]any{aid, path}, tcArgs...)
+		allArgs = append(allArgs, pcArgs...)
 		err = s.db.QueryRowContext(ctx,
-			"SELECT content FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id IS NULL"+tc,
-			append([]any{aid, path}, tcArgs...)...).Scan(&content)
+			"SELECT content FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id IS NULL"+tc+pc,
+			allArgs...).Scan(&content)
 	} else {
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 4)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 4)
 		if tcErr != nil {
 			return "", tcErr
 		}
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		allArgs := append([]any{aid, path, userID}, tcArgs...)
+		allArgs = append(allArgs, pcArgs...)
 		err = s.db.QueryRowContext(ctx,
-			"SELECT content FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id = $3"+tc,
-			append([]any{aid, path, userID}, tcArgs...)...).Scan(&content)
+			"SELECT content FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id = $3"+tc+pc,
+			allArgs...).Scan(&content)
 	}
 	if err != nil {
 		return "", err
@@ -95,12 +104,20 @@ func (s *PGMemoryStore) PutDocument(ctx context.Context, agentID, userID, path, 
 		uid = &userID
 	}
 
+	// Project-scoped memory: include project_id when set.
+	pid := store.MemoryProjectID(ctx)
+	var pidPtr *uuid.UUID
+	if pid != uuid.Nil {
+		pidPtr = &pid
+	}
+
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO memory_documents (id, agent_id, user_id, path, content, hash, tenant_id, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO memory_documents (id, agent_id, user_id, path, content, hash, tenant_id, project_id, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 ON CONFLICT (agent_id, COALESCE(user_id, ''), path)
-		 DO UPDATE SET content = EXCLUDED.content, hash = EXCLUDED.hash, tenant_id = EXCLUDED.tenant_id, updated_at = EXCLUDED.updated_at`,
-		id, aid, uid, path, content, hash, tid, now,
+		 DO UPDATE SET content = EXCLUDED.content, hash = EXCLUDED.hash, tenant_id = EXCLUDED.tenant_id,
+		               project_id = EXCLUDED.project_id, updated_at = EXCLUDED.updated_at`,
+		id, aid, uid, path, content, hash, tid, pidPtr, now,
 	)
 	return err
 }
@@ -111,29 +128,38 @@ func (s *PGMemoryStore) DeleteDocument(ctx context.Context, agentID, userID, pat
 	var err error
 	if store.IsSharedMemory(ctx) {
 		// Shared: delete any matching doc regardless of user_id
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 3)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 3)
 		if tcErr != nil {
 			return tcErr
 		}
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		allArgs := append([]any{aid, path}, tcArgs...)
+		allArgs = append(allArgs, pcArgs...)
 		res, err = s.db.ExecContext(ctx,
-			"DELETE FROM memory_documents WHERE agent_id = $1 AND path = $2"+tc,
-			append([]any{aid, path}, tcArgs...)...)
+			"DELETE FROM memory_documents WHERE agent_id = $1 AND path = $2"+tc+pc,
+			allArgs...)
 	} else if userID == "" {
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 3)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 3)
 		if tcErr != nil {
 			return tcErr
 		}
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		allArgs := append([]any{aid, path}, tcArgs...)
+		allArgs = append(allArgs, pcArgs...)
 		res, err = s.db.ExecContext(ctx,
-			"DELETE FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id IS NULL"+tc,
-			append([]any{aid, path}, tcArgs...)...)
+			"DELETE FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id IS NULL"+tc+pc,
+			allArgs...)
 	} else {
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 4)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 4)
 		if tcErr != nil {
 			return tcErr
 		}
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		allArgs := append([]any{aid, path, userID}, tcArgs...)
+		allArgs = append(allArgs, pcArgs...)
 		res, err = s.db.ExecContext(ctx,
-			"DELETE FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id = $3"+tc,
-			append([]any{aid, path, userID}, tcArgs...)...)
+			"DELETE FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id = $3"+tc+pc,
+			allArgs...)
 	}
 	if err != nil {
 		return err
@@ -152,26 +178,32 @@ func (s *PGMemoryStore) ListDocuments(ctx context.Context, agentID, userID strin
 	var args []any
 	if store.IsSharedMemory(ctx) {
 		// Shared: list ALL docs for agent (global + per-user from all users)
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 2)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 2)
 		if tcErr != nil {
 			return nil, tcErr
 		}
-		q = "SELECT path, hash, user_id, updated_at FROM memory_documents WHERE agent_id = $1" + tc
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		q = "SELECT path, hash, user_id, updated_at FROM memory_documents WHERE agent_id = $1" + tc + pc
 		args = append([]any{aid}, tcArgs...)
+		args = append(args, pcArgs...)
 	} else if userID == "" {
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 2)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 2)
 		if tcErr != nil {
 			return nil, tcErr
 		}
-		q = "SELECT path, hash, user_id, updated_at FROM memory_documents WHERE agent_id = $1 AND user_id IS NULL" + tc
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		q = "SELECT path, hash, user_id, updated_at FROM memory_documents WHERE agent_id = $1 AND user_id IS NULL" + tc + pc
 		args = append([]any{aid}, tcArgs...)
+		args = append(args, pcArgs...)
 	} else {
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 3)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 3)
 		if tcErr != nil {
 			return nil, tcErr
 		}
-		q = "SELECT path, hash, user_id, updated_at FROM memory_documents WHERE agent_id = $1 AND (user_id IS NULL OR user_id = $2)" + tc
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		q = "SELECT path, hash, user_id, updated_at FROM memory_documents WHERE agent_id = $1 AND (user_id IS NULL OR user_id = $2)" + tc + pc
 		args = append([]any{aid, userID}, tcArgs...)
+		args = append(args, pcArgs...)
 	}
 
 	var rows []documentInfoRow
@@ -199,29 +231,38 @@ func (s *PGMemoryStore) IndexDocument(ctx context.Context, agentID, userID, path
 	var docID uuid.UUID
 	if store.IsSharedMemory(ctx) {
 		// Shared: no user_id filter
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 3)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 3)
 		if tcErr != nil {
 			return tcErr
 		}
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		allArgs := append([]any{aid, path}, tcArgs...)
+		allArgs = append(allArgs, pcArgs...)
 		err = s.db.QueryRowContext(ctx,
-			"SELECT id FROM memory_documents WHERE agent_id = $1 AND path = $2"+tc+" ORDER BY updated_at DESC LIMIT 1",
-			append([]any{aid, path}, tcArgs...)...).Scan(&docID)
+			"SELECT id FROM memory_documents WHERE agent_id = $1 AND path = $2"+tc+pc+" ORDER BY updated_at DESC LIMIT 1",
+			allArgs...).Scan(&docID)
 	} else if userID == "" {
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 3)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 3)
 		if tcErr != nil {
 			return tcErr
 		}
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		allArgs := append([]any{aid, path}, tcArgs...)
+		allArgs = append(allArgs, pcArgs...)
 		err = s.db.QueryRowContext(ctx,
-			"SELECT id FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id IS NULL"+tc,
-			append([]any{aid, path}, tcArgs...)...).Scan(&docID)
+			"SELECT id FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id IS NULL"+tc+pc,
+			allArgs...).Scan(&docID)
 	} else {
-		tc, tcArgs, _, tcErr := scopeClause(ctx, 4)
+		tc, tcArgs, tcNext, tcErr := scopeClause(ctx, 4)
 		if tcErr != nil {
 			return tcErr
 		}
+		pc, pcArgs, _ := memoryProjectClause(ctx, tcNext)
+		allArgs := append([]any{aid, path, userID}, tcArgs...)
+		allArgs = append(allArgs, pcArgs...)
 		err = s.db.QueryRowContext(ctx,
-			"SELECT id FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id = $3"+tc,
-			append([]any{aid, path, userID}, tcArgs...)...).Scan(&docID)
+			"SELECT id FROM memory_documents WHERE agent_id = $1 AND path = $2 AND user_id = $3"+tc+pc,
+			allArgs...).Scan(&docID)
 	}
 	if err != nil {
 		return err
@@ -338,6 +379,12 @@ func (s *PGMemoryStore) IndexDocument(ctx context.Context, agentID, userID, path
 
 	// Insert chunks
 	tid := tenantIDForInsert(ctx)
+	// Project-scoped memory: propagate project_id to chunks.
+	pid := store.MemoryProjectID(ctx)
+	var pidPtr *uuid.UUID
+	if pid != uuid.Nil {
+		pidPtr = &pid
+	}
 	for i, tc := range chunks {
 		hash := memory.ContentHash(tc.Text)
 		chunkID := uuid.Must(uuid.NewV7())
@@ -351,17 +398,17 @@ func (s *PGMemoryStore) IndexDocument(ctx context.Context, agentID, userID, path
 		if embeddings != nil && i < len(embeddings) && embeddings[i] != nil {
 			// Insert with embedding via raw SQL (pgvector)
 			s.db.ExecContext(ctx,
-				`INSERT INTO memory_chunks (id, agent_id, document_id, user_id, path, start_line, end_line, hash, text, embedding, tenant_id, updated_at)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::vector, $11, $12)`,
+				`INSERT INTO memory_chunks (id, agent_id, document_id, user_id, path, start_line, end_line, hash, text, embedding, tenant_id, project_id, updated_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::vector, $11, $12, $13)`,
 				chunkID, aid, docID, uid, path, tc.StartLine, tc.EndLine, hash, tc.Text,
-				vectorToString(embeddings[i]), tid, now,
+				vectorToString(embeddings[i]), tid, pidPtr, now,
 			)
 		} else {
 			s.db.ExecContext(ctx,
-				`INSERT INTO memory_chunks (id, agent_id, document_id, user_id, path, start_line, end_line, hash, text, tenant_id, updated_at)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+				`INSERT INTO memory_chunks (id, agent_id, document_id, user_id, path, start_line, end_line, hash, text, tenant_id, project_id, updated_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 				 ON CONFLICT DO NOTHING`,
-				chunkID, aid, docID, uid, path, tc.StartLine, tc.EndLine, hash, tc.Text, tid, now,
+				chunkID, aid, docID, uid, path, tc.StartLine, tc.EndLine, hash, tc.Text, tid, pidPtr, now,
 			)
 		}
 	}

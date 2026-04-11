@@ -26,6 +26,10 @@ import (
 // Resolves UserProfile from paired devices for system prompt injection.
 var pkgProfileResolver store.ProfileResolver
 
+// pkgProjectStore is set during gateway startup, read by ConsumerDeps.
+// Resolves project context for project-as-a-channel.
+var pkgProjectStore store.ProjectStore
+
 // consumeInboundMessages reads inbound messages from channels (Telegram, Discord, etc.)
 // and routes them through the scheduler/agent loop, then publishes the response back.
 // Also handles subagent announcements: routes them through the parent agent's session
@@ -64,6 +68,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 		SubagentMgr:      subagentMgr,
 		GetAnnounceMu:    getAnnounceMu,
 		ProfileResolver:  pkgProfileResolver,
+		ProjectStore:     pkgProjectStore,
 		ArdennEngine:     pkgArdennEngine,
 		ArdennCompletion: pkgArdennCompletion,
 	}

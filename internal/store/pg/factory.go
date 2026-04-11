@@ -66,6 +66,9 @@ func NewPGStores(cfg store.StoreConfig) (*store.Stores, error) {
 		Departments:          NewPGDepartmentStore(db),
 		ProjectMembers:       NewPGProjectMemberStore(db),
 
+		// Project-as-a-Channel
+		Projects:             NewPGProjectStore(db),
+
 		// Ardenn workflow engine (requires *sqlx.DB, initialized via initSqlx above)
 		ArdennEvents:      pgardenn.NewPGEventStore(pkgSqlxDB),
 		ArdennDefinitions: pgardenn.NewPGDefinitionStore(pkgSqlxDB),

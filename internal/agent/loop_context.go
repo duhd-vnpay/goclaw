@@ -109,6 +109,9 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 	if req.TeamTaskID != "" {
 		ctx = tools.WithTeamTaskID(ctx, req.TeamTaskID)
 	}
+	if req.DelegationID != "" {
+		ctx = tools.WithDelegationID(ctx, req.DelegationID)
+	}
 
 	// --- Per-user setup: file seeding + workspace resolution ---
 	// Uses userSetups sync.Map to track both concerns atomically per user.

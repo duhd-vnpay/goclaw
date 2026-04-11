@@ -33,6 +33,9 @@ type ConsumerDeps struct {
 	BgWg             sync.WaitGroup
 	GetAnnounceMu    func(string) *sync.Mutex
 
+	// Identity: user profile resolution from paired devices (nil = disabled).
+	ProfileResolver store.ProfileResolver
+
 	// Ardenn workflow engine (nil when disabled — zero overhead)
 	ArdennEngine     *ardenn.Engine
 	ArdennCompletion *hands.CompletionRegistry

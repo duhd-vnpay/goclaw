@@ -39,6 +39,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"github.com/nextlevelbuilder/goclaw/internal/store/pg"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 	"github.com/nextlevelbuilder/goclaw/internal/vault"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
@@ -283,6 +284,11 @@ func runGateway() {
 	contextFileInterceptor, mcpPool, mediaStore, postTurn = wireExtras(pgStores, agentRouter, providerRegistry, modelReg, msgBus, pgStores.Sessions, toolsReg, toolPE, skillsLoader, hasMemory, traceCollector, workspace, cfg.Gateway.InjectionAction, cfg, sandboxMgr, redisClient, domainBus)
 	if mcpPool != nil {
 		defer mcpPool.Stop()
+	}
+
+	// Initialize user profile resolver for system prompt identity injection.
+	if pgStores.DB != nil {
+		pkgProfileResolver = pg.NewPGProfileResolver(pgStores.DB)
 	}
 
 	// Initialize Ardenn workflow engine (nil-safe: skips when stores unavailable)

@@ -22,6 +22,10 @@ import (
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
+// pkgProfileResolver is set during gateway startup, read by ConsumerDeps.
+// Resolves UserProfile from paired devices for system prompt injection.
+var pkgProfileResolver store.ProfileResolver
+
 // consumeInboundMessages reads inbound messages from channels (Telegram, Discord, etc.)
 // and routes them through the scheduler/agent loop, then publishes the response back.
 // Also handles subagent announcements: routes them through the parent agent's session
@@ -59,6 +63,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 		ContactCollector: contactCollector,
 		SubagentMgr:      subagentMgr,
 		GetAnnounceMu:    getAnnounceMu,
+		ProfileResolver:  pkgProfileResolver,
 		ArdennEngine:     pkgArdennEngine,
 		ArdennCompletion: pkgArdennCompletion,
 	}

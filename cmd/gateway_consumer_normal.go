@@ -157,6 +157,32 @@ func processNormalMessage(
 		}
 	}
 
+	// --- Resolve user identity profile ---
+	// If the sender has a paired device with verified_user_id, resolve the full
+	// UserProfile (org_users + departments). Graceful degradation: if resolution
+	// fails, continue as anonymous (userProfile remains nil).
+	var userProfile *store.UserProfile
+	if deps.ProfileResolver != nil && msg.SenderID != "" && !bus.IsInternalSender(msg.SenderID) {
+		senderNumeric := msg.SenderID
+		if idx := strings.IndexByte(senderNumeric, '|'); idx > 0 {
+			senderNumeric = senderNumeric[:idx]
+		}
+		chType := deps.ChannelMgr.ChannelTypeForName(msg.Channel)
+		if chType == "" {
+			chType = msg.Channel
+		}
+		resolved, err := deps.ProfileResolver.ResolveFromPairedDevice(ctx, senderNumeric, chType)
+		if err != nil {
+			slog.Warn("user_profile: resolve failed, continuing as anonymous",
+				"sender", senderNumeric, "channel", chType, "error", err)
+		} else if resolved != nil {
+			userProfile = resolved
+			slog.Debug("user_profile: resolved",
+				"sender", senderNumeric, "user_id", resolved.ID,
+				"display_name", resolved.DisplayName)
+		}
+	}
+
 	// --- Quota check ---
 	if deps.QuotaChecker != nil {
 		qResult := deps.QuotaChecker.Check(ctx, userID, msg.Channel, agentLoop.ProviderName())
@@ -265,6 +291,26 @@ func processNormalMessage(
 			extraPrompt += "\n\n"
 		}
 		extraPrompt += tsp
+	}
+
+	// Inject user identity context into system prompt.
+	// Paired users get full context (name, role, departments, expertise, permissions).
+	// Unpaired users get anonymous context with read-only notice.
+	{
+		chType := ""
+		if deps.ChannelMgr != nil {
+			chType = deps.ChannelMgr.ChannelTypeForName(msg.Channel)
+		}
+		if chType == "" {
+			chType = msg.Channel
+		}
+		userCtxPrompt := agent.BuildUserContextPrompt(userProfile, chType, msg.SenderID)
+		if userCtxPrompt != "" {
+			if extraPrompt != "" {
+				extraPrompt += "\n\n"
+			}
+			extraPrompt += userCtxPrompt
+		}
 	}
 
 	// Per-topic skill filter override (from group/topic config hierarchy).

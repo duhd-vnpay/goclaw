@@ -117,6 +117,14 @@ type ChannelAware interface {
 	RequiredChannelTypes() []string
 }
 
+// PermissionRequirer is optionally implemented by tools that require a specific
+// user permission. When a UserProfile is available, the PolicyEngine checks
+// that the user's permissions map contains the required key set to true.
+// If the user has no profile (unpaired), tools with this interface are stripped.
+type PermissionRequirer interface {
+	RequiredPermission() string
+}
+
 // ToProviderDef converts a Tool to a providers.ToolDefinition for LLM APIs.
 func ToProviderDef(t Tool) providers.ToolDefinition {
 	return providers.ToolDefinition{

@@ -188,6 +188,25 @@ const (
 	MethodWhatsAppQRStart = "whatsapp.qr.start"
 )
 
+// Identity — Departments
+const (
+	MethodDepartmentsList        = "departments.list"
+	MethodDepartmentsCreate      = "departments.create"
+	MethodDepartmentsUpdate      = "departments.update"
+	MethodDepartmentsDelete      = "departments.delete"
+	MethodDepartmentsMembersList = "departments.members.list"
+	MethodDepartmentsMembersAdd  = "departments.members.add"
+	MethodDepartmentsMembersRemove = "departments.members.remove"
+)
+
+// Identity — Project Members
+const (
+	MethodProjectMembersList       = "projects.members.list"
+	MethodProjectMembersAdd        = "projects.members.add"
+	MethodProjectMembersRemove     = "projects.members.remove"
+	MethodProjectMembersUpdateRole = "projects.members.update_role"
+)
+
 // Ardenn — Enterprise Workflow Engine
 const (
 	MethodArdennDomainsList      = "ardenn.domains.list"

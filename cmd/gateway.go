@@ -527,6 +527,14 @@ func runGateway() {
 		methods.NewAPIKeysMethods(pgStores.APIKeys).Register(server.Router())
 	}
 
+	// Identity: departments + project members RPC
+	if pgStores.Departments != nil {
+		methods.NewDepartmentsMethods(pgStores.Departments).Register(server.Router())
+	}
+	if pgStores.ProjectMembers != nil {
+		methods.NewProjectMembersMethods(pgStores.ProjectMembers).Register(server.Router())
+	}
+
 	// Tenant management RPC + HTTP
 	if pgStores.Tenants != nil {
 		methods.NewTenantsMethods(pgStores.Tenants, msgBus, workspace).Register(server.Router())

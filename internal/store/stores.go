@@ -42,6 +42,8 @@ type Stores struct {
 	// Identity
 	OrgUsers              OrgUserStore
 	PairingVerifications  PairingVerificationStore
+	Departments           DepartmentStore
+	ProjectMembers        ProjectMemberStore
 
 	// Ardenn workflow engine stores
 	ArdennEvents      interface{} // ardenn.EventStore — uses interface{} to avoid import cycle

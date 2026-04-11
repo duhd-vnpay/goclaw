@@ -193,6 +193,62 @@ func (pe *PolicyEngine) FilterTools(
 	return defs
 }
 
+// FilterToolsWithPermissions extends FilterTools with user permission checks.
+// If userPermissions is non-nil, tools implementing PermissionRequirer are checked
+// against the map. If a tool requires a permission the user doesn't have, it's stripped.
+// If userPermissions is nil (unpaired user), ALL tools implementing PermissionRequirer
+// are stripped (safe read-only only).
+func (pe *PolicyEngine) FilterToolsWithPermissions(
+	registry ToolExecutor,
+	agentID string,
+	providerName string,
+	agentToolPolicy *config.ToolPolicySpec,
+	groupToolAllow []string,
+	isSubagent bool,
+	isLeafAgent bool,
+	userPermissions map[string]bool,
+) []providers.ToolDefinition {
+	defs := pe.FilterTools(registry, agentID, providerName, agentToolPolicy, groupToolAllow, isSubagent, isLeafAgent)
+
+	// Step 9: Permission-based filtering (Identity Phase 4)
+	var filtered []providers.ToolDefinition
+	for _, def := range defs {
+		tool, ok := registry.Get(def.Function.Name)
+		if !ok {
+			// Alias or unknown — keep (defensive)
+			filtered = append(filtered, def)
+			continue
+		}
+
+		pr, isPR := tool.(PermissionRequirer)
+		if !isPR {
+			// Tool doesn't require permissions — always allowed
+			filtered = append(filtered, def)
+			continue
+		}
+
+		perm := pr.RequiredPermission()
+		if perm == "" {
+			filtered = append(filtered, def)
+			continue
+		}
+
+		if userPermissions == nil {
+			// Unpaired user: strip all permission-gated tools
+			slog.Debug("tool stripped (unpaired user)", "tool", def.Function.Name, "required", perm)
+			continue
+		}
+
+		if userPermissions[perm] {
+			filtered = append(filtered, def)
+		} else {
+			slog.Debug("tool stripped (missing permission)", "tool", def.Function.Name, "required", perm, "agent", agentID)
+		}
+	}
+
+	return filtered
+}
+
 // evaluate runs the 7-step policy pipeline.
 func (pe *PolicyEngine) evaluate(
 	allTools []string,

@@ -71,12 +71,14 @@ type Step struct {
 	Gate           json.RawMessage `db:"gate"`
 	DispatchTo     *string         `db:"dispatch_to"`
 	DispatchTarget *string         `db:"dispatch_target"`
+	CreatedAt      time.Time       `db:"created_at"`
 }
 
 func (s *PGDefinitionStore) GetDomain(ctx context.Context, tenantID uuid.UUID, slug string) (*Domain, error) {
 	var d Domain
 	err := s.db.GetContext(ctx, &d,
-		`SELECT * FROM ardenn_domains WHERE tenant_id = $1 AND slug = $2`, tenantID, slug)
+		`SELECT id, tenant_id, slug, name, description, department_id, default_tier, settings, created_at, updated_at
+		 FROM ardenn_domains WHERE tenant_id = $1 AND slug = $2`, tenantID, slug)
 	if err != nil {
 		return nil, fmt.Errorf("get domain: %w", err)
 	}
@@ -86,7 +88,8 @@ func (s *PGDefinitionStore) GetDomain(ctx context.Context, tenantID uuid.UUID, s
 func (s *PGDefinitionStore) ListDomains(ctx context.Context, tenantID uuid.UUID) ([]Domain, error) {
 	var domains []Domain
 	err := s.db.SelectContext(ctx, &domains,
-		`SELECT * FROM ardenn_domains WHERE tenant_id = $1 ORDER BY name`, tenantID)
+		`SELECT id, tenant_id, slug, name, description, department_id, default_tier, settings, created_at, updated_at
+		 FROM ardenn_domains WHERE tenant_id = $1 ORDER BY name`, tenantID)
 	return domains, err
 }
 
@@ -108,7 +111,10 @@ func (s *PGDefinitionStore) GetPublishedWorkflow(ctx context.Context, tenantID u
 func (s *PGDefinitionStore) GetSteps(ctx context.Context, workflowID uuid.UUID) ([]Step, error) {
 	var steps []Step
 	err := s.db.SelectContext(ctx, &steps,
-		`SELECT * FROM ardenn_steps WHERE workflow_id = $1 ORDER BY position`, workflowID)
+		`SELECT id, workflow_id, slug, name, description, position, agent_key, task_template,
+		        depends_on, condition, timeout, constraints, continuity, evaluation, gate,
+		        dispatch_to, dispatch_target, created_at
+		 FROM ardenn_steps WHERE workflow_id = $1 ORDER BY position`, workflowID)
 	return steps, err
 }
 
@@ -170,7 +176,10 @@ type ListWorkflowsFilter struct {
 }
 
 func (s *PGDefinitionStore) ListWorkflows(ctx context.Context, tenantID uuid.UUID, f ListWorkflowsFilter) ([]Workflow, error) {
-	query := `SELECT * FROM ardenn_workflows WHERE tenant_id = $1`
+	query := `SELECT id, tenant_id, domain_id, slug, name, description, version, tier,
+		        trigger_config, variables, settings, visibility, status, created_by,
+		        published_at, created_at, updated_at
+		 FROM ardenn_workflows WHERE tenant_id = $1`
 	args := []any{tenantID}
 	idx := 2
 
@@ -193,7 +202,10 @@ func (s *PGDefinitionStore) ListWorkflows(ctx context.Context, tenantID uuid.UUI
 
 func (s *PGDefinitionStore) GetWorkflowByID(ctx context.Context, id uuid.UUID) (*Workflow, error) {
 	var w Workflow
-	err := s.db.GetContext(ctx, &w, `SELECT * FROM ardenn_workflows WHERE id = $1`, id)
+	err := s.db.GetContext(ctx, &w, `SELECT id, tenant_id, domain_id, slug, name, description, version, tier,
+		        trigger_config, variables, settings, visibility, status, created_by,
+		        published_at, created_at, updated_at
+		 FROM ardenn_workflows WHERE id = $1`, id)
 	if err != nil {
 		return nil, fmt.Errorf("get workflow by id: %w", err)
 	}

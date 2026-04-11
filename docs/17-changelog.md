@@ -32,6 +32,31 @@ All notable changes to GoClaw Gateway are documented here. Format follows [Keep 
 
 ## [Unreleased]
 
+### Testing
+
+#### Test Coverage Improvement — Wave 1-3 (2026-04-11)
+- **CI ratchet gate**: `scripts/check_coverage.go` parses `coverage.out` per package and fails CI if coverage drops below stored floors in `scripts/coverage_thresholds.json`. `--update` flag ratchets thresholds upward when coverage improves. 61 packages locked.
+- **`-coverpkg=./...`**: CI now runs `go test -race -coverpkg=./...` so integration tests in `tests/integration/` are attributed to the source packages under test.
+- **`internal/testutil`**: shared helpers — `TestDB()` (integration-tagged), context builders (`TenantCtx`, `UserCtx`, `AgentCtx`, `FullCtx`), mockgen generate hooks for `SessionStore`/`AgentStore`/`ContactStore`.
+- **~663 new test functions across 36 files**:
+  - Wave 1 — `store/pg` integration test depth (session pagination/isolation, agent context files/profiles, agent_links CRUD, cron CRUD+state, vault CRUD/search, memory BM25/isolation); `gateway` unit tests (ratelimit, event_filter, server auth); `gateway/methods` handlers (sessions, skills, cron); `http` auth helpers + path security; `tasks.TaskTicker` (lifecycle, recoverAll, followupInterval); `agent` (pruning, extractive memory, intent classify, loop utils, inject, evolution guardrails).
+  - Wave 2 — `config` (normalize, expand/contract home, env overlays, system configs); `skills` (BM25 tokenize/index/search/rebuild, frontmatter parser, loader/context); `mcp` (pool, manager status, bridge BM25, env resolution); `backup` (ArchiveDirectory, SanitizeDSN, WritePgpass, Backup.Run); `channels/slack` (mention, user cache, classifyMime); `channels/discord` (resolveDisplayName, command routing, classifyMediaType); `channels/telegram` (markdown→HTML, table rendering, detectMention, service message); `channels/whatsapp` (extractTextContent, chunkText, markdown→WhatsApp, mimeToExt, classifyDownloadError).
+  - Wave 3 — `cache.PermissionCache` (9 methods + invalidation); `sessions` key builders + manager edge cases; `knowledgegraph` extractor (mock provider success/filter/error/invalid-JSON/long-text chunking), splitChunks, mergeResults.
+- **Coverage deltas** (local `go test`, no DB):
+  - `internal/knowledgegraph` 47.1% → 91.8% (+44.7pp)
+  - `internal/skills` 7.7% → 37.5% (+29.8pp)
+  - `internal/config` 19.3% → 48.2% (+28.9pp)
+  - `internal/cache` 72.9% → 96.9% (+24.0pp)
+  - `internal/sessions` 70.7% → 94.4% (+23.7pp)
+  - `internal/gateway` 0% → 15.1%
+  - `internal/mcp` 12.1% → 26.3% (+14.2pp)
+  - `internal/channels/whatsapp` 8.8% → 21.3% (+12.5pp)
+  - `internal/channels/discord` 15.6% → 27.7% (+12.1pp)
+  - `internal/tasks` 0% → 55.4%
+  - `internal/agent` 28.8% → 36.8%
+  - store/pg integration test depth improved — coverage attribution requires live pgvector in CI
+- **Deferred to separate plans**: `channels/feishu` (0%, 102 funcs), `providers/acp` (0%, 41 funcs), `channels/zalo` (regressed to 5%), `providers` (56%, 325 funcs), `channels/facebook` (31.8%)
+
 ### Added
 
 #### Episodic Memory Weighted Scoring — Dreaming Enhancement (2026-04-10, Phase 10)

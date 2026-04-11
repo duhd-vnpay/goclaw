@@ -15,7 +15,7 @@ var schemaSQL string
 
 // SchemaVersion is the current SQLite schema version.
 // Bump this when adding new migration steps below.
-const SchemaVersion = 15
+const SchemaVersion = 16
 
 // migrations maps version → SQL to apply when upgrading FROM that version.
 // schema.sql always represents the LATEST full schema (for fresh DBs).
@@ -412,6 +412,28 @@ CREATE INDEX IF NOT EXISTS idx_vault_docs_team ON vault_documents(team_id);`,
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cron_jobs_agent_tenant_name
   ON cron_jobs(agent_id, tenant_id, name);`,
+
+	// Version 15 → 16: Channel Pairing via Email OTP.
+	// Add pairing_verifications table, email + verified_user_id columns to channel_contacts and paired_devices.
+	15: `CREATE TABLE IF NOT EXISTS pairing_verifications (
+    id              TEXT NOT NULL PRIMARY KEY,
+    user_id         TEXT NOT NULL,
+    email           VARCHAR(255) NOT NULL,
+    code            VARCHAR(6) NOT NULL,
+    channel_type    VARCHAR(50) NOT NULL,
+    sender_id       VARCHAR(255) NOT NULL,
+    chat_id         VARCHAR(255),
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    expires_at      TEXT NOT NULL,
+    verified_at     TEXT,
+    tenant_id       TEXT NOT NULL REFERENCES tenants(id),
+    created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pairing_verifications_tenant ON pairing_verifications(tenant_id);
+ALTER TABLE channel_contacts ADD COLUMN email VARCHAR(255);
+ALTER TABLE channel_contacts ADD COLUMN verified_user_id TEXT;
+ALTER TABLE paired_devices ADD COLUMN verified_user_id TEXT;
+ALTER TABLE paired_devices ADD COLUMN email VARCHAR(255);`,
 }
 
 // EnsureSchema creates tables if they don't exist and applies incremental migrations.

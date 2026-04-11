@@ -538,12 +538,35 @@ CREATE TABLE IF NOT EXISTS paired_devices (
     metadata   TEXT DEFAULT '{}',
     expires_at TEXT,
     tenant_id  TEXT NOT NULL REFERENCES tenants(id),
-    paired_at  TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    paired_at  TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    verified_user_id TEXT,
+    email        VARCHAR(255)
 );
 
 -- tenant-scoped unique (migration 27 Phase I)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_paired_devices_tenant_sender_channel ON paired_devices(tenant_id, sender_id, channel);
 CREATE INDEX IF NOT EXISTS idx_paired_devices_tenant ON paired_devices(tenant_id);
+
+-- ============================================================
+-- Table: pairing_verifications
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS pairing_verifications (
+    id              TEXT NOT NULL PRIMARY KEY,
+    user_id         TEXT NOT NULL,
+    email           VARCHAR(255) NOT NULL,
+    code            VARCHAR(6) NOT NULL,
+    channel_type    VARCHAR(50) NOT NULL,
+    sender_id       VARCHAR(255) NOT NULL,
+    chat_id         VARCHAR(255),
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    expires_at      TEXT NOT NULL,
+    verified_at     TEXT,
+    tenant_id       TEXT NOT NULL REFERENCES tenants(id),
+    created_at      TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_pairing_verifications_tenant ON pairing_verifications(tenant_id);
 
 -- ============================================================
 -- Table: traces
@@ -1071,6 +1094,8 @@ CREATE TABLE IF NOT EXISTS channel_contacts (
     thread_type      VARCHAR(20),
     metadata         TEXT DEFAULT '{}',
     merged_id        TEXT,
+    email            VARCHAR(255),
+    verified_user_id TEXT,
     tenant_id        TEXT NOT NULL REFERENCES tenants(id),
     first_seen_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     last_seen_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))

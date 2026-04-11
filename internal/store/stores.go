@@ -39,6 +39,9 @@ type Stores struct {
 	EvolutionMetrics       EvolutionMetricsStore
 	EvolutionSuggestions   EvolutionSuggestionStore
 
+	// Identity
+	OrgUsers OrgUserStore
+
 	// Ardenn workflow engine stores
 	ArdennEvents      interface{} // ardenn.EventStore — uses interface{} to avoid import cycle
 	ArdennDefinitions interface{} // *pgardenn.PGDefinitionStore

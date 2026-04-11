@@ -224,6 +224,19 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		return
 	}
 
+	// Intercept pairing flow input (email/OTP) for DMs before agent processing.
+	if !isGroup {
+		setThread := func(msg *telego.SendMessageParams) {
+			sendThreadID := resolveThreadIDForSend(messageThreadID)
+			if sendThreadID > 0 {
+				msg.MessageThreadID = sendThreadID
+			}
+		}
+		if handled := c.handlePairingFlowInput(ctx, chatID, senderID, strings.TrimSpace(content), setThread); handled {
+			return
+		}
+	}
+
 	// Enrich content with forward/reply/location context
 	msgCtx := buildMessageContext(message, c.bot.Username())
 	content = enrichContentWithContext(content, msgCtx)

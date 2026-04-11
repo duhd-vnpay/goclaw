@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
@@ -85,6 +87,7 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 			"/stopall — Stop all running tasks\n" +
 			"/reset — Reset conversation history\n" +
 			"/status — Show bot status\n" +
+			"/pair — Pair this account with your org email\n" +
 			"/reactions — Show reaction emoji legend\n" +
 			"/tasks — List team tasks\n" +
 			"/task_detail <id> — View task detail\n" +
@@ -239,7 +242,117 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 		setThread(msg)
 		c.bot.SendMessage(ctx, msg)
 		return true
+
+	case "/pair":
+		c.handlePairCommand(ctx, chatID, senderID, chatIDStr, setThread)
+		return true
+
+	case "/unpair":
+		c.clearPairingFlow(senderID)
+		msg := tu.Message(chatIDObj, "Pairing flow cancelled.")
+		setThread(msg)
+		c.bot.SendMessage(ctx, msg)
+		return true
 	}
 
 	return false
+}
+
+// handlePairingFlowInput intercepts messages from users in an active pairing flow.
+// Returns true if the message was consumed by the pairing flow.
+func (c *Channel) handlePairingFlowInput(ctx context.Context, chatID int64, senderID, text string, setThread func(*telego.SendMessageParams)) bool {
+	if c.pairingHandler == nil {
+		return false
+	}
+
+	val, ok := c.pairingFlows.Load(senderID)
+	if !ok {
+		return false
+	}
+	flow := val.(*channels.PairingFlowEntry)
+
+	// Expire stale flows (15 minutes).
+	if time.Since(flow.StartedAt) > 15*time.Minute {
+		c.pairingFlows.Delete(senderID)
+		return false
+	}
+
+	chatIDObj := tu.ID(chatID)
+
+	switch flow.State {
+	case channels.PairingStateAwaitEmail:
+		if !channels.IsPossibleEmail(text) {
+			msg := tu.Message(chatIDObj, "That doesn't look like an email address. Please enter your organization email, or /unpair to cancel.")
+			setThread(msg)
+			c.bot.SendMessage(ctx, msg)
+			return true
+		}
+
+		reply := c.pairingHandler.HandleEmailInput(ctx, flow.ChannelType, senderID, flow.ChatID, text)
+		msg := tu.Message(chatIDObj, reply)
+		setThread(msg)
+		c.bot.SendMessage(ctx, msg)
+
+		// If OTP was sent successfully, advance state to await code.
+		if strings.Contains(reply, "verification code") {
+			flow.State = channels.PairingStateAwaitCode
+			c.pairingFlows.Store(senderID, flow)
+		}
+		return true
+
+	case channels.PairingStateAwaitCode:
+		if !channels.IsPossibleOTP(text) {
+			msg := tu.Message(chatIDObj, "Please enter the 6-digit verification code, or /unpair to cancel.")
+			setThread(msg)
+			c.bot.SendMessage(ctx, msg)
+			return true
+		}
+
+		reply, paired := c.pairingHandler.HandleCodeInput(ctx, flow.ChannelType, senderID, flow.ChatID, text)
+		msg := tu.Message(chatIDObj, reply)
+		setThread(msg)
+		c.bot.SendMessage(ctx, msg)
+
+		if paired {
+			c.pairingFlows.Delete(senderID)
+		} else if strings.Contains(reply, "start over") {
+			c.pairingFlows.Delete(senderID)
+		}
+		return true
+	}
+
+	return false
+}
+
+// handlePairCommand initiates the /pair flow.
+func (c *Channel) handlePairCommand(ctx context.Context, chatID int64, senderID, chatIDStr string, setThread func(*telego.SendMessageParams)) {
+	chatIDObj := tu.ID(chatID)
+
+	if c.pairingHandler == nil {
+		msg := tu.Message(chatIDObj, "Email pairing is not configured. Contact your administrator.")
+		setThread(msg)
+		c.bot.SendMessage(ctx, msg)
+		return
+	}
+
+	reply := c.pairingHandler.HandlePairCommand(ctx, c.Name(), senderID, chatIDStr)
+	msg := tu.Message(chatIDObj, reply)
+	setThread(msg)
+	c.bot.SendMessage(ctx, msg)
+
+	// If the user is not already paired, start the flow.
+	if strings.Contains(reply, "email address") {
+		c.pairingFlows.Store(senderID, &channels.PairingFlowEntry{
+			State:       channels.PairingStateAwaitEmail,
+			ChannelType: c.Name(),
+			SenderID:    senderID,
+			ChatID:      chatIDStr,
+			StartedAt:   time.Now(),
+		})
+	}
+}
+
+// clearPairingFlow removes a pairing flow for a sender.
+func (c *Channel) clearPairingFlow(senderID string) {
+	c.pairingFlows.Delete(senderID)
 }

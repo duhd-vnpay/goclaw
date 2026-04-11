@@ -415,13 +415,25 @@ func runGateway() {
 		}
 	}
 
+	// Build email-OTP pairing handler (optional — requires OrgUsers + PairingVerifications stores).
+	var pairingHandler *channels.PairingHandler
+	if pgStores.OrgUsers != nil && pgStores.PairingVerifications != nil {
+		pairingHandler = channels.NewPairingHandler(pgStores.OrgUsers, pgStores.PairingVerifications, pgStores.Pairing)
+		slog.Info("email-OTP pairing handler enabled")
+	}
+
 	// Load channel instances from DB.
 	var instanceLoader *channels.InstanceLoader
 	if pgStores.ChannelInstances != nil {
 		instanceLoader = channels.NewInstanceLoader(pgStores.ChannelInstances, pgStores.Agents, channelMgr, msgBus, pgStores.Pairing)
 		instanceLoader.SetProviderRegistry(providerRegistry)
 		instanceLoader.SetPendingCompactionConfig(cfg.Channels.PendingCompaction)
-		instanceLoader.RegisterFactory(channels.TypeTelegram, telegram.FactoryWithStores(pgStores.Agents, pgStores.ConfigPermissions, pgStores.Teams, pgStores.SubagentTasks, pgStores.PendingMessages))
+
+		var telegramExtraOpts []telegram.Option
+		if pairingHandler != nil {
+			telegramExtraOpts = append(telegramExtraOpts, telegram.WithPairingHandler(pairingHandler))
+		}
+		instanceLoader.RegisterFactory(channels.TypeTelegram, telegram.FactoryWithStores(pgStores.Agents, pgStores.ConfigPermissions, pgStores.Teams, pgStores.SubagentTasks, pgStores.PendingMessages, telegramExtraOpts...))
 		instanceLoader.RegisterFactory(channels.TypeDiscord, discord.FactoryWithStores(pgStores.Agents, pgStores.ConfigPermissions, pgStores.PendingMessages))
 		instanceLoader.RegisterFactory(channels.TypeFeishu, feishu.FactoryWithPendingStore(pgStores.PendingMessages))
 		instanceLoader.RegisterFactory(channels.TypeZaloOA, zalo.Factory)

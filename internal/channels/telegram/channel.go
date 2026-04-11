@@ -43,6 +43,8 @@ type Channel struct {
 	handlerWg         sync.WaitGroup     // tracks in-flight handler goroutines for graceful shutdown
 	handlerSem        chan struct{}      // bounded semaphore for concurrent handler goroutines
 	pendingDraftID    sync.Map           // localKey string → int (draftID)
+	pairingHandler    *channels.PairingHandler // email-OTP pairing handler (nil if not configured)
+	pairingFlows      sync.Map                 // senderID string → *channels.PairingFlowEntry
 	// pairingService, approvedGroups, pairingDebounce, groupHistory, historyLimit, requireMention
 	// are inherited from channels.BaseChannel.
 }
@@ -74,6 +76,11 @@ func WithTeamStore(s store.TeamStore) Option { return func(c *Channel) { c.teamS
 // WithSubagentTaskStore sets the subagent task store for /subagents, /subagent commands.
 func WithSubagentTaskStore(s store.SubagentTaskStore) Option {
 	return func(c *Channel) { c.subagentTaskStore = s }
+}
+
+// WithPairingHandler sets the email-OTP pairing handler for /pair command.
+func WithPairingHandler(ph *channels.PairingHandler) Option {
+	return func(c *Channel) { c.pairingHandler = ph }
 }
 
 // WithPendingMessageStore sets the pending message store for group history buffering.

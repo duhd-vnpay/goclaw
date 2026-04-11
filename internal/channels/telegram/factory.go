@@ -46,16 +46,18 @@ func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 }
 
 // FactoryWithStores returns a ChannelFactory that includes optional stores via functional options.
-func FactoryWithStores(agentStore store.AgentStore, configPermStore store.ConfigPermissionStore, teamStore store.TeamStore, subagentTaskStore store.SubagentTaskStore, pendingStore store.PendingMessageStore) channels.ChannelFactory {
+func FactoryWithStores(agentStore store.AgentStore, configPermStore store.ConfigPermissionStore, teamStore store.TeamStore, subagentTaskStore store.SubagentTaskStore, pendingStore store.PendingMessageStore, extraOpts ...Option) channels.ChannelFactory {
 	return func(name string, creds json.RawMessage, cfg json.RawMessage,
 		msgBus *bus.MessageBus, pairingSvc store.PairingStore) (channels.Channel, error) {
-		return buildChannel(name, creds, cfg, msgBus, pairingSvc,
+		opts := []Option{
 			WithAgentStore(agentStore),
 			WithConfigPermStore(configPermStore),
 			WithTeamStore(teamStore),
 			WithSubagentTaskStore(subagentTaskStore),
 			WithPendingMessageStore(pendingStore),
-		)
+		}
+		opts = append(opts, extraOpts...)
+		return buildChannel(name, creds, cfg, msgBus, pairingSvc, opts...)
 	}
 }
 

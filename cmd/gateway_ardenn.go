@@ -15,6 +15,12 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
+// Package-level Ardenn instances — set during gateway startup, read by ConsumerDeps.
+var (
+	pkgArdennEngine     *ardenn.Engine
+	pkgArdennCompletion *hands.CompletionRegistry
+)
+
 // initArdenn wires the Ardenn workflow engine from PG stores.
 // Returns nil, nil when Ardenn stores are not available (e.g., SQLite build).
 func initArdenn(stores *store.Stores, msgBus *bus.MessageBus) (*ardenn.Engine, *hands.CompletionRegistry) {

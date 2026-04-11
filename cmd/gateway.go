@@ -285,6 +285,13 @@ func runGateway() {
 		defer mcpPool.Stop()
 	}
 
+	// Initialize Ardenn workflow engine (nil-safe: skips when stores unavailable)
+	ardennEngine, ardennCompletion := initArdenn(pgStores, msgBus)
+	pkgArdennEngine = ardennEngine
+	pkgArdennCompletion = ardennCompletion
+	registerArdennTool(ardennEngine, pgStores, toolsReg)
+	RegisterArdennMethods(server.Router(), ardennEngine, pgStores)
+
 	// Populate shared deps struct used by extracted helper methods.
 	deps := &gatewayDeps{
 		cfg:              cfg,

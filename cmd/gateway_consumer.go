@@ -59,6 +59,8 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 		ContactCollector: contactCollector,
 		SubagentMgr:      subagentMgr,
 		GetAnnounceMu:    getAnnounceMu,
+		ArdennEngine:     pkgArdennEngine,
+		ArdennCompletion: pkgArdennCompletion,
 	}
 
 	// Track running teammate tasks so they can be cancelled when the task is

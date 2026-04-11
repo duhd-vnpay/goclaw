@@ -93,7 +93,10 @@ func (s *PGDefinitionStore) ListDomains(ctx context.Context, tenantID uuid.UUID)
 func (s *PGDefinitionStore) GetPublishedWorkflow(ctx context.Context, tenantID uuid.UUID, slug string) (*Workflow, error) {
 	var w Workflow
 	err := s.db.GetContext(ctx, &w,
-		`SELECT * FROM ardenn_workflows
+		`SELECT id, tenant_id, domain_id, slug, name, description, version, tier,
+		        trigger_config, variables, settings, visibility, status, created_by,
+		        published_at, created_at, updated_at
+		 FROM ardenn_workflows
 		 WHERE tenant_id = $1 AND slug = $2 AND status = 'published'
 		 ORDER BY version DESC LIMIT 1`, tenantID, slug)
 	if err != nil {

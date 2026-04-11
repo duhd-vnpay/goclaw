@@ -40,7 +40,8 @@ type Stores struct {
 	EvolutionSuggestions   EvolutionSuggestionStore
 
 	// Identity
-	OrgUsers OrgUserStore
+	OrgUsers              OrgUserStore
+	PairingVerifications  PairingVerificationStore
 
 	// Ardenn workflow engine stores
 	ArdennEvents      interface{} // ardenn.EventStore — uses interface{} to avoid import cycle

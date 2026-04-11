@@ -61,7 +61,8 @@ func NewPGStores(cfg store.StoreConfig) (*store.Stores, error) {
 		EvolutionSuggestions:  NewPGEvolutionSuggestionStore(db),
 
 		// Identity
-		OrgUsers: NewPGOrgUserStore(db),
+		OrgUsers:             NewPGOrgUserStore(db),
+		PairingVerifications: NewPGPairingVerificationStore(db),
 
 		// Ardenn workflow engine (requires *sqlx.DB, initialized via initSqlx above)
 		ArdennEvents:      pgardenn.NewPGEventStore(pkgSqlxDB),

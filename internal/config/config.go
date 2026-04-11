@@ -56,6 +56,7 @@ type Config struct {
 	Tailscale TailscaleConfig `json:"tailscale"`
 	Bindings  []AgentBinding  `json:"bindings,omitempty"`
 	Harness   harness.Config  `json:"harness"`
+	Keycloak  KeycloakConfig  `json:"keycloak"`
 	mu        sync.RWMutex
 }
 
@@ -67,6 +68,52 @@ type TailscaleConfig struct {
 	AuthKey   string `json:"-"`                    // from env GOCLAW_TSNET_AUTH_KEY only
 	Ephemeral bool   `json:"ephemeral,omitempty"`  // remove node on exit (default false)
 	EnableTLS bool   `json:"enable_tls,omitempty"` // use ListenTLS for auto HTTPS certs
+}
+
+// KeycloakConfig configures the Keycloak OIDC integration.
+// Client secret and realm URL are from env vars (never in config.json).
+type KeycloakConfig struct {
+	RealmURL     string `json:"-"`                               // from env GOCLAW_KEYCLOAK_REALM_URL (e.g. "https://auth.x.vnshop.cloud/realms/vnpay")
+	ClientID     string `json:"keycloak_client_id,omitempty"`     // OIDC client ID (default "goclaw-gateway")
+	ClientSecret string `json:"-"`                               // from env GOCLAW_KEYCLOAK_CLIENT_SECRET only
+	CallbackURL  string `json:"keycloak_callback_url,omitempty"` // redirect URI after login
+}
+
+// JWKSURL returns the JWKS endpoint derived from the realm URL.
+func (kc KeycloakConfig) JWKSURL() string {
+	if kc.RealmURL == "" {
+		return ""
+	}
+	return kc.RealmURL + "/protocol/openid-connect/certs"
+}
+
+// AuthorizationURL returns the authorization endpoint derived from the realm URL.
+func (kc KeycloakConfig) AuthorizationURL() string {
+	if kc.RealmURL == "" {
+		return ""
+	}
+	return kc.RealmURL + "/protocol/openid-connect/auth"
+}
+
+// TokenURL returns the token endpoint derived from the realm URL.
+func (kc KeycloakConfig) TokenURL() string {
+	if kc.RealmURL == "" {
+		return ""
+	}
+	return kc.RealmURL + "/protocol/openid-connect/token"
+}
+
+// LogoutURL returns the end-session endpoint derived from the realm URL.
+func (kc KeycloakConfig) LogoutURL() string {
+	if kc.RealmURL == "" {
+		return ""
+	}
+	return kc.RealmURL + "/protocol/openid-connect/logout"
+}
+
+// Enabled returns true if Keycloak is configured (realm URL + client secret set).
+func (kc KeycloakConfig) Enabled() bool {
+	return kc.RealmURL != "" && kc.ClientSecret != ""
 }
 
 // DatabaseConfig configures the database connection and optional Redis cache.
@@ -431,6 +478,7 @@ func (c *Config) ReplaceFrom(src *Config) {
 	c.Telemetry = src.Telemetry
 	c.Tailscale = src.Tailscale
 	c.Bindings = src.Bindings
+	c.Keycloak = src.Keycloak
 }
 
 // IdentityConfig defines agent persona / display identity.

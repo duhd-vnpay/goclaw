@@ -230,6 +230,14 @@ func (c *Config) applyEnvOverrides() {
 	envStr("GOCLAW_TSNET_AUTH_KEY", &c.Tailscale.AuthKey)
 	envStr("GOCLAW_TSNET_DIR", &c.Tailscale.StateDir)
 
+	// Keycloak OIDC (secrets from env only)
+	envStr("GOCLAW_KEYCLOAK_REALM_URL", &c.Keycloak.RealmURL)
+	envStr("GOCLAW_KEYCLOAK_CLIENT_SECRET", &c.Keycloak.ClientSecret)
+	envStr("GOCLAW_KEYCLOAK_CALLBACK_URL", &c.Keycloak.CallbackURL)
+	if c.Keycloak.ClientID == "" {
+		c.Keycloak.ClientID = "goclaw-gateway"
+	}
+
 	// Sandbox (for Docker-compose sandbox overlay)
 	ensureSandbox := func() {
 		if c.Agents.Defaults.Sandbox == nil {

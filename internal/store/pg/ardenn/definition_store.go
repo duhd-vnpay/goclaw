@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	engine "github.com/nextlevelbuilder/goclaw/internal/ardenn"
 
@@ -28,6 +29,8 @@ type Domain struct {
 	DepartmentID *uuid.UUID      `db:"department_id"`
 	DefaultTier  string          `db:"default_tier"`
 	Settings     json.RawMessage `db:"settings"`
+	CreatedAt    time.Time       `db:"created_at"`
+	UpdatedAt    time.Time       `db:"updated_at"`
 }
 
 type Workflow struct {
@@ -45,6 +48,9 @@ type Workflow struct {
 	Visibility    string          `db:"visibility"`
 	Status        string          `db:"status"`
 	CreatedBy     *uuid.UUID      `db:"created_by"`
+	PublishedAt   *time.Time      `db:"published_at"`
+	CreatedAt     time.Time       `db:"created_at"`
+	UpdatedAt     time.Time       `db:"updated_at"`
 }
 
 type Step struct {

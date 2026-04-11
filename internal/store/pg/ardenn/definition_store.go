@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 )
 
 type PGDefinitionStore struct {
@@ -62,7 +63,7 @@ type Step struct {
 	Position       int             `db:"position"`
 	AgentKey       *string         `db:"agent_key"`
 	TaskTemplate   *string         `db:"task_template"`
-	DependsOn      []uuid.UUID     `db:"depends_on"`
+	DependsOn      pq.StringArray  `db:"depends_on"`
 	Condition      *string         `db:"condition"`
 	Timeout        string          `db:"timeout"`
 	Constraints    json.RawMessage `db:"constraints"`
@@ -282,7 +283,10 @@ func (s *PGDefinitionStore) PublishWorkflow(ctx context.Context, id uuid.UUID) (
 	var w Workflow
 	err := s.db.GetContext(ctx, &w,
 		`UPDATE ardenn_workflows SET status = 'published', published_at = NOW(), updated_at = NOW()
-		 WHERE id = $1 RETURNING *`, id)
+		 WHERE id = $1
+		 RETURNING id, tenant_id, domain_id, slug, name, description, version, tier,
+		           trigger_config, variables, settings, visibility, status, created_by,
+		           published_at, created_at, updated_at`, id)
 	if err != nil {
 		return nil, fmt.Errorf("publish workflow: %w", err)
 	}
@@ -322,7 +326,7 @@ func (s *PGDefinitionStore) CreateStep(ctx context.Context, p CreateStepParams) 
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::interval, $11, $12, $13, $14, $15, $16)`,
 		p.WorkflowID, p.Slug, p.Name, p.Description, p.Position,
 		nilStr(p.AgentKey), nilStr(p.TaskTemplate),
-		p.DependsOn, nilStr(p.Condition), p.Timeout,
+		pq.Array(p.DependsOn), nilStr(p.Condition), p.Timeout,
 		nilStr(p.DispatchTo), nilStr(p.DispatchTarget),
 		p.Gate, p.Constraints, p.Continuity, p.Evaluation)
 	return err
@@ -340,6 +344,20 @@ func nilStr(s string) *string {
 	return &s
 }
 
+// parseUUIDs converts pq.StringArray (from PostgreSQL UUID[]) to []uuid.UUID.
+func parseUUIDs(sa pq.StringArray) []uuid.UUID {
+	if len(sa) == 0 {
+		return nil
+	}
+	out := make([]uuid.UUID, 0, len(sa))
+	for _, s := range sa {
+		if id, err := uuid.Parse(s); err == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func ToStepDefs(steps []Step) map[uuid.UUID]*engine.StepDef {
 	defs := make(map[uuid.UUID]*engine.StepDef, len(steps))
 	for _, s := range steps {
@@ -349,7 +367,7 @@ func ToStepDefs(steps []Step) map[uuid.UUID]*engine.StepDef {
 			Slug:       s.Slug,
 			Name:       s.Name,
 			Position:   s.Position,
-			DependsOn:  s.DependsOn,
+			DependsOn:  parseUUIDs(s.DependsOn),
 			Timeout:    s.Timeout,
 		}
 		if s.AgentKey != nil {

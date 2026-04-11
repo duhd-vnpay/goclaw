@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/nextlevelbuilder/goclaw/internal/auth"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	httpapi "github.com/nextlevelbuilder/goclaw/internal/http"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
@@ -146,6 +147,23 @@ func (d *gatewayDeps) wireHTTPHandlersOnServer(
 	// Allow browser-paired users to access HTTP APIs
 	if d.pgStores.Pairing != nil {
 		httpapi.InitPairingAuth(d.pgStores.Pairing)
+	}
+
+	// Keycloak OIDC auth handler
+	if d.cfg.Keycloak.Enabled() && d.pgStores.OrgUsers != nil {
+		jwtValidator := auth.NewJWTValidator(auth.JWTValidatorConfig{
+			JWKSURL:  d.cfg.Keycloak.JWKSURL(),
+			Issuer:   d.cfg.Keycloak.RealmURL,
+			Audience: d.cfg.Keycloak.ClientID,
+		})
+		authHandler := httpapi.NewAuthOIDCHandler(
+			d.cfg.Keycloak,
+			jwtValidator,
+			d.pgStores.OrgUsers,
+			d.pgStores.Tenants,
+		)
+		d.server.SetAuthOIDCHandler(authHandler)
+		slog.Info("identity: Keycloak OIDC auth handler enabled", "realm", d.cfg.Keycloak.RealmURL)
 	}
 
 	// Memory management API

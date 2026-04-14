@@ -51,6 +51,14 @@ func (o *Orchestrator) ProcessRunWithState(ctx context.Context, runID uuid.UUID,
 		return fmt.Errorf("no step definitions registered for run %s", runID)
 	}
 
+	// DependsOn is not persisted in events — inject from step defs so
+	// GetReadySteps() respects dependencies after any Rebuild (e.g. Wake, recovery).
+	for stepID, def := range defs {
+		if sr, ok := state.StepRuns[stepID]; ok {
+			sr.DependsOn = def.DependsOn
+		}
+	}
+
 	for !state.IsTerminal() {
 		readySteps := state.GetReadySteps()
 		if len(readySteps) == 0 {

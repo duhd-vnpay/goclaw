@@ -368,6 +368,14 @@ func (h *AgentsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	allowed := filterAllowedKeys(updates, agentAllowedFields)
 	allowed["restrict_to_workspace"] = true
 
+	// Strip NOT NULL columns sent as null — keeps DB default instead of violating constraint.
+	// UI may omit these fields (emoji, etc.) and JSON decode produces nil.
+	for _, col := range []string{"emoji"} {
+		if v, ok := allowed[col]; ok && v == nil {
+			delete(allowed, col)
+		}
+	}
+
 	// Validate v3 flag values in other_config (must be boolean).
 	if oc, ok := allowed["other_config"]; ok && oc != nil {
 		switch v := oc.(type) {

@@ -201,6 +201,12 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (uuid.UUID, 
 	return runID, nil
 }
 
+// RegisterStepDefs associates step definitions with a run.
+// Called during startup recovery to restore in-memory defs lost on pod restart.
+func (e *Engine) RegisterStepDefs(runID uuid.UUID, defs map[uuid.UUID]*StepDef) {
+	e.orchestrator.RegisterStepDefs(runID, defs)
+}
+
 // Wake resumes processing of a run after an external event.
 func (e *Engine) Wake(ctx context.Context, runID uuid.UUID) error {
 	return e.orchestrator.Wake(ctx, runID)

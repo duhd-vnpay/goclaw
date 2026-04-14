@@ -109,3 +109,56 @@ func (s *PGEventStore) GetLastSequence(ctx context.Context, runID uuid.UUID) (in
 	).Scan(&seq)
 	return seq, err
 }
+
+// InFlightRun is a lightweight summary of a run that needs startup recovery.
+type InFlightRun struct {
+	RunID      uuid.UUID
+	WorkflowID uuid.UUID
+	TenantID   uuid.UUID
+}
+
+// GetInFlightRuns returns runs that have been started but not yet reached a
+// terminal state (completed/failed/cancelled). Used for startup recovery to
+// re-register step defs and wake parked runs after a pod restart.
+//
+// Uses the event log as source of truth: a run is in-flight if the latest
+// run.* event for it is not terminal. The workflow_id is extracted from the
+// run.created event payload.
+func (s *PGEventStore) GetInFlightRuns(ctx context.Context) ([]InFlightRun, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		WITH run_states AS (
+			SELECT
+				run_id,
+				tenant_id,
+				MAX(CASE WHEN event_type = 'run.created' THEN payload->>'workflow_id' END) as workflow_id,
+				MAX(CASE WHEN event_type LIKE 'run.%' THEN event_type END) as last_run_event
+			FROM ardenn_events
+			GROUP BY run_id, tenant_id
+		)
+		SELECT run_id, tenant_id, workflow_id
+		FROM run_states
+		WHERE last_run_event NOT IN ('run.completed', 'run.failed', 'run.cancelled')
+		  AND workflow_id IS NOT NULL
+		ORDER BY run_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query in-flight runs: %w", err)
+	}
+	defer rows.Close()
+
+	var result []InFlightRun
+	for rows.Next() {
+		var r InFlightRun
+		var workflowIDStr string
+		if err := rows.Scan(&r.RunID, &r.TenantID, &workflowIDStr); err != nil {
+			return nil, fmt.Errorf("scan in-flight run: %w", err)
+		}
+		wid, err := uuid.Parse(workflowIDStr)
+		if err != nil {
+			continue // skip malformed
+		}
+		r.WorkflowID = wid
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}

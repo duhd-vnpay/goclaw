@@ -86,7 +86,51 @@ func initArdenn(stores *store.Stores, msgBus *bus.MessageBus, resolver *pg.PGPro
 		"profile_resolver", resolver != nil,
 	)
 
+	// Startup recovery: wake any runs that were in-flight when the pod last restarted.
+	// Runs without registered step defs (lost on restart) are re-loaded from DB.
+	if defStore, ok := stores.ArdennDefinitions.(*pgardenn.PGDefinitionStore); ok {
+		go recoverInFlightRuns(eventStore, defStore, engine)
+	}
+
 	return engine, completion
+}
+
+// recoverInFlightRuns scans for runs that didn't reach a terminal state before
+// the last pod restart, reloads their step definitions, and calls Wake to resume.
+// Called once at startup in a goroutine — errors are logged but not fatal.
+func recoverInFlightRuns(
+	eventStore *pgardenn.PGEventStore,
+	defStore *pgardenn.PGDefinitionStore,
+	engine *ardenn.Engine,
+) {
+	ctx := context.Background()
+	runs, err := eventStore.GetInFlightRuns(ctx)
+	if err != nil {
+		slog.Warn("ardenn: startup recovery query failed", "error", err)
+		return
+	}
+	if len(runs) == 0 {
+		slog.Debug("ardenn: no in-flight runs to recover")
+		return
+	}
+
+	slog.Info("ardenn: recovering in-flight runs", "count", len(runs))
+	for _, r := range runs {
+		steps, err := defStore.GetSteps(ctx, r.WorkflowID)
+		if err != nil {
+			slog.Warn("ardenn: recovery failed to load steps",
+				"run_id", r.RunID, "workflow_id", r.WorkflowID, "error", err)
+			continue
+		}
+		defs := pgardenn.ToStepDefs(steps)
+		engine.RegisterStepDefs(r.RunID, defs)
+		if err := engine.Wake(ctx, r.RunID); err != nil {
+			slog.Warn("ardenn: recovery wake failed",
+				"run_id", r.RunID, "error", err)
+		} else {
+			slog.Info("ardenn: recovered run", "run_id", r.RunID)
+		}
+	}
 }
 
 // registerArdennTool registers the ardenn_workflow tool in the tool registry.

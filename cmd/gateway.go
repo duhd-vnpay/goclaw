@@ -287,8 +287,11 @@ func runGateway() {
 	}
 
 	// Initialize user profile resolver for system prompt identity injection.
+	// Keep concrete type for Ardenn adapter (ardennProfileResolverAdapter wraps it).
+	var pgProfileResolver *pg.PGProfileResolver
 	if pgStores.DB != nil {
-		pkgProfileResolver = pg.NewPGProfileResolver(pgStores.DB)
+		pgProfileResolver = pg.NewPGProfileResolver(pgStores.DB)
+		pkgProfileResolver = pgProfileResolver
 	}
 
 	// Initialize project store for project-as-a-channel.
@@ -297,7 +300,7 @@ func runGateway() {
 	}
 
 	// Initialize Ardenn workflow engine (nil-safe: skips when stores unavailable)
-	ardennEngine, ardennCompletion := initArdenn(pgStores, msgBus)
+	ardennEngine, ardennCompletion := initArdenn(pgStores, msgBus, pgProfileResolver)
 	pkgArdennEngine = ardennEngine
 	pkgArdennCompletion = ardennCompletion
 	registerArdennTool(ardennEngine, pgStores, toolsReg)

@@ -232,7 +232,24 @@ func (e *Engine) GateDecide(ctx context.Context, runID, stepID uuid.UUID, approv
 	if actorID != nil {
 		payload["decided_by"] = actorID.String()
 	}
-	_, err := e.events.Emit(ctx, Event{
+
+	// Fetch the run's TenantID from the existing run.created event.
+	// Required because ardenn_events has a FK constraint on tenant_id.
+	var tenantID uuid.UUID
+	runEvents, err := e.events.GetEvents(ctx, EventQuery{
+		RunID:     runID,
+		EventType: EventRunCreated,
+		Limit:     1,
+	})
+	if err != nil {
+		return fmt.Errorf("fetch run tenant: %w", err)
+	}
+	if len(runEvents) > 0 {
+		tenantID = runEvents[0].TenantID
+	}
+
+	_, err = e.events.Emit(ctx, Event{
+		TenantID:  tenantID,
 		RunID:     runID,
 		StepID:    &stepID,
 		Type:      eventType,

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "@/stores/use-auth-store";
@@ -16,6 +16,7 @@ export function LoginPage() {
 
   const setCredentials = useAuthStore((s) => s.setCredentials);
   const setPairing = useAuthStore((s) => s.setPairing);
+  const token = useAuthStore((s) => s.token);
   const { oidcEnabled, loginWithOidc } = useOidcAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -23,6 +24,14 @@ export function LoginPage() {
   const from =
     (location.state as { from?: { pathname: string } })?.from?.pathname ??
     ROUTES.OVERVIEW;
+
+  // Auto-redirect when OIDC is enabled and user is not already authenticated.
+  // oidcEnabled is fetched async; only redirect once it confirms true.
+  useEffect(() => {
+    if (oidcEnabled && !token) {
+      loginWithOidc(from);
+    }
+  }, [oidcEnabled, token, loginWithOidc, from]);
 
   function handleTokenLogin(userId: string, token: string) {
     setCredentials(token, userId);

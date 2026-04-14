@@ -14,13 +14,17 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   const location = useLocation();
 
   // Not authenticated
-  if ((!token && !senderID) || !userId) {
+  // In OIDC mode, the JWT token alone is the credential — userId is populated async from /me.
+  // In token mode, both token (or senderID) and userId are required.
+  const notAuthenticated = oidcEnabled ? !token : (!token && !senderID) || !userId;
+  if (notAuthenticated) {
     if (oidcEnabled) {
-      // Redirect to Keycloak login with return URL
-      const returnUrl = encodeURIComponent(
-        window.location.origin + location.pathname,
+      // Redirect to Keycloak, setting /auth/callback as the post-login destination
+      // so AuthCallbackPage can extract the token from the URL fragment.
+      const callbackUrl = encodeURIComponent(
+        window.location.origin + ROUTES.AUTH_CALLBACK,
       );
-      window.location.href = `/v1/auth/login?redirect=${returnUrl}`;
+      window.location.href = `/v1/auth/login?redirect=${callbackUrl}`;
       return null;
     }
     // Fallback to local login page

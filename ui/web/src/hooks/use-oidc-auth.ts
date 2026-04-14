@@ -65,12 +65,14 @@ export function useOidcAuth() {
             realm_roles: data.realm_roles,
             groups: data.groups,
           });
+          // Populate userId from OIDC identity so RequireAuth's userId check passes.
+          setCredentials(token, data.id);
         }
       })
       .catch(() => {
         // /me failed -- token might be invalid
       });
-  }, [token, oidcUser, setOidcUser]);
+  }, [token, oidcUser, setOidcUser, setCredentials]);
 
   const loginWithOidc = useCallback(
     (redirectPath?: string) => {

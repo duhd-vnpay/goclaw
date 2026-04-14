@@ -58,7 +58,9 @@ func (s *RunState) Apply(e Event) {
 		s.TenantID = e.TenantID
 		s.Status = "pending"
 		if wfID, ok := e.Payload["workflow_id"].(string); ok {
-			s.WorkflowID = uuid.MustParse(wfID)
+			if id, err := uuid.Parse(wfID); err == nil {
+				s.WorkflowID = id
+			}
 		}
 		if tierStr, ok := e.Payload["tier"].(string); ok {
 			s.Tier, _ = ParseTier(tierStr)
@@ -137,8 +139,9 @@ func (s *RunState) Apply(e Event) {
 	case EventGateApproved:
 		sr.GateStatus = "approved"
 		if by, ok := e.Payload["decided_by"].(string); ok {
-			id := uuid.MustParse(by)
-			sr.GateDecidedBy = &id
+			if id, err := uuid.Parse(by); err == nil {
+				sr.GateDecidedBy = &id
+			}
 		}
 	case EventGateRejected:
 		sr.GateStatus = "rejected"

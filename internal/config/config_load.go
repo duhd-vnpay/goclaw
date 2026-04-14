@@ -232,6 +232,7 @@ func (c *Config) applyEnvOverrides() {
 
 	// Keycloak OIDC (secrets from env only)
 	envStr("GOCLAW_KEYCLOAK_REALM_URL", &c.Keycloak.RealmURL)
+	envStr("GOCLAW_KEYCLOAK_INTERNAL_URL", &c.Keycloak.InternalURL)
 	envStr("GOCLAW_KEYCLOAK_CLIENT_SECRET", &c.Keycloak.ClientSecret)
 	envStr("GOCLAW_KEYCLOAK_CALLBACK_URL", &c.Keycloak.CallbackURL)
 	if c.Keycloak.ClientID == "" {

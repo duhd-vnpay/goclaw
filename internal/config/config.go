@@ -74,17 +74,28 @@ type TailscaleConfig struct {
 // Client secret and realm URL are from env vars (never in config.json).
 type KeycloakConfig struct {
 	RealmURL     string `json:"-"`                               // from env GOCLAW_KEYCLOAK_REALM_URL (e.g. "https://auth.x.vnshop.cloud/realms/vnpay")
+	InternalURL  string `json:"-"`                               // from env GOCLAW_KEYCLOAK_INTERNAL_URL; base for backend JWKS/Token fetches. Falls back to RealmURL if empty. Used when public URL is behind a proxy unreachable from backend (e.g. Teleport)
 	ClientID     string `json:"keycloak_client_id,omitempty"`     // OIDC client ID (default "goclaw-gateway")
 	ClientSecret string `json:"-"`                               // from env GOCLAW_KEYCLOAK_CLIENT_SECRET only
 	CallbackURL  string `json:"keycloak_callback_url,omitempty"` // redirect URI after login
 }
 
-// JWKSURL returns the JWKS endpoint derived from the realm URL.
+// internalBase returns the base URL for backend-to-backend calls (JWKS, token exchange).
+// Falls back to RealmURL when InternalURL is not set.
+func (kc KeycloakConfig) internalBase() string {
+	if kc.InternalURL != "" {
+		return kc.InternalURL
+	}
+	return kc.RealmURL
+}
+
+// JWKSURL returns the JWKS endpoint. Uses InternalURL base when set so pods
+// can fetch signing keys directly via cluster DNS instead of public proxy.
 func (kc KeycloakConfig) JWKSURL() string {
 	if kc.RealmURL == "" {
 		return ""
 	}
-	return kc.RealmURL + "/protocol/openid-connect/certs"
+	return kc.internalBase() + "/protocol/openid-connect/certs"
 }
 
 // AuthorizationURL returns the authorization endpoint derived from the realm URL.
@@ -95,12 +106,13 @@ func (kc KeycloakConfig) AuthorizationURL() string {
 	return kc.RealmURL + "/protocol/openid-connect/auth"
 }
 
-// TokenURL returns the token endpoint derived from the realm URL.
+// TokenURL returns the token endpoint. Uses InternalURL base when set since
+// code exchange is a backend-to-backend call that bypasses browser proxies.
 func (kc KeycloakConfig) TokenURL() string {
 	if kc.RealmURL == "" {
 		return ""
 	}
-	return kc.RealmURL + "/protocol/openid-connect/token"
+	return kc.internalBase() + "/protocol/openid-connect/token"
 }
 
 // LogoutURL returns the end-session endpoint derived from the realm URL.

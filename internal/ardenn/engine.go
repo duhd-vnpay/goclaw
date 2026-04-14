@@ -260,6 +260,22 @@ func (e *Engine) GateDecide(ctx context.Context, runID, stepID uuid.UUID, approv
 	if err != nil {
 		return fmt.Errorf("emit gate decision: %w", err)
 	}
+
+	// On approval: emit step.completed so that after Rebuild(), the step's
+	// status is "completed" and downstream dependents are unlocked.
+	// Without this, gate.approved leaves status="waiting_gate" and the
+	// orchestrator parks again (no ready steps, not all done).
+	if approved {
+		e.events.Emit(ctx, Event{
+			TenantID:  tenantID,
+			RunID:     runID,
+			StepID:    &stepID,
+			Type:      EventStepCompleted,
+			ActorType: ActorEngine,
+			Payload:   map[string]any{},
+		})
+	}
+
 	return e.Wake(ctx, runID)
 }
 

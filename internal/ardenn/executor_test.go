@@ -286,6 +286,134 @@ func TestExecutor_FullTier_WithEval(t *testing.T) {
 	}
 }
 
+// captureCCGuard records the ConstraintContext it sees so tests can assert
+// the executor wires fields (UserID, UserPermissions) through correctly.
+type captureCCGuard struct {
+	name string
+	seen *ConstraintContext
+}
+
+func (g *captureCCGuard) Name() string { return g.name }
+func (g *captureCCGuard) Check(_ context.Context, cc ConstraintContext) GuardResult {
+	cc2 := cc
+	g.seen = &cc2
+	return GuardResult{Name: g.name, Pass: true, Severity: "block"}
+}
+
+// TestExecutor_PassesUserPermissionsToConstraints verifies that when a run
+// has UserPermissions set (resolved by Engine.StartRun from Identity), the
+// StepExecutor forwards them into the ConstraintContext alongside UserID.
+func TestExecutor_PassesUserPermissionsToConstraints(t *testing.T) {
+	events := &mockEventStore{}
+	hands := NewHandRegistry()
+	hands.Register(&mockHand{handType: HandAgent, output: "done"})
+
+	capture := &captureCCGuard{name: "capture"}
+	constraints := NewConstraintEngine(events, capture)
+
+	exec := &StepExecutor{
+		events: events, hands: hands, gates: NewGateKeeper(events),
+		constraints: constraints,
+	}
+
+	triggerUser := uuid.New()
+	stepID := uuid.New()
+	run := &RunState{
+		ID: uuid.New(), TenantID: uuid.New(), Tier: TierFull, Status: "running",
+		TriggeredBy:     &triggerUser,
+		UserPermissions: map[string]bool{"can_deploy": true, "can_approve": false},
+		Variables:       map[string]any{},
+		StepRuns: map[uuid.UUID]*StepRunState{
+			stepID: {ID: uuid.New(), StepID: stepID, Status: "pending", Metadata: map[string]any{}},
+		},
+	}
+	step := &StepDef{ID: stepID, AgentKey: "test", TaskTemplate: "t", DispatchTo: "agent"}
+
+	if err := exec.Execute(context.Background(), run, step); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if capture.seen == nil {
+		t.Fatal("guard never invoked")
+	}
+	if capture.seen.UserID == nil || *capture.seen.UserID != triggerUser {
+		t.Errorf("UserID = %v, want %v", capture.seen.UserID, triggerUser)
+	}
+	if capture.seen.UserPermissions == nil {
+		t.Fatal("UserPermissions not propagated to ConstraintContext")
+	}
+	if !capture.seen.UserPermissions["can_deploy"] {
+		t.Error("expected can_deploy=true in propagated permissions")
+	}
+	if capture.seen.UserPermissions["can_approve"] {
+		t.Error("expected can_approve=false in propagated permissions")
+	}
+}
+
+// fakeProfileResolver is a test double for ardenn.ProfileResolver that
+// records workload increments per user.
+type fakeProfileResolver struct {
+	increments map[uuid.UUID]int
+	decrements map[uuid.UUID]int
+	profile    *ResolvedUserProfile
+}
+
+func newFakeProfileResolver() *fakeProfileResolver {
+	return &fakeProfileResolver{
+		increments: map[uuid.UUID]int{},
+		decrements: map[uuid.UUID]int{},
+	}
+}
+
+func (f *fakeProfileResolver) ResolveByUserID(_ context.Context, _ uuid.UUID) (*ResolvedUserProfile, error) {
+	return f.profile, nil
+}
+func (f *fakeProfileResolver) IncrementWorkload(_ context.Context, userID uuid.UUID) error {
+	f.increments[userID]++
+	return nil
+}
+func (f *fakeProfileResolver) DecrementWorkload(_ context.Context, userID uuid.UUID) error {
+	f.decrements[userID]++
+	return nil
+}
+
+// TestExecutor_IncrementsWorkloadOnUserDispatch verifies that dispatching to
+// a UserHand bumps the assignee's workload counter via the ProfileResolver.
+func TestExecutor_IncrementsWorkloadOnUserDispatch(t *testing.T) {
+	events := &mockEventStore{}
+	hands := NewHandRegistry()
+	hands.Register(&mockHand{handType: HandUser, output: "done"})
+
+	resolver := newFakeProfileResolver()
+	exec := &StepExecutor{
+		events: events, hands: hands, gates: NewGateKeeper(events),
+		profileResolver: resolver,
+	}
+
+	assignee := uuid.New()
+	stepID := uuid.New()
+	run := &RunState{
+		ID: uuid.New(), TenantID: uuid.New(), Tier: TierLight, Status: "running",
+		Variables: map[string]any{},
+		StepRuns: map[uuid.UUID]*StepRunState{
+			stepID: {
+				ID: uuid.New(), StepID: stepID, Status: "pending",
+				AssignedUser: &assignee,
+				Metadata:     map[string]any{},
+			},
+		},
+	}
+	step := &StepDef{ID: stepID, AgentKey: "test", TaskTemplate: "t", DispatchTo: "user"}
+
+	if err := exec.Execute(context.Background(), run, step); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if got := resolver.increments[assignee]; got != 1 {
+		t.Errorf("increments[%v] = %d, want 1", assignee, got)
+	}
+}
+
 func TestExecutor_LightTier_SkipsConstraintsAndEval(t *testing.T) {
 	events := &mockEventStore{}
 	hands := NewHandRegistry()

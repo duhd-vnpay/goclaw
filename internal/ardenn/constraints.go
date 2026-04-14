@@ -17,6 +17,11 @@ type ConstraintContext struct {
 	Input     string
 	Variables map[string]any
 	Metadata  map[string]any
+	// UserPermissions, when non-nil, lets guards check permissions inline
+	// without an external lookup. Populated by the engine from UserProfile
+	// resolved at run start. If nil, guards fall back to their own
+	// PermissionChecker (legacy / standalone path).
+	UserPermissions map[string]bool
 }
 
 // GuardResult is the outcome of a single guard check.

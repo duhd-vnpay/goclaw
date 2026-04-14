@@ -41,6 +41,20 @@ type ProfileResolver interface {
 	// Returns nil, err only on actual DB errors (graceful degradation: callers treat as anonymous).
 	ResolveFromPairedDevice(ctx context.Context, senderID, channelType string) (*UserProfile, error)
 
+	// ResolveByUserID looks up a UserProfile by org_users.id directly.
+	// Used by Ardenn engine when a workflow run is triggered by a known user
+	// (no channel hop required). Returns nil, nil if the user does not exist.
+	ResolveByUserID(ctx context.Context, userID uuid.UUID) (*UserProfile, error)
+
+	// IncrementWorkload bumps the user's active_step_runs counter inside
+	// org_users.profile JSONB. Called by Ardenn StepExecutor when dispatching
+	// a step to a UserHand. Best-effort: errors should be logged, not fatal.
+	IncrementWorkload(ctx context.Context, userID uuid.UUID) error
+
+	// DecrementWorkload reverses IncrementWorkload. Called when a user step
+	// completes, fails, or is cancelled. Best-effort.
+	DecrementWorkload(ctx context.Context, userID uuid.UUID) error
+
 	// InvalidateCache removes a cached profile for the given sender key.
 	// Called when pairing status changes (pair/unpair).
 	InvalidateCache(senderID, channelType string)

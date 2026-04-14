@@ -7,13 +7,14 @@ import (
 
 // StepExecutor handles dispatch, hand invocation, and gate checks for a single step.
 type StepExecutor struct {
-	events         EventStore
-	hands          *HandRegistry
-	gates          *GateKeeper
-	constraints    *ConstraintEngine
-	evalPipeline   *ArdennEvalPipeline
-	contextBuilder *ContextBuilder
-	checkpointer   *Checkpointer
+	events          EventStore
+	hands           *HandRegistry
+	gates           *GateKeeper
+	constraints     *ConstraintEngine
+	evalPipeline    *ArdennEvalPipeline
+	contextBuilder  *ContextBuilder
+	checkpointer    *Checkpointer
+	profileResolver ProfileResolver
 }
 
 // Execute runs a single step within a workflow run, respecting tier-aware layers.
@@ -26,12 +27,14 @@ func (se *StepExecutor) Execute(ctx context.Context, run *RunState, step *StepDe
 	// L1: Constraint check (standard + full tiers)
 	if run.Tier.Has(LayerConstraints) && se.constraints != nil {
 		cc := ConstraintContext{
-			TenantID:  run.TenantID,
-			RunID:     run.ID,
-			StepID:    step.ID,
-			AgentKey:  step.AgentKey,
-			Variables: run.Variables,
-			Metadata:  stepRun.Metadata,
+			TenantID:        run.TenantID,
+			RunID:           run.ID,
+			StepID:          step.ID,
+			AgentKey:        step.AgentKey,
+			UserID:          run.TriggeredBy,
+			Variables:       run.Variables,
+			Metadata:        stepRun.Metadata,
+			UserPermissions: run.UserPermissions,
 		}
 		cr := se.constraints.Check(ctx, cc)
 		if cr.Blocked {
@@ -62,6 +65,15 @@ func (se *StepExecutor) Execute(ctx context.Context, run *RunState, step *StepDe
 		"hand_target":    target,
 		"dispatch_count": stepRun.DispatchCount + 1,
 	})
+
+	// Workload tracking: bump active_step_runs when dispatching to a human.
+	// Best-effort — failures are logged inside the resolver.
+	if handType == HandUser && se.profileResolver != nil && stepRun.AssignedUser != nil {
+		if err := se.profileResolver.IncrementWorkload(ctx, *stepRun.AssignedUser); err != nil {
+			// Non-fatal; resolver should log details. Continue dispatch.
+			_ = err
+		}
+	}
 
 	// L2: Build step context via event slicing (full tier only)
 	var stepContext []Event

@@ -86,6 +86,135 @@ func (r *PGProfileResolver) InvalidateCache(senderID, channelType string) {
 	r.mu.Unlock()
 }
 
+// ResolveByUserID resolves a UserProfile directly by org_users.id.
+// Used by Ardenn engine for run-trigger resolution (no channel hop).
+// Bypasses the paired-device cache; resolution itself is uncached for now
+// since it's only called once per workflow run.
+func (r *PGProfileResolver) ResolveByUserID(ctx context.Context, userID uuid.UUID) (*store.UserProfile, error) {
+	tid := store.TenantIDFromContext(ctx)
+	if tid == uuid.Nil {
+		tid = store.MasterTenantID
+	}
+
+	var profile store.UserProfile
+	var displayName, profileJSON sql.NullString
+	var tenantRole sql.NullString
+
+	err := r.db.QueryRowContext(ctx, `
+		SELECT ou.id, ou.email, ou.display_name, ou.profile,
+		       tu.role
+		FROM org_users ou
+		LEFT JOIN tenant_users tu ON tu.keycloak_id = ou.id AND tu.tenant_id = ou.tenant_id
+		WHERE ou.id = $1 AND ou.tenant_id = $2
+	`, userID, tid).Scan(
+		&profile.ID, &profile.Email, &displayName, &profileJSON,
+		&tenantRole,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if displayName.Valid {
+		profile.DisplayName = displayName.String
+	}
+	if tenantRole.Valid {
+		profile.TenantRole = tenantRole.String
+	}
+	if profileJSON.Valid && profileJSON.String != "" {
+		r.parseProfileJSON(profileJSON.String, &profile)
+	}
+
+	// Department memberships (best-effort).
+	deptRows, err := r.db.QueryContext(ctx, `
+		SELECT d.name, dm.role, COALESCE(dm.title, '')
+		FROM department_members dm
+		JOIN departments d ON d.id = dm.department_id
+		WHERE dm.user_id = $1
+		ORDER BY dm.created_at
+	`, profile.ID)
+	if err != nil {
+		slog.Warn("user_profile: failed to fetch departments",
+			"user_id", profile.ID, "error", err)
+	} else {
+		defer deptRows.Close()
+		for deptRows.Next() {
+			var dm store.DepartmentMembership
+			if err := deptRows.Scan(&dm.DepartmentName, &dm.Role, &dm.Title); err != nil {
+				slog.Warn("user_profile: scan department row failed", "error", err)
+				continue
+			}
+			profile.Departments = append(profile.Departments, dm)
+		}
+	}
+
+	return &profile, nil
+}
+
+// IncrementWorkload bumps profile.workload.active_step_runs for a user.
+// Idempotent on missing keys: jsonb_set with create_missing=true seeds the
+// path. Best-effort: returns DB errors but callers should log + continue.
+func (r *PGProfileResolver) IncrementWorkload(ctx context.Context, userID uuid.UUID) error {
+	tid := store.TenantIDFromContext(ctx)
+	if tid == uuid.Nil {
+		tid = store.MasterTenantID
+	}
+
+	// Read-modify-write inside a single statement using jsonb_set.
+	// Coalesce missing path to 0 before incrementing.
+	const q = `
+		UPDATE org_users
+		SET profile = jsonb_set(
+			COALESCE(profile, '{}'::jsonb),
+			'{workload,active_step_runs}',
+			to_jsonb(
+				COALESCE(
+					(profile->'workload'->>'active_step_runs')::int,
+					0
+				) + 1
+			),
+			true
+		),
+		updated_at = NOW()
+		WHERE id = $1 AND tenant_id = $2
+	`
+	_, err := r.db.ExecContext(ctx, q, userID, tid)
+	return err
+}
+
+// DecrementWorkload reverses IncrementWorkload. Floors at 0 to avoid going
+// negative on double-completion or out-of-order events. Best-effort.
+func (r *PGProfileResolver) DecrementWorkload(ctx context.Context, userID uuid.UUID) error {
+	tid := store.TenantIDFromContext(ctx)
+	if tid == uuid.Nil {
+		tid = store.MasterTenantID
+	}
+
+	const q = `
+		UPDATE org_users
+		SET profile = jsonb_set(
+			COALESCE(profile, '{}'::jsonb),
+			'{workload,active_step_runs}',
+			to_jsonb(
+				GREATEST(
+					COALESCE(
+						(profile->'workload'->>'active_step_runs')::int,
+						0
+					) - 1,
+					0
+				)
+			),
+			true
+		),
+		updated_at = NOW()
+		WHERE id = $1 AND tenant_id = $2
+	`
+	_, err := r.db.ExecContext(ctx, q, userID, tid)
+	return err
+}
+
 // resolveFromDB performs the full resolution:
 // 1. Look up verified_user_id from paired_devices
 // 2. Fetch org_users row

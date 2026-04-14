@@ -20,6 +20,12 @@ type RunState struct {
 	LastSequence int64
 	StartedAt    *time.Time
 	CompletedAt  *time.Time
+	// UserPermissions is the resolved permission map of the triggering user
+	// (from Identity UserProfile). Populated by Engine.StartRun when a
+	// ProfileResolver is wired. Not persisted in events — re-resolved on
+	// rebuild via the same resolver, or left nil for guards to fall back to
+	// their own checker.
+	UserPermissions map[string]bool
 }
 
 // StepRunState is the in-memory projection of a single step within a run.
@@ -59,6 +65,11 @@ func (s *RunState) Apply(e Event) {
 		}
 		if vars, ok := e.Payload["variables"].(map[string]any); ok {
 			s.Variables = vars
+		}
+		if tb, ok := e.Payload["triggered_by"].(string); ok && tb != "" {
+			if id, err := uuid.Parse(tb); err == nil {
+				s.TriggeredBy = &id
+			}
 		}
 		if s.StepRuns == nil {
 			s.StepRuns = map[uuid.UUID]*StepRunState{}

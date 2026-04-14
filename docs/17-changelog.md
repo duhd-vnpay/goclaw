@@ -4,6 +4,30 @@ All notable changes to GoClaw Gateway are documented here. Format follows [Keep 
 
 ---
 
+## [Unreleased] — 2026-04-14
+
+#### ElevenLabs Audio Manager Refactor — Phase 3 (2026-04-14)
+
+Music generation via ElevenLabs + MiniMax with fallback chain. Suno provider fully removed from codebase (no official API, ToS violation risk).
+
+### Added
+- **ElevenLabs Music provider**: `internal/audio/elevenlabs/music.go` — POST `/v1/music`, model `music_v1`, binary MP3 response, 300s timeout, prompt + optional lyrics
+- **MiniMax Music provider**: `internal/audio/minimax/music.go` — POST `{base}/music_generation`, 2-step URL-download pattern, 200 MB cap, optional instrumentation toggle
+
+### Changed
+- **`create_audio` tool simplified**: Now thin Manager dispatcher (`NewCreateAudioTool(audioMgr *audio.Manager)`), removed inline provider logic + per-provider switch cases
+- **`audio.Manager.GenerateMusic/GenerateSFX`**: Chain-based resolution (elevenlabs → minimax for music, elevenlabs-only for SFX)
+- **`createAudio` builtin tool**: Unified dispatch via Manager instead of `providers.Registry` dependency injection
+
+### Removed
+- **Suno provider**: Fully excised (10 atomic locations) — research confirms no official API + ToS violations. Files deleted: `create_audio_suno.go`, `create_audio_minimax.go`, `create_audio_elevenlabs.go` shim. HTTP route removed. TS schema entry removed. Config provider removed.
+
+### Types
+- **`audio.MusicOptions`**: Added `Instrumental bool`, `Model string`, `TimeoutSec int` fields
+- **`audio.AudioResult`**: Added `Provider string` field for observability (tool span metadata)
+
+---
+
 ## [v2.66.0] — 2026-04-05
 
 ### Security

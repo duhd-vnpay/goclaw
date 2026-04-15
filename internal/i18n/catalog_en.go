@@ -196,5 +196,10 @@ func init() {
 		// TTS / Voices
 		MsgTtsUnknownModel:  "unknown tts model: %s",
 		MsgVoicesListFailed: "failed to list voices: %s",
+
+		// STT
+		MsgSTTAllProvidersFailed:     "All STT providers failed",
+		MsgSTTLegacyConfigDeprecated: "Legacy STT config deprecated; migrate to builtin_tools[stt]",
+		MsgSTTWhatsappPrivacyWarning: "Enabling STT for WhatsApp breaks end-to-end encryption for voice messages sent to this agent.",
 	})
 }

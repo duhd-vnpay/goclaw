@@ -72,6 +72,8 @@ const (
 	HandlerHTTP HandlerType = "http"
 	// HandlerPrompt routes the event through an LLM prompt.
 	HandlerPrompt HandlerType = "prompt"
+	// HandlerScript runs a user-provided ES5.1 JavaScript snippet in a sandboxed goja runtime.
+	HandlerScript HandlerType = "script"
 )
 
 // MarshalJSON encodes HandlerType as a JSON string.
@@ -120,6 +122,10 @@ const (
 	DecisionError Decision = "error"
 	// DecisionTimeout indicates the hook did not respond within the time budget.
 	DecisionTimeout Decision = "timeout"
+	// DecisionAsk requests human approval before proceeding. Wave 1: treated as block + warn.
+	DecisionAsk Decision = "ask"
+	// DecisionDefer defers the decision to an external system. Wave 1: treated as block + warn.
+	DecisionDefer Decision = "defer"
 )
 
 // IsBlock returns true only when the decision is DecisionBlock.

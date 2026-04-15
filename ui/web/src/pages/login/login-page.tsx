@@ -27,11 +27,15 @@ export function LoginPage() {
 
   // Auto-redirect when OIDC is enabled and user is not already authenticated.
   // oidcEnabled is fetched async; only redirect once it confirms true.
+  // Always target AUTH_CALLBACK so AuthCallbackPage can extract the token
+  // from the URL fragment. Using `from` directly skips the extractor and
+  // loops back here because the token never enters the store.
   useEffect(() => {
     if (oidcEnabled && !token) {
-      loginWithOidc(from);
+      const callbackUrl = window.location.origin + ROUTES.AUTH_CALLBACK;
+      loginWithOidc(callbackUrl);
     }
-  }, [oidcEnabled, token, loginWithOidc, from]);
+  }, [oidcEnabled, token, loginWithOidc]);
 
   function handleTokenLogin(userId: string, token: string) {
     setCredentials(token, userId);
@@ -52,7 +56,11 @@ export function LoginPage() {
         <PairingForm onApproved={handlePairingApproved} />
       )}
       {oidcEnabled && (
-        <OidcLoginButton onLogin={() => loginWithOidc(from)} />
+        <OidcLoginButton
+          onLogin={() =>
+            loginWithOidc(window.location.origin + ROUTES.AUTH_CALLBACK)
+          }
+        />
       )}
     </LoginLayout>
   );

@@ -25,6 +25,13 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 		inputMessages = collapseToolCallsWithoutSig(inputMessages)
 	}
 
+	// Build raw-ID → tool-name index for role="tool" serialization.
+	// Google Gemini's OpenAI-compat shim maps role=tool messages to native
+	// FunctionResponse{name, response}; an empty name trips HTTP 400 ("Name
+	// cannot be empty"). Lookup uses the raw ToolCallID to match history before
+	// any wire-truncation. Trace: 019d8f33-2de1-7ab2-9a32-9df92cd610dd.
+	toolNameByID := buildToolNameIndex(inputMessages)
+
 	// Detect native OpenAI endpoint to enable developer role.
 	// GPT-4o+ models prioritize "developer" messages over "system" for instruction
 	// adherence. Non-OpenAI backends (proxies, Qwen, DeepSeek, etc.) reject "developer".
@@ -105,6 +112,12 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 
 		if m.ToolCallID != "" {
 			msg["tool_call_id"] = p.wireToolCallID(m.ToolCallID)
+			if name := toolNameByID[m.ToolCallID]; name != "" {
+				msg["name"] = name
+			} else if m.Role == "tool" {
+				slog.Warn("openai: tool msg without matching tool_call",
+					"provider", p.name, "tool_call_id", m.ToolCallID)
+			}
 		}
 
 		msgs = append(msgs, msg)
@@ -186,6 +199,24 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 	}
 
 	return body
+}
+
+// buildToolNameIndex returns a raw-ID → tool-name map drawn from every assistant
+// message's ToolCalls. Used at serialize time to populate role=tool wire messages
+// with their originating tool's name (required by Google Gemini OpenAI-compat shim).
+func buildToolNameIndex(msgs []Message) map[string]string {
+	idx := map[string]string{}
+	for _, m := range msgs {
+		if m.Role != "assistant" {
+			continue
+		}
+		for _, tc := range m.ToolCalls {
+			if tc.ID != "" && tc.Name != "" {
+				idx[tc.ID] = tc.Name
+			}
+		}
+	}
+	return idx
 }
 
 // modelFamily strips provider prefixes (for example "openai/o3-mini") so capability

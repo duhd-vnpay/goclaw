@@ -4,6 +4,51 @@ All notable changes to GoClaw Gateway are documented here. Format follows [Keep 
 
 ---
 
+### ACTOR vs SCOPE — #915 group permission fix + propagation (2026-04-16)
+
+Resolves Issue #915 (Telegram group `write_file` permission denied after `/addwriter`) and closes an adjacent silent-privilege-bypass discovered during the audit.
+
+#### Security (breaking behavior in group/guild context)
+
+- **`store.CheckFileWriterPermission` / `CheckCronPermission`** no longer fail-open on empty or synthetic `SenderID` when the context scope is a group/guild. Previous fail-open allowed subagent/delegate/team/dashboard/cron system turns to write files in group chats without a writer grant — silent privilege bypass. Post-fix: empty or synthetic-prefix senders (`subagent:`, `notification:`, `teammate:`, `system:`, `ticker:`, `session_send_tool`) are DENIED in group context. DM / HTTP paths unchanged.
+- **`bus.IsInternalSender`** now also recognises `subagent:` prefix (previously missed, causing subagent senders to be treated as real users in permission checks).
+
+#### Added — propagation of the acting sender through re-ingress
+
+- `tools.MetaOriginSenderID` metadata key (`origin_sender_id`) — carries the real acting sender through synthetic-sender announce/dispatch paths.
+- `tools.AnnounceMetadata.OriginSenderID` field — subagent/delegate announce queue.
+- `tools.SubagentTask.OriginSenderID` field — populated at spawn from `store.SenderIDFromContext(ctx)`.
+- `cmd.subagentAnnounceRouting.SenderID` — carries sender from handler into the re-ingress `RunRequest`.
+- `tools.DelegateRequest.SenderID` field — same propagation for delegate announcements.
+- `store.ActorIDFromContext(ctx)` helper — returns `SenderID` if set, else `UserID`. Clarifies ACTOR vs SCOPE at call sites.
+
+#### Changed — ACTOR migration (call sites now use `ActorIDFromContext`)
+
+- `internal/tools/publish_skill.go`: skill owner = actor (individual, not group principal).
+- `internal/tools/skill_manage.go` (create, patch, delete): owner = actor on create; patch/delete ownership check accepts actor or legacy `UserIDFromContext` for backward compatibility with skills created before this change.
+- `internal/tools/delegate_tool.go`: `DelegateRequest.UserID` and `DomainEvent.UserID` = actor for audit trails.
+- `internal/tools/team_tasks_blocker.go`: blocker attribution and escalation `UserID` = actor.
+- `internal/tools/team_tool_cache.go`: team access-policy check uses actor (fixes group-chat member access where per-user allow/deny lists previously never matched the group principal).
+- `internal/tools/team_tool_dispatch.go`: teammate-dispatch metadata now carries `MetaOriginSenderID` so the teammate's turn has the original user's sender.
+- `internal/tools/sessions_send.go`: session_send metadata now carries `MetaOriginSenderID` to preserve user identity across agent-to-agent flows.
+
+#### Scope-intentional (unchanged, commented)
+
+- `internal/tools/cron.go`: cron jobs remain per-group-scope (memory-model parity; migrating would break collaborative `/cron list/add/remove`).
+- `internal/tools/team_tasks_create.go`: team task `UserID` remains per-group (team visibility is per-chat, not per-user).
+
+#### Tests
+
+- New `tests/integration/telegram_group_write_file_permission_test.go` — 9 sub-tests covering granted-sender, ungranted-sender, no-agent fail-open branch, DM no-op, `|`-delimited sender, empty-sender deny, synthetic-prefix deny (7 sub-cases), propagated-sender allow, DM empty-sender passes.
+- Regression coverage for both the user-reported denial (#915 BUG-B) and the silent-bypass (#915 BUG-A).
+
+#### Notes
+
+- No DB migration shipped: historical `skills.owner_id` rows that were created with a `group:*` / `guild:*` value remain accessible via the patch/delete legacy fallback. Re-publishing a skill transfers ownership to the individual actor.
+- Audit report: `plans/reports/audit-260416-1240-actor-scope-comprehensive.md`.
+
+---
+
 ## [Unreleased] — 2026-04-15
 
 #### Agent Hooks System — Phase 3: Prompt Handler + Web UI (2026-04-15)

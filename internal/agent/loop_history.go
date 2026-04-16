@@ -101,6 +101,19 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		hadBootstrap = false
 	}
 
+	// Bootstrap auto-contact: inject known sender info from channel metadata.
+	// DM only — group chats have permission checks and multiple senders.
+	if hadBootstrap && peerKind == "direct" {
+		if senderName := store.SenderNameFromContext(ctx); senderName != "" {
+			hint := fmt.Sprintf("Known user info (from %s): Name=%q\nTimezone: not yet known. When the user mentions times, schedules, or reminders, ask for their timezone and update USER.md.", channelType, senderName)
+			if extraSystemPrompt != "" {
+				extraSystemPrompt += "\n\n"
+			}
+			extraSystemPrompt += hint
+		}
+	}
+
+
 	// Group writer restrictions: filter context files + inject prompt
 	if l.configPermStore != nil && (strings.HasPrefix(userID, "group:") || strings.HasPrefix(userID, "guild:")) {
 		senderID := store.SenderIDFromContext(ctx)
@@ -213,6 +226,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		SandboxWorkspaceAccess: l.sandboxWorkspaceAccess,
 		ShellDenyGroups:        l.shellDenyGroups,
 		SelfEvolve:             l.selfEvolve,
+		TTSAutoMode:            l.ttsAutoMode,
 		ProviderType:           providerTypeOf(l.provider),
 		CredentialCLIContext:   l.buildCredentialCLIContext(ctx),
 		IsBootstrap:            hadBootstrap && l.agentType != store.AgentTypePredefined,
@@ -236,10 +250,10 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		})
 	}
 
-	// History pipeline matching TS: limitHistoryTurns → pruneContext → sanitizeHistory.
+	// History pipeline: limitHistoryTurns → sanitizeHistory.
+	// Pruning is owned by PruneStage in the pipeline (single entry point).
 	trimmed := limitHistoryTurns(history, historyLimit)
-	pruned := pruneContextMessages(trimmed, l.contextWindow, l.contextPruningCfg)
-	sanitized, droppedCount := sanitizeHistory(pruned)
+	sanitized, droppedCount := sanitizeHistory(trimmed)
 	messages = append(messages, sanitized...)
 
 	// If orphaned messages were found and dropped, persist the cleaned history

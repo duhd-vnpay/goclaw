@@ -2,12 +2,17 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tts"
 )
 
@@ -53,6 +58,10 @@ func (t *TtsTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Voice ID (provider-specific). Optional — uses default if omitted.",
 			},
+			"model": map[string]any{
+				"type":        "string",
+				"description": "Model ID (provider-specific, e.g. eleven_v3). Optional — uses default if omitted.",
+			},
 			"provider": map[string]any{
 				"type":        "string",
 				"description": "TTS provider: openai, elevenlabs, edge, minimax. Optional — uses primary if omitted.",
@@ -60,6 +69,96 @@ func (t *TtsTool) Parameters() map[string]any {
 		},
 		"required": []string{"text"},
 	}
+}
+
+// ttsOverride is the tenant settings shape for tts
+// (stored in builtin_tool_tenant_configs.settings).
+type ttsOverride struct {
+	Primary        string `json:"primary,omitempty"`          // override primary provider name
+	DefaultVoiceID string `json:"default_voice_id,omitempty"` // tenant-default voice id
+	DefaultModel   string `json:"default_model,omitempty"`    // tenant-default model id
+}
+
+// agentAudioConfig is the JSON shape read from AgentAudioSnapshot.OtherConfig
+// for per-agent TTS tuning. Keys match the agents.other_config column.
+type agentAudioConfig struct {
+	TTSVoiceID string `json:"tts_voice_id,omitempty"`
+	TTSModelID string `json:"tts_model_id,omitempty"`
+}
+
+// resolveVoiceAndModel computes the effective voice + model IDs for the
+// request using the documented precedence order:
+//
+//	args > agent (store.AgentAudioFromCtx OtherConfig) > tenant (BuiltinToolSettings) > empty.
+//
+// Empty return values signal "use provider default" downstream — they are not
+// errors. Missing agent snapshot emits slog.Warn so operators can spot
+// dispatch-layer regressions; missing tenant settings are quiet (common).
+func (t *TtsTool) resolveVoiceAndModel(ctx context.Context, argVoice, argModel string) (voice, model string) {
+	voice, model = argVoice, argModel
+
+	// Pull agent-level config from the dispatcher-injected snapshot.
+	var agentCfg agentAudioConfig
+	if snap, ok := store.AgentAudioFromCtx(ctx); ok {
+		if len(snap.OtherConfig) > 0 {
+			if err := json.Unmarshal(snap.OtherConfig, &agentCfg); err != nil {
+				slog.Warn("tts: failed to parse agent OtherConfig", "error", err, "agent_id", snap.AgentID)
+			}
+		}
+	} else if agentID := store.AgentIDFromContext(ctx); agentID != uuid.Nil {
+		// Producer-consumer contract violation: when an agent ctx is in play
+		// (AgentIDFromContext returns non-nil), AgentAudioSnapshot should have
+		// been injected by the dispatcher. Log as Warn so ops can spot a
+		// dispatch-layer regression. Silent when no agent is scoped (unit
+		// tests and callers outside the agent loop).
+		slog.Warn("tts: agent audio snapshot missing — dispatcher producer may be offline", "agent_id", agentID)
+	}
+
+	// Pull tenant defaults from builtin tool settings.
+	var tenantCfg ttsOverride
+	if settings := BuiltinToolSettingsFromCtx(ctx); settings != nil {
+		if raw, ok := settings["tts"]; ok && len(raw) > 0 {
+			if err := json.Unmarshal(raw, &tenantCfg); err != nil {
+				slog.Warn("tts: failed to parse tenant settings for voice/model", "error", err)
+			}
+		}
+	}
+
+	if voice == "" {
+		if agentCfg.TTSVoiceID != "" {
+			voice = agentCfg.TTSVoiceID
+		} else if tenantCfg.DefaultVoiceID != "" {
+			voice = tenantCfg.DefaultVoiceID
+		}
+	}
+	if model == "" {
+		if agentCfg.TTSModelID != "" {
+			model = agentCfg.TTSModelID
+		} else if tenantCfg.DefaultModel != "" {
+			model = tenantCfg.DefaultModel
+		}
+	}
+	return voice, model
+}
+
+// resolvePrimary returns the effective primary provider name for the request.
+// Checks tenant override via BuiltinToolSettingsFromCtx first.
+func (t *TtsTool) resolvePrimary(ctx context.Context, mgr *tts.Manager) string {
+	if settings := BuiltinToolSettingsFromCtx(ctx); settings != nil {
+		if raw, ok := settings["tts"]; ok && len(raw) > 0 {
+			var override ttsOverride
+			if err := json.Unmarshal(raw, &override); err != nil {
+				slog.Warn("tts: failed to parse tenant override, using defaults", "error", err)
+			} else if override.Primary != "" {
+				// Verify the provider exists in the manager
+				if _, exists := mgr.GetProvider(override.Primary); exists {
+					return override.Primary
+				}
+				slog.Warn("tts: tenant override references unknown provider", "primary", override.Primary)
+			}
+		}
+	}
+	return mgr.PrimaryProvider()
 }
 
 // SetContext is a no-op; channel is now read from ctx (thread-safe).
@@ -71,8 +170,12 @@ func (t *TtsTool) Execute(ctx context.Context, args map[string]any) *Result {
 		return &Result{ForLLM: "error: text is required", IsError: true}
 	}
 
-	voice, _ := args["voice"].(string)
+	argVoice, _ := args["voice"].(string)
+	argModel, _ := args["model"].(string)
 	providerName, _ := args["provider"].(string)
+
+	// Resolve voice/model via args > agent (ctx snapshot) > tenant > default.
+	voice, model := t.resolveVoiceAndModel(ctx, argVoice, argModel)
 
 	// Snapshot manager pointer under read lock so config reloads don't race.
 	t.mu.RLock()
@@ -81,7 +184,7 @@ func (t *TtsTool) Execute(ctx context.Context, args map[string]any) *Result {
 
 	// Determine format based on channel (read from ctx — thread-safe)
 	channel := ToolChannelFromCtx(ctx)
-	opts := tts.Options{Voice: voice}
+	opts := tts.Options{Voice: voice, Model: model}
 	if channel == "telegram" {
 		opts.Format = "opus"
 	}
@@ -90,14 +193,24 @@ func (t *TtsTool) Execute(ctx context.Context, args map[string]any) *Result {
 	var err error
 
 	if providerName != "" {
-		// Use specific provider
+		// Use specific provider (explicit call param takes precedence)
 		p, ok := mgr.GetProvider(providerName)
 		if !ok {
 			return &Result{ForLLM: fmt.Sprintf("error: tts provider not found: %s", providerName), IsError: true}
 		}
 		result, err = p.Synthesize(ctx, text, opts)
 	} else {
-		result, err = mgr.SynthesizeWithFallback(ctx, text, opts)
+		// Resolve primary from tenant settings or default
+		primary := t.resolvePrimary(ctx, mgr)
+		if p, ok := mgr.GetProvider(primary); ok {
+			result, err = p.Synthesize(ctx, text, opts)
+			if err != nil {
+				slog.Warn("tts primary provider failed, trying fallback", "provider", primary, "error", err)
+				result, err = mgr.SynthesizeWithFallback(ctx, text, opts)
+			}
+		} else {
+			result, err = mgr.SynthesizeWithFallback(ctx, text, opts)
+		}
 	}
 
 	if err != nil {

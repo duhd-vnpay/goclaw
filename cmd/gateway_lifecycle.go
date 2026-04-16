@@ -94,7 +94,9 @@ func (d *gatewayDeps) runLifecycle(
 			return
 		}
 		if d.pgStores.ConfigSecrets != nil {
-			if secrets, err := d.pgStores.ConfigSecrets.GetAll(context.Background()); err == nil && len(secrets) > 0 {
+			// Use master tenant context to load global TTS secrets
+			masterCtx := store.WithTenantID(context.Background(), store.MasterTenantID)
+			if secrets, err := d.pgStores.ConfigSecrets.GetAll(masterCtx); err == nil && len(secrets) > 0 {
 				updatedCfg.ApplyDBSecrets(secrets)
 			}
 		}
@@ -103,8 +105,14 @@ func (d *gatewayDeps) runLifecycle(
 			return
 		}
 		deps.ttsTool.UpdateManager(newMgr)
+		if d.ttsHandler != nil {
+			d.ttsHandler.UpdateManager(newMgr)
+		}
 		slog.Info("tts config reloaded", "provider", newMgr.PrimaryProvider(), "auto", string(newMgr.AutoMode()))
 	})
+
+	// Note: vault enrichment provider is resolved per-tenant at runtime,
+	// no hot-reload handler needed here
 
 	// Log orphaned providers on agent deletion. Auto-delete is unsafe because
 	// providers can be referenced by heartbeats (FK), OAuth tokens, media chains.

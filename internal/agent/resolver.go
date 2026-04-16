@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,9 +13,10 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/eventbus"
-	"github.com/nextlevelbuilder/goclaw/internal/harness"
-	memory "github.com/nextlevelbuilder/goclaw/internal/memory"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
+	"github.com/nextlevelbuilder/goclaw/internal/harness"
+	"github.com/nextlevelbuilder/goclaw/internal/hooks"
+	"github.com/nextlevelbuilder/goclaw/internal/memory"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
 	"github.com/nextlevelbuilder/goclaw/internal/providerresolve"
@@ -79,6 +81,9 @@ type ResolverDeps struct {
 	// Shared MCP connection pool — eliminates duplicate connections across agents
 	MCPPool *mcpbridge.Pool
 
+	// MCP grant checker — for runtime grant verification at BridgeTool.Execute
+	MCPGrantChecker mcpbridge.GrantChecker
+
 	// Skill access store — for per-agent skill visibility filtering
 	SkillAccessStore store.SkillAccessStore
 
@@ -104,11 +109,17 @@ type ResolverDeps struct {
 	BuiltinToolTenantCfgs store.BuiltinToolTenantConfigStore
 	SkillTenantCfgs       store.SkillTenantConfigStore
 
+	// System config store for tenant-scoped settings (allowed_paths, etc.)
+	SystemConfigs store.SystemConfigStore
+
 	// Global workspace root (GOCLAW_WORKSPACE)
 	Workspace string
 
 	// Harness layer manager (nil = harness disabled)
 	Harness *harness.Manager
+
+	// TTS auto mode from config: "off", "always", "inbound", "tagged"
+	TTSAutoMode string
 
 	// V3 auto-inject: episodic memory injection into system prompt (nil = disabled)
 	AutoInjector memory.AutoInjector
@@ -121,6 +132,9 @@ type ResolverDeps struct {
 
 	// Contact store for user identity resolution (nil = no credential merging)
 	ContactStore store.ContactStore
+
+	// HookDispatcher fires lifecycle hook events (Issue #875). Nil = noop.
+	HookDispatcher hooks.Dispatcher
 
 	// Vault hook: called when a text file is uploaded by user (nil = no vault registration)
 	OnTextUploaded func(ctx context.Context, path, content string)
@@ -312,11 +326,20 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			if deps.MCPPool != nil {
 				mcpOpts = append(mcpOpts, mcpbridge.WithPool(deps.MCPPool))
 			}
+			if deps.MCPGrantChecker != nil {
+				mcpOpts = append(mcpOpts, mcpbridge.WithGrantChecker(deps.MCPGrantChecker))
+			}
 			mcpMgr := mcpbridge.NewManager(toolsReg, mcpOpts...)
 			if err := mcpMgr.LoadForAgent(ctx, ag.ID, ""); err != nil {
 				slog.Warn("failed to load MCP servers for agent", "agent", agentKey, "error", err)
 			} else {
 				mcpUserCredSrvs = mcpMgr.UserCredServers()
+				// User-credential servers (Notion, etc.) are deferred at startup
+				// but will produce tools per-request via getUserMCPTools.
+				// Set flag so agentToolPolicyWithMCP injects "group:mcp" into alsoAllow.
+				if len(mcpUserCredSrvs) > 0 {
+					hasMCPTools = true
+				}
 				if mcpMgr.IsSearchMode() {
 					// Search mode: too many tools — register mcp_tool_search meta-tool.
 					// Also wire lazy activator so deferred tools can be called by name directly.
@@ -359,7 +382,11 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 		}
 
 		// Load per-tenant tool exclusions (disabled tools for this agent's tenant)
-		var disabledTools map[string]bool
+		// AND per-tenant tool settings overlay (tier 2 in the 4-tier cascade).
+		var (
+			disabledTools      map[string]bool
+			tenantToolSettings tools.BuiltinToolSettings
+		)
 		if deps.BuiltinToolTenantCfgs != nil && ag.TenantID != uuid.Nil {
 			if disabled, err := deps.BuiltinToolTenantCfgs.ListDisabled(ctx, ag.TenantID); err == nil && len(disabled) > 0 {
 				disabledTools = make(map[string]bool, len(disabled))
@@ -367,6 +394,32 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 					disabledTools[name] = true
 				}
 				slog.Debug("tenant tool exclusions", "agent", agentKey, "tenant", ag.TenantID, "disabled", len(disabled))
+			}
+			if settings, err := deps.BuiltinToolTenantCfgs.ListAllSettings(ctx, ag.TenantID); err != nil {
+				// Log but don't fail agent creation — fall back to global/hardcoded defaults.
+				slog.Warn("failed to load tenant tool settings", "agent", agentKey, "tenant", ag.TenantID, "error", err)
+			} else if len(settings) > 0 {
+				tenantToolSettings = make(tools.BuiltinToolSettings, len(settings))
+				for name, raw := range settings {
+					tenantToolSettings[name] = []byte(raw)
+				}
+				slog.Debug("tenant tool settings loaded", "agent", agentKey, "tenant", ag.TenantID, "tools", len(tenantToolSettings))
+			}
+		}
+
+		// Load tenant-specific allowed paths (from system_configs['allowed_paths']).
+		// These extend filesystem tool access beyond the agent's workspace.
+		var tenantAllowedPaths []string
+		if deps.SystemConfigs != nil && ag.TenantID != uuid.Nil {
+			tenantCtx := store.WithTenantID(ctx, ag.TenantID)
+			if raw, err := deps.SystemConfigs.Get(tenantCtx, "allowed_paths"); err == nil && raw != "" {
+				if json.Unmarshal([]byte(raw), &tenantAllowedPaths) == nil && len(tenantAllowedPaths) > 0 {
+					// Expand home directory in paths
+					for i, p := range tenantAllowedPaths {
+						tenantAllowedPaths[i] = config.ExpandHome(p)
+					}
+					slog.Debug("tenant allowed paths loaded", "agent", agentKey, "tenant", ag.TenantID, "paths", len(tenantAllowedPaths))
+				}
 			}
 		}
 
@@ -397,6 +450,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			ID:                     ag.AgentKey,
 			AgentUUID:              ag.ID,
 			TenantID:               ag.TenantID,
+			AgentOtherConfig:       ag.OtherConfig,
 			AgentType:              ag.AgentType,
 			IsTeamLead:             isTeamLead,
 			Provider:               provider,
@@ -412,6 +466,8 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			MemoryCfg:              ag.ParseMemoryConfig(),
 			SandboxCfg:             sandboxCfgOverride,
 			Bus:                    deps.Bus,
+			DomainBus:              deps.DomainBus,
+			HookDispatcher:         deps.HookDispatcher,
 			Sessions:               deps.Sessions,
 			Tools:                  toolsReg,
 			ToolPolicy:             deps.ToolPolicy,
@@ -436,9 +492,12 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			SandboxContainerDir:    sandboxContainerDir,
 			SandboxWorkspaceAccess: sandboxWorkspaceAccess,
 			BuiltinToolSettings:    builtinSettings,
+			TenantToolSettings:     tenantToolSettings,
+			TenantAllowedPaths:     tenantAllowedPaths,
 			DisabledTools:          disabledTools,
 			ReasoningConfig:        store.ResolveEffectiveReasoningConfig(providerReasoningDefaults, ag.ParseReasoningConfig()),
 			SelfEvolve:             ag.ParseSelfEvolve(),
+			TTSAutoMode:            deps.TTSAutoMode,
 			SkillEvolve:            ag.AgentType == store.AgentTypePredefined && ag.ParseSkillEvolve(),
 			SkillNudgeInterval:     ag.ParseSkillNudgeInterval(),
 			WorkspaceSharing:       ag.ParseWorkspaceSharing(),
@@ -455,8 +514,8 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			MCPStore:               deps.MCPStore,
 			MCPPool:                deps.MCPPool,
 			MCPUserCredSrvs:        mcpUserCredSrvs,
+			MCPGrantChecker:        deps.MCPGrantChecker,
 			Harness:                deps.Harness,
-			DomainBus:              deps.DomainBus,
 			AutoInjector:           deps.AutoInjector,
 			UserResolver:           newContactResolver(deps.ContactStore),
 			PinnedSkills:           ag.ParsePinnedSkills(),
@@ -472,13 +531,13 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 // InvalidateAgent removes an agent from the router cache, forcing re-resolution.
 // Used when agent config is updated via API.
 // Matches both plain key ("agentKey") and tenant-scoped key ("tenantID:agentKey")
-// because callers only pass the agentKey without tenant context.
+// via exact-segment match (prevents substring collisions like "sub-foo" matching
+// when invalidating "foo"). Empty agentKey is rejected to prevent wildcard wipes.
 func (r *Router) InvalidateAgent(agentKey string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	suffix := ":" + agentKey
 	for key := range r.agents {
-		if key == agentKey || strings.HasSuffix(key, suffix) {
+		if matchAgentCacheKey(key, agentKey) {
 			delete(r.agents, key)
 		}
 	}
@@ -492,6 +551,27 @@ func (r *Router) InvalidateAll() {
 	defer r.mu.Unlock()
 	r.agents = make(map[string]*agentEntry)
 	slog.Debug("invalidated all agent caches")
+}
+
+// InvalidateTenant clears all cached agents for a single tenant.
+// Cache keys are "tenantID:agentKey" when tenant-scoped (see agentCacheKey).
+// Non-tenant entries (bare "agentKey") are untouched. uuid.Nil is a no-op —
+// callers use InvalidateAll for global invalidation.
+func (r *Router) InvalidateTenant(tenantID uuid.UUID) {
+	if tenantID == uuid.Nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	prefix := tenantID.String() + ":"
+	var deleted int
+	for key := range r.agents {
+		if strings.HasPrefix(key, prefix) {
+			delete(r.agents, key)
+			deleted++
+		}
+	}
+	slog.Debug("invalidated tenant agent cache", "tenant", tenantID, "count", deleted)
 }
 
 // resolveTenantSlug looks up the tenant slug for workspace path resolution.

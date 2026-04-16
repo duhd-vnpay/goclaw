@@ -55,4 +55,6 @@ export const ROUTES = {
   WORKFLOW_RUN_DETAIL: "/workflows/:workflowId/runs/:runId",
   MY_TASKS: "/my-tasks",
   DOMAINS: "/settings/domains",
+  HOOKS: "/hooks",
+  HOOK_DETAIL: "/hooks/:id",
 } as const;

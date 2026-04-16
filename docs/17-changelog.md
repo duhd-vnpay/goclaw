@@ -4,6 +4,269 @@ All notable changes to GoClaw Gateway are documented here. Format follows [Keep 
 
 ---
 
+### ACTOR vs SCOPE — #915 group permission fix + propagation (2026-04-16)
+
+Resolves Issue #915 (Telegram group `write_file` permission denied after `/addwriter`) and closes an adjacent silent-privilege-bypass discovered during the audit.
+
+#### Security (breaking behavior in group/guild context)
+
+- **`store.CheckFileWriterPermission` / `CheckCronPermission`** no longer fail-open on empty or synthetic `SenderID` when the context scope is a group/guild. Previous fail-open allowed subagent/delegate/team/dashboard/cron system turns to write files in group chats without a writer grant — silent privilege bypass. Post-fix: empty or synthetic-prefix senders (`subagent:`, `notification:`, `teammate:`, `system:`, `ticker:`, `session_send_tool`) are DENIED in group context. DM / HTTP paths unchanged.
+- **`bus.IsInternalSender`** now also recognises `subagent:` prefix (previously missed, causing subagent senders to be treated as real users in permission checks).
+
+#### Added — propagation of the acting sender through re-ingress
+
+- `tools.MetaOriginSenderID` metadata key (`origin_sender_id`) — carries the real acting sender through synthetic-sender announce/dispatch paths.
+- `tools.AnnounceMetadata.OriginSenderID` field — subagent/delegate announce queue.
+- `tools.SubagentTask.OriginSenderID` field — populated at spawn from `store.SenderIDFromContext(ctx)`.
+- `cmd.subagentAnnounceRouting.SenderID` — carries sender from handler into the re-ingress `RunRequest`.
+- `tools.DelegateRequest.SenderID` field — same propagation for delegate announcements.
+- `store.ActorIDFromContext(ctx)` helper — returns `SenderID` if set, else `UserID`. Clarifies ACTOR vs SCOPE at call sites.
+
+#### Changed — ACTOR migration (call sites now use `ActorIDFromContext`)
+
+- `internal/tools/publish_skill.go`: skill owner = actor (individual, not group principal).
+- `internal/tools/skill_manage.go` (create, patch, delete): owner = actor on create; patch/delete ownership check accepts actor or legacy `UserIDFromContext` for backward compatibility with skills created before this change.
+- `internal/tools/delegate_tool.go`: `DelegateRequest.UserID` and `DomainEvent.UserID` = actor for audit trails.
+- `internal/tools/team_tasks_blocker.go`: blocker attribution and escalation `UserID` = actor.
+- `internal/tools/team_tool_cache.go`: team access-policy check uses actor (fixes group-chat member access where per-user allow/deny lists previously never matched the group principal).
+- `internal/tools/team_tool_dispatch.go`: teammate-dispatch metadata now carries `MetaOriginSenderID` so the teammate's turn has the original user's sender.
+- `internal/tools/sessions_send.go`: session_send metadata now carries `MetaOriginSenderID` to preserve user identity across agent-to-agent flows.
+
+#### Scope-intentional (unchanged, commented)
+
+- `internal/tools/cron.go`: cron jobs remain per-group-scope (memory-model parity; migrating would break collaborative `/cron list/add/remove`).
+- `internal/tools/team_tasks_create.go`: team task `UserID` remains per-group (team visibility is per-chat, not per-user).
+
+#### Tests
+
+- New `tests/integration/telegram_group_write_file_permission_test.go` — 9 sub-tests covering granted-sender, ungranted-sender, no-agent fail-open branch, DM no-op, `|`-delimited sender, empty-sender deny, synthetic-prefix deny (7 sub-cases), propagated-sender allow, DM empty-sender passes.
+- Regression coverage for both the user-reported denial (#915 BUG-B) and the silent-bypass (#915 BUG-A).
+
+#### Notes
+
+- No DB migration shipped: historical `skills.owner_id` rows that were created with a `group:*` / `guild:*` value remain accessible via the patch/delete legacy fallback. Re-publishing a skill transfers ownership to the individual actor.
+- Audit report: `plans/reports/audit-260416-1240-actor-scope-comprehensive.md`.
+
+---
+
+## [Unreleased] — 2026-04-15
+
+#### Agent Hooks System — Phase 3: Prompt Handler + Web UI (2026-04-15)
+
+Third handler type (`prompt`) with full cost safeguards, WS RPC surface, complete Web UI, 3-language i18n, and production wiring. Closes Issue #875 feature parity with Claude-Code-style hooks.
+
+### Added
+- **`internal/hooks/handlers/prompt.go`**: LLM hook handler with structured tool-call output (`decide` tool), anti-injection system preamble, fenced user-input delimiter, in-memory decision cache (60s TTL keyed by `sha256(hook_id||version||tool_name||tool_input)`), per-turn invocation cap (default 5), provider resolver abstraction
+- **`internal/hooks/handlers/prompt_resolver.go`**: `RegistryResolver` maps model aliases (haiku/sonnet/opus, gpt-*, gemini-*, qwen-*) to tenant providers; falls back to system configs (`hooks.prompt.provider`, `background.provider`) then first registered
+- **`internal/hooks/budget/` package**: `Store` + `Dialect` interface for atomic per-tenant monthly token budget deduction; `ShouldWarn` helper at 20% threshold
+- **Budget store implementations**: `pg.PGHookBudget` (single UPDATE + RETURNING with UPSERT seed on month rollover) and `sqlitestore.SqliteHookBudget` (tx-wrapped equivalent)
+- **WS RPC methods** (`internal/gateway/methods/hooks.go`): `hooks.list` (viewer+), `hooks.create`/`update`/`delete`/`toggle` (admin+, master-scope for global), `hooks.test` (operator+, dryRun no audit write), `hooks.history` (viewer+, stub pending phase 4 pagination)
+- **Protocol constants**: `MethodHooksList/Create/Update/Delete/Toggle/Test/History` in `pkg/protocol/methods.go`
+- **Web UI `/hooks` page**: single route with `useParams().id` — list view when no id, detail view when present (CLAUDE.md "route params as source of truth"). Tabs: Overview | Config | Test | History
+- **Web UI components**: `hook-list-row`, `hook-form-dialog` (3 sub-forms per handler type; command radio disabled on Standard with tooltip), `hook-test-panel` (fires `dryRun=true`, decision badge + duration + stdout/stderr/status), `hook-diff-viewer` (side-by-side JSON diff via highlight.js), `hook-history-table`, `hook-overview-tab`
+- **Zod + TanStack Query**: `schemas/hooks.schema.ts` (prompt requires matcher|if_expr + prompt_template), `hooks/use-hooks.ts` (useHooksList/Hook/CreateHook/UpdateHook/DeleteHook/ToggleHook/TestHook/HookHistory)
+- **i18n backend**: 6 new keys (`hook.invalid_matcher`, `hook.command_disabled_standard`, `hook.prompt_requires_matcher`, `hook.circuit_breaker_tripped`, `hook.budget_exceeded`, `hook.per_turn_cap_reached`) in en/vi/zh catalogs
+- **i18n UI**: `ui/web/src/i18n/locales/{en,vi,zh}/hooks.json` with identical key ordering (per CLAUDE.md memory rule)
+- **Production wiring**: `cmd/gateway_managed.go` registers `HandlerPrompt` in dispatcher handlers map; `cmd/gateway.go` registers `HookMethods` in router
+- **Sidebar nav**: "Hooks" entry with `Webhook` icon in Capabilities group
+
+### Security / cost safeguards
+- **Structured output enforcement**: evaluator MUST call the `decide` tool; free-text responses fail-closed to block
+- **Sanitized input**: only `tool_input` reaches the evaluator inside a fenced `USER INPUT` block; raw user message never included
+- **Injection detection flag**: evaluator can signal `injection_detected=true` via structured output
+- **Version-busted cache**: hook config edits bump `version` → cache key changes → forces re-evaluation
+- **Atomic budget deduct**: no select-then-update race (L2 mitigation)
+
+### Testing
+- **Unit**: `prompt_test.go` (14 tests — cache hit/miss, version bust, per-turn cap, fail-closed paths, schema assertions), `prompt_injection_test.go` (4 tests — hostile inputs, unicode homoglyphs, nested JSON, fenced delimiter integrity), `budget_test.go` (9 tests — atomic deduct, exceed-returns-err, month rollover, zero-cost, nil tenant, warn threshold)
+- **WS RPC unit**: `gateway/methods/hooks_test.go` (param parsing + HookTestResult struct round-trip)
+- **UI**: 56/56 vitest passing including 20 new hook-specific tests (schema validation, list rendering, test panel, diff viewer, i18n contracts)
+
+#### Agent Hooks System — Phase 4: Hardening + Docs (2026-04-15)
+
+Integration / chaos / RBAC / tracing coverage + user documentation + copy-paste example hooks library. Merge gate.
+
+### Added
+- **Integration tests** (`tests/integration/hooks_e2e_test.go`): 7 events × HTTP/command handler coverage, tenant isolation (cross-tenant events don't hit other tenants' hooks), context-update injection path, edition gate at dispatch time
+- **Chaos tests** (`hooks_chaos_test.go`): provider down (fail-closed block on blocking event), per-hook timeout respected, circuit breaker auto-disables after 3 consecutive blocks and persists `enabled=false`, `ErrLoopDepthExceeded` when depth > `MaxLoopDepth` (M5), `dedup_key` unique index suppresses double audit rows on retry (H6), 5xx retry-once-then-error
+- **RBAC tests** (`hooks_rbac_test.go`): store tenant isolation (List/Get/Update/Delete all respect tenant_id), global-scope visible to all tenants, ResolveForEvent unions tenant + global hooks, `HasMinRole` matrix over the hooks.* method surface
+- **Tracing tests** (`hooks_tracing_test.go`): `EmitHookSpan` writes row with canonical name `hook.<handler_type>.<event>`; dispatcher + traced-handler wrapper emits spans end-to-end
+- **User docs** `docs/agent-hooks.md`: concepts, security model, handler reference, matcher guide, safeguard table, Web UI walkthrough, observability (audit table + tracing spans + slog keys), troubleshooting, migration notes, known limitations
+- **Example library** `examples/hooks/`: `block-rm-rf.json` (command, Lite), `auto-lint-after-write.json` (http async), `audit-tool-usage.json` (tenant-wide audit), `session-context-injector.json` (context bootstrap), `notify-discord-on-stop.json` (webhook notification), `README.md` with safety guidance
+
+### Fixed
+- **`PGHookStore.GetByID` + `SqliteHookStore.GetByID`** now enforce tenant scope: non-master callers only see own + global rows. Previously returned any row by UUID which leaked cross-tenant.
+- **Existing pipeline integration tests** now call `security.SetAllowLoopbackForTest(true)` via shared helper; no longer flake on SSRF block for httptest endpoints.
+- **Vault**: Shared docs (`scope='shared'`, `agent_id=NULL`) are now visible to agents via `vault_search`, `ListDocuments`, `CountDocuments`. Previously excluded by strict `agent_id = $N` predicate after migration 000046 made `agent_id` nullable. Also fixes single-team filter to include shared docs. Adds CHECK invariant (migration 000055) to prevent future scope/ownership drift. Affects PostgreSQL and SQLite (desktop edition). (#917)
+
+### Testing
+- All hook integration tests pass under `TEST_DATABASE_URL` PG container (7 new test files, 18 new top-level tests)
+- `go build` + `go build -tags sqliteonly` + `go vet` clean
+- `pnpm test` 56/56 pass
+- Race detector clean for `internal/hooks/...` + `internal/gateway/methods/`
+
+### Deferred (post-MVP)
+- Cluster-wide prompt decision cache via Redis
+- Skill-frontmatter hooks
+- `agent` handler type (inter-agent delegation via prompt instead)
+- Desktop Wails UI parity for hooks page
+- Load/throughput benchmarks (explicitly dropped from Phase 4 scope)
+
+---
+
+#### Agent Hooks System — Phase 1: Foundation (2026-04-15)
+
+Lifecycle hook infrastructure: event dispatcher (sync/async paths), audit logging, database schema (PostgreSQL + SQLite), store interface, config validation, edition gating. Handlers + pipeline integration deferred to Phase 2.
+
+### Added
+- **`internal/hooks/` package**: Foundational types (HookConfig, HookExecution, Event), StdDispatcher (fire-and-decide with sequential execution), CEL+regex matcher, audit writer (PII-redacted, encrypted), circuit breaker with auto-disable
+- **PostgreSQL migration 000052**: `agent_hooks` table (id, tenant_id, agent_id, event, handler_type, config, matcher, if_expr, priority, enabled, created_at, updated_at) + `hook_executions` table (hook_id, session_id, event, input_hash, decision, duration_ms, error, created_at) with unique dedup_key index
+- **SQLite schema entries**: Full schema in `schema.sql` + migration map bump for Lite/desktop edition
+- **HookStore interface + implementations**: `PGHookStore` (database/sql + pgx/v5) and `SQLiteHookStore` (modernc.org/sqlite) with List, Create, Update, Delete, LogExecution methods
+- **Security primitives**: Loop-depth guard (M5 mitigation, MaxLoopDepth=3), per-hook timeout, chain budget (10s wall-time), circuit breaker with auto-disable (C4 mitigation), fail-closed policy for blocking events
+- **Edition gating**: `HookEditionPolicy` allows command handler on Lite only; master-scope blocks command on Standard tenant
+- **Config validation**: CEL cost limits, required matcher for prompt handlers, bounded queue per-turn limits
+
+### Changed
+- **Store layer**: Added `store.Hooks` field (typed as `any` to avoid import cycles)
+- **Base store**: `TablesWithUpdatedAt["agent_hooks"] = true` for touch-all update helpers
+
+### Testing
+- **Integration test suite**: `tests/integration/v3_hooks_store_test.go` covers multi-tenant isolation, dedup key uniqueness, schema migration up/down for both PG + SQLite
+
+### Deferred to Phase 3+
+- Prompt handler (modifies input/context dynamically)
+- Web UI (CRUD, test panel, history)
+- Tracing integration
+- i18n keys (en/vi/zh)
+
+---
+
+#### Agent Hooks System — Phase 2: Handlers + Pipeline Integration (2026-04-15)
+
+Concrete handler implementations + pipeline wiring. Command handler (shell, Lite-only), HTTP handler (SSRF-hardened), synced at ContextStage/ToolStage/FinalizeStage, async at SessionStart/PostToolUse/Stop, delegate bridging (SubagentStart/SubagentStop).
+
+### Added
+- **`internal/hooks/handlers/` package**: `CommandHandler` (exec wrapper, JSON I/O, env allowlist, edition policy recheck), `HTTPHandler` (SSRF-hardened HTTP client, retry-once on 5xx, 4xx error no-retry, response parsing for decision/context/updatedInput)
+- **Pipeline dispatcher integration**: `PipelineDeps.HookDispatcher` field (nil-safe noop fallback); stages call `deps.Hooks.Fire(ctx, evt)` at: ContextStage (SessionStart async + UserPromptSubmit sync), ToolStage (PreToolUse sync before exec + PostToolUse async), FinalizeStage (Stop async)
+- **Copy-on-write staging**: UserPromptSubmit + PreToolUse updatedInput buffered per-call; commit only when ALL sync hooks succeed; rejection/timeout discards buffer (H2)
+- **Delegate event bridge**: `delegate_bridge.go` subscribes DelegateCompleted/DelegateFailed events from domain bus, fires SubagentStop async; SubagentStart sync fired directly in delegate_tool pre-call
+- **Command handler edition gating**: Re-checks `HookEditionPolicy` at dispatch (defense-in-depth); Lite-only with master-scope block on Standard tenant
+- **HTTP handler SSRF hardening**: Uses caller-supplied net.Dialer that pins resolved IP, blocks loopback/link-local/private ranges; auth headers (e.g. Authorization) encrypted at rest in cfg.Config["headers"], decrypted only at send-time; no redirects allowed (CheckRedirect returns ErrUseLastResponse)
+- **Server wiring**: `cmd/gateway_managed.go` constructs `hooks.NewStdDispatcher` with both handlers registered; passes dispatcher through `agent.ResolverDeps.HookDispatcher` and `delegateTool.SetHookDispatcher(...)`; falls back to `hooks.NewNoopDispatcher()` when `stores.Hooks` is nil
+- **Encryption key handling**: Reads `GOCLAW_ENCRYPTION_KEY` env for HTTP handler header decryption; optional (empty → no decryption)
+
+### Testing
+- **Unit tests**: `internal/hooks/handlers/command_test.go` (8 tests — exit codes, timeout, env allowlist, edition gate, ctx cancel), `http_test.go` (9 tests — response parsing, retry logic, SSRF blocking pre+post DNS, no redirects, auth header security)
+- **Integration tests**: `tests/integration/hooks_pipeline_test.go` (4 tests — SessionStart async, UserPromptSubmit block + context + updatedInput COW, PreToolUse block + args mutation, PostToolUse async, zero-overhead no-hooks path); `tests/integration/hooks_delegate_test.go` — SubagentStart/Stop with loop-depth guard M5
+
+### Changed
+- **Pipeline architecture**: 8-stage loop now fires hooks via `PipelineDeps.Dispatcher`; stage callbacks support nil-safe dispatcher (noop when not configured)
+- **Delegate tool**: `delegateTool.SetHookDispatcher(...)` enables async SubagentStop via existing domain events
+
+---
+
+#### Desktop Voice Management + STT Admin (2026-04-15)
+
+### Added
+- **Desktop voice picker**: Agent detail panel now includes a voice selector with live preview. Users can browse ElevenLabs voices, hear a sample, and persist the choice per agent on the desktop app.
+- **Desktop STT admin form**: Speech-to-text provider configuration (API keys, providers, WhatsApp opt-in toggle + privacy banner) available in desktop tool settings.
+- **Singleton voice preview**: Only one voice sample plays at a time; preview button hides automatically when a voice has no sample URL.
+- **Desktop i18n `tts` namespace**: Voice-management strings translated to English, Vietnamese, and Chinese; STT form labels added to the tools namespace.
+- **Desktop test harness**: Vitest + Testing Library infrastructure; voice picker and STT form covered by unit tests.
+
+### Changed
+- **Agent voice persistence (desktop)**: Voice selection merges into `other_config` without overwriting sibling fields.
+- **Tool settings routing (desktop)**: Speech-to-text tool opens the dedicated admin form instead of the generic JSON editor.
+
+---
+
+#### ElevenLabs Audio Manager Refactor — Phase 5 (2026-04-15)
+
+Channel STT migration (Telegram/Feishu/Discord) + WhatsApp voice transcription with tenant opt-in (default disabled due to E2E encryption trade-off, resolves privacy red-team finding).
+
+### Added
+- **WhatsApp voice transcription**: `internal/channels/whatsapp/stt.go` — opt-in per-tenant via `builtin_tools[stt].settings.whatsapp_enabled` (default `false` per Decision 6)
+- **Synchronous 10s timeout**: All 4 channels (Telegram/Feishu/Discord/WhatsApp) enforce ctx timeout for voice message processing; timeout/error → fallback label
+- **i18n fallback key**: `MsgVoiceMessageFallback` ("voice message" placeholder in en/vi/zh) rendered when STT unavailable or disabled
+- **Privacy banner**: Admin UI displays E2E encryption trade-off warning when enabling WhatsApp STT
+
+### Changed
+- **Channel STT handlers**: All 4 channels now call `audio.Manager.Transcribe()` with 10s timeout instead of per-channel `transcribeAudio()` helpers
+- **Channel factory signatures**: All 4 factories (`NewChannel`) accept `audioMgr *audio.Manager` parameter
+- **WhatsApp messaging**: Voice messages now transcribed (opt-in) and appended to message text for agent understanding
+
+### Removed
+- **Per-channel STT helpers**: Deleted `internal/channels/{telegram,feishu,discord}/stt.go` (consolidated into Manager)
+- **Telegram STT tests**: Deleted `internal/channels/telegram/stt_test.go` — coverage preserved in `internal/audio/proxy_stt/provider_test.go` (12 ported scenarios, deliberate deletion documented)
+
+### Resolved
+- **Audit finding P5-B1**: Gate G4 verified; Manager.Transcribe chain wired
+- **Audit finding P5-H1**: All transcribeAudio call sites migrated; grep confirms zero direct channel STT calls
+- **Audit finding P5-H2** + **Decision 6** (privacy): WhatsApp STT opt-in with default=false; privacy banner + docs note E2E trade-off
+- **Cross-phase XP-3**: Telegram test ported/deleted with 12-scenario coverage guarantee
+- **Cross-phase XP-4**: `MsgVoiceMessageFallback` pre-wired in Phase 5 step 1 (blocking)
+
+### Security / Privacy
+- **WhatsApp E2E encryption**: Voice transcription breaks end-to-end guarantee. **Tenant opt-in required** with explicit admin acknowledgment (privacy banner in UI)
+- **Temp file cleanup**: Existing `scheduleMediaCleanup` preserves file handles during 10s STT window; no race condition risk
+- **Audit logging**: WhatsApp STT invocation logged at info level for audit trail
+
+---
+
+#### ElevenLabs Audio Manager Refactor — Phase 4 (2026-04-15)
+
+STT via ElevenLabs Scribe + proxy fallback with tenant config migration + admin UI form. Legacy per-channel STT config bridged with 2-week deprecation grace.
+
+### Added
+- **ElevenLabs Scribe STT provider**: `internal/audio/elevenlabs/stt.go` — POST `/v1/speech-to-text`, multipart upload, 20MB cap, configurable language + diarization
+- **Proxy STT wrapper**: `internal/audio/proxy_stt/provider.go` — backward-compat bridge for legacy `media.TranscribeAudio` with automatic temp-file handling
+- **STT admin form**: `ui/web/src/pages/builtin-tools/stt-provider-form.tsx` — mirrors TTS form pattern, includes tenant config (API keys, providers list, WhatsApp opt-in toggle)
+- **`audio.Manager.Transcribe()`**: Chain-based STT dispatch with channel-override precedence (per-channel STTProxyURL wins over tenant builtin_tools[stt])
+- **i18n keys**: `MsgSTTAllProvidersFailed`, `MsgSTTLegacyConfigDeprecated`, `MsgSTTWhatsappPrivacyWarning` across en/vi/zh
+
+### Changed
+- **STT config location**: Migrated from per-channel fields (Telegram/Feishu/Discord `STTProxyURL`) to tenant `builtin_tools[stt].settings` (Decision 1 per audit)
+- **`builtin_tools[stt]` table entry**: New seed row via migration 000050 (PG) + schema.go incremental (SQLite)
+- **Legacy bridge**: Startup-time scan of per-channel STT configs → auto-registers `proxy_stt.Provider` with deprecation warn when tenant lacks `builtin_tools[stt]` (2-week grace period)
+
+### Resolved
+- **Audit finding P4-H1** (channel-override precedence): Decision 2 — per-channel config takes priority; tenant fallback when channel config absent
+- **Audit finding P4-H2** (Scribe endpoint verification): ElevenLabs Scribe v2 `/v1/speech-to-text` confirmed with xi-api-key auth
+- **Audit finding P4-B3** (explicit bridge loop): 3-channel explicit loop (Telegram, Feishu, Discord) replaces ambiguous iteration
+- **Cross-phase XP-3** (12 test ported): All 12 Telegram STT scenarios (NoProxy, EmptyFile, Success, Error, etc.) ported into `proxy_stt/provider_test.go` before Phase 5 channel migration
+
+### Deprecated
+- Per-channel `STTProxyURL`, `STTAPIKey`, `STTTenantID` fields (Telegram, Feishu, Discord configs) — soft deprecation with 2-week grace; migration to `builtin_tools[stt]` required for Phase 5+ channels
+
+### Fixed
+- **JSON schema divergence**: `duration_secs` → `audio_duration_secs` in Scribe response parsing (matches ElevenLabs API)
+- **Provider registration**: Scribe + SetSTTChain wired into setupAudioExtras for Phase 5 channel integration
+
+---
+
+#### ElevenLabs Audio Manager Refactor — Phase 3 (2026-04-14)
+
+Music generation via ElevenLabs + MiniMax with fallback chain. Suno provider fully removed from codebase (no official API, ToS violation risk).
+
+### Added
+- **ElevenLabs Music provider**: `internal/audio/elevenlabs/music.go` — POST `/v1/music`, model `music_v1`, binary MP3 response, 300s timeout, prompt + optional lyrics
+- **MiniMax Music provider**: `internal/audio/minimax/music.go` — POST `{base}/music_generation`, 2-step URL-download pattern, 200 MB cap, optional instrumentation toggle
+
+### Changed
+- **`create_audio` tool simplified**: Now thin Manager dispatcher (`NewCreateAudioTool(audioMgr *audio.Manager)`), removed inline provider logic + per-provider switch cases
+- **`audio.Manager.GenerateMusic/GenerateSFX`**: Chain-based resolution (elevenlabs → minimax for music, elevenlabs-only for SFX)
+- **`createAudio` builtin tool**: Unified dispatch via Manager instead of `providers.Registry` dependency injection
+
+### Removed
+- **Suno provider**: Fully excised (10 atomic locations) — research confirms no official API + ToS violations. Files deleted: `create_audio_suno.go`, `create_audio_minimax.go`, `create_audio_elevenlabs.go` shim. HTTP route removed. TS schema entry removed. Config provider removed.
+
+### Types
+- **`audio.MusicOptions`**: Added `Instrumental bool`, `Model string`, `TimeoutSec int` fields
+- **`audio.AudioResult`**: Added `Provider string` field for observability (tool span metadata)
+
+---
+
 ## [v2.66.0] — 2026-04-05
 
 ### Security
@@ -31,6 +294,165 @@ All notable changes to GoClaw Gateway are documented here. Format follows [Keep 
 ---
 
 ## [Unreleased]
+
+### Added
+
+#### ElevenLabs Audio Manager Refactor — Phase 1 (2026-04-14)
+
+Unified audio provider management via new `internal/audio/` package with pluggable interface-based architecture. Phase 1 wires TTS providers (ElevenLabs, OpenAI, Edge, MiniMax); STT/Music/SFX interfaces defined for Phase 3-4.
+
+**What changed:**
+- **`internal/audio/` package**: Central `Manager` orchestrates 4 provider kinds via interfaces (`TTSProvider`, `STTProvider`, `MusicProvider`, `SFXProvider`)
+- **Provider organization**: Implementations in `internal/audio/{elevenlabs,openai,edge,minimax}/`. ElevenLabs shared HTTP client (`xi-api-key` header) for both TTS and SFX subproviders
+- **`internal/tts/` → backward-compat alias**: 24-symbol package (15 types + 6 consts + 5 constructors + 5 signature guards). All pre-refactor callers compile unchanged, zero breaking changes
+- **Config extension**: `config.Audio` optional pointer (nil-safe) added for future STT/Music subsections. `cfg.Tts` retained unchanged
+- **ElevenLabs SFX tool**: `internal/tools/create_audio_elevenlabs.go` rewritten as thin shim calling `elevenlabs.NewSFXProvider(...).GenerateSFX(ctx, audio.SFXOptions{...})`
+- **WS `tts.*` namespace**: 6 methods unchanged externally
+
+**Impact**: Existing TTS flows fully compatible. New code can import `internal/audio` directly. STT/Music/SFX wiring deferred to Phase 3-4.
+
+#### ElevenLabs Audio Manager Enhancements — Phase 2 (2026-04-14)
+
+Voice discovery and agent-level audio config via new backend endpoints, in-memory cache, and web UI picker. Bundles producer/consumer context pattern (`store.WithAgentAudio`) for seamless voice/model resolution throughout the tool execution pipeline.
+
+**What changed:**
+- **Voice cache** (`internal/audio/voice_cache.go`): In-memory LRU (cap 1000 tenants) with TTL 1h, shared between HTTP + WS handlers, thread-safe under concurrent access
+- **Streaming TTS interface** (`internal/audio/types.go`): New `StreamingTTSProvider` optional interface for ElevenLabs `/v1/text-to-speech/{voice_id}/stream` chunked playback
+- **ElevenLabs enhancements**: Model allowlist (11_v3, eleven_flash_v2_5, eleven_multilingual_v2, eleven_turbo_v2_5), `SynthesizeStream()` method, `ListVoices()` via `/v1/voices`
+- **Agent audio context** (`internal/store/context.go`): New `WithAgentAudio` / `AgentAudioFromCtx` bundle; producer wires snapshot at dispatcher level (internal/agent/), consumer (`TtsTool.Execute`) reads voice/model overrides from agent config
+- **Agent config extension** (`agents.other_config` JSONB): New `tts_voice_id` and `tts_model_id` fields with resolution precedence: args → agent → tenant → provider default
+- **HTTP + WS endpoints**: GET /v1/voices (cached), POST /v1/voices/refresh (admin-only), WS method `voices.list` + `voices.refresh`
+- **Web voice picker** (`ui/web/src/components/voice-picker.tsx`): Combobox with search, preview button (HTML audio + onError → refresh), embedded in PromptSettingsSection
+- **i18n**: 10 new frontend keys (voice_label, voice_placeholder, voice_refresh, voice_preview, model_label, etc.) + 2 new backend keys (MsgTtsUnknownModel, MsgVoicesListFailed) across en/vi/zh
+
+**Impact**: Existing TTS callers fully compatible (backward-compat via Phase 1 alias layer). Web UI gains voice discovery + per-agent voice/model overrides. Zero breaking changes. Integration test validates producer+consumer context flow.
+
+#### Trace Stop/Abort Redesign — Cascading 4-Layer Fix (2026-04-14)
+
+The Stop button on the traces page now reliably aborts running traces. Previous implementation had independent race conditions across HTTP streaming, agent router, trace persistence, and UI polling; this redesign fixes all four layers atomically.
+
+**What changed:**
+- **HTTP streaming ctx-aware**: Provider clients use transport-level `ResponseHeaderTimeout` + `IdleConnTimeout` instead of socket-level `Client.Timeout`. SSE body closes immediately on ctx cancel via goroutine-based wrapper (prevents 5-minute socket block).
+- **Router 2-phase abort**: `AbortRun()` atomically transitions to aborting state, waits 3s for goroutine exit via `Done` channel, then force-marks trace `cancelled` if timeout. No orphaned goroutines, no "not found" race.
+- **Trace status persistence**: `SetTraceStatus()` detached from request context with 5s timeout, 3-try exponential backoff, and bounded in-memory retry queue (10 max tries). Stale recovery worker runs every 30s, catches zombie traces in 2 minutes instead of 30.
+- **Real-time UI updates**: New WS event `trace.status` broadcasts status changes immediately after persist succeeds. UI drops 60s polling interval, subscribes to events instead.
+- **Tool execution audit**: Shell commands use process-group kill (`SIGTERM`→3s→`SIGKILL`). Browser automation (Rod) closes pages on ctx cancel. MCP delegates timeout after 5s.
+- **i18n**: 6 abort toast variants (success/timeout/not-found/already-done/db-error/unknown) + translations for en/vi/zh.
+
+**Impact**: Existing traces and sessions unaffected. UI now reflects backend state accurately. Zero breaking changes.
+
+#### Preserve User-Provided Filenames for Media Uploads (2026-04-14)
+
+Filenames provided by users for chat media uploads now survive the channel adapter → agent → disk persistence round trip, enabling vault enrichment to process human-readable document names instead of falling back to generic UUID-only storage.
+
+**Why**: Vault enrichment was skipping UUID-only disk names (design safety to avoid noisy auto-generated files), causing documents with Vietnamese or CJK stems to remain unenriched and lose semantic context.
+
+**What changed**:
+- **`bus.MediaFile.Filename` field**: Channel adapters now populate this field when source provides original filename (e.g., user-selected file upload, Telegram file_name, WhatsApp display_name)
+- **Sanitizer** (`internal/agent/media_filename.go`): Derives safe stems via `sanitizeFilename()` with:
+  - **Vietnamese pre-NFD map**: `đ/Đ → d` (Unicode NFD does not decompose these precomposed letters)
+  - **CJK passthrough**: Dominant-script heuristic detects Vietnamese/CJK inputs and preserves original runes (no ASCII slugification)
+  - **Filesystem safety**: Removes control chars, path traversal markers (`..`, `/`, `\\`), and reserved names
+  - **Max length**: 60 runes (script-aware, not byte-based) to avoid platform path limits
+- **Disk naming scheme**: `{sanitized-stem}-{8hex}{ext}` (e.g., `bao-cao-q4-a1b2c3d4.pdf`) when sanitizer returns non-empty stem; UUID fallback `{uuid}{ext}` for empty stems (voice notes, clipboard pastes, tool-generated media)
+- **Vault enrichment gating** (`internal/vault/enrich_skip_filter.go`): Now skips UUID-only filenames (matching `^[0-9a-f]{8}-...$` pattern) while processing named stems
+- **6 channel adapters wired**: Telegram, Slack, Discord, Feishu/Lark, Zalo OA, WhatsApp all set `MediaFile.Filename` when available
+- **Tools + orchestration**: `web_search` tool (PDF downloads), delegate/subagent media propagation, all preserve filenames end-to-end
+
+**Impact**: Existing flows with empty `Filename` are unaffected (UUID-named as before). New flows with filenames produce human-readable, enrichable disk names. Zero breaking changes.
+
+### Security
+
+#### Tenant-Scope Hotfix (2026-04-12)
+
+3 privilege-escalation vulnerabilities closed, same class as `b419f352` (Phase 1 `config.*` hotfix):
+
+- **CRITICAL** `PUT /v1/tools/builtin/{name}` — non-master admin could corrupt global tool defaults
+- **CRITICAL** `POST /v1/packages/install|uninstall` — non-master admin could run `pip`/`npm`/`apk` server-wide
+- **HIGH** `POST /v1/api-keys/{id}/revoke` (HTTP + WS) — tenant admin could revoke NULL-tenant system keys
+
+Fix adds shared `store.IsMasterScope(ctx)` predicate + `http.requireMasterScope` guard on all three endpoints. `APIKeyStore.Delete` dropped (YAGNI + dormant same-class vuln). WS router now injects role into ctx. Tests: 17 new unit tests. Audit: `plans/reports/debugger-260412-0922-tenant-scope-audit.md`.
+
+### Added
+
+#### Per-Tenant Tool Configuration — 4-Tier Overlay (2026-04-12)
+
+Tenant admins can override tool configuration without affecting other tenants. Overlay: `per-agent > tenant > global > hardcoded`, resolved at Execute time via `tools.BuiltinToolSettingsFromCtx(ctx)` — no Tool interface changes. See `docs/03-tools-system.md` § 14. Applies to `web_search`, `web_fetch`, `tts`. Web UI dialog is tenant-scope aware.
+- **Phase 5** (1e5e84d5): Builtin tools settings editor on web UI
+- **Phase 7 rest** (30a40bbe): Exa + Tavily web search providers with ranked ordering via `provider_order` config. Credit: @kaitranntt for original PR 825 work, ported to tenant settings storage pattern
+  - New files: `internal/tools/{web_search_exa,web_search_tavily,web_search_config}.go`
+  - 11 new unit tests for provider chain + normalization
+  - Provider-selection helper: `NormalizeWebSearchProviderOrder(order []string) → []string` (DuckDuckGo always last as free fallback)
+- **Phase 8** (def1712f, 43ee918b): Tenant-aware singleton pool pattern for stateful tools
+  - `web_fetch`: Domain policy override via `resolvePolicy(ctx)` reads tenant config; 6 new unit tests
+  - `tts`: Primary provider override via `resolvePrimary(ctx, mgr)` reads tenant config; 5 new unit tests
+  - Feature flag: `config.Tools.TenantScopedSingletons` (default: false) gates per-tenant pool instances with LRU eviction (64 tenants) + 30 min idle timeout
+
+### Fixed
+
+#### Pancake Platform Field — Mandatory Select (2026-04-14)
+
+- **`platform` field changed from optional text to required dropdown**: `channel-schemas.ts` replaces the free-text `platform` field with a `select` type (11 options: facebook, instagram, threads, tiktok, youtube, shopee, line, google, chat_plugin, lazada, tokopedia). `required: true` is now enforced by the form dialog on create.
+- **Config required-field validation (create-only)**: `channel-instance-form-dialog.tsx` now enforces `required` on config fields at submit time. Validation is scoped to create flows only — edit flows are unchanged to avoid silent breakage on existing channels with no stored `platform`.
+- **i18n**: Platform field label options and config field metadata added to `channels.json` for en/vi/zh.
+- **Auto-detect log level**: `pancake.go` auto-detect block demoted from `slog.Info` to `slog.Debug` to stop log noise on every channel start; auto-detect remains as a fallback for existing channels with no stored `platform`.
+
+#### Feishu/Lark Writer Management Commands — Issue #818 Closed (2026-04-11)
+- **Issue #818 resolution**: Closes UX gap where users saw `/addwriter` error messages but Feishu had no handler
+- **Phase 1 — Thread reply routing**: Inbound messages with `thread_id` now properly route responses back to the same Feishu thread via `/open-apis/im/v1/messages/{id}/reply`. New `feishu_reply_target_id` metadata key included in `routingMetaKeys` allowlist. Graceful fallback to `SendMessage()` if thread root deleted
+- **Phase 2 — Document auto-fetch**: Pasted Lark docx URLs auto-detected and fetched via `/open-apis/docx/v1/documents/{id}/raw_content`. Content injected as `[Lark Doc: URL]` markers. LRU cache (128 entries, 5-min TTL) + 8000-rune truncation per document. Requires `docx:document:readonly` permission + owner grant
+- **Phase 3 — Writer management commands**: Added `/addwriter <@user or reply>`, `/removewriter`, `/writers` for group file-write permission control. Group-only (DMs rejected early). Requires existing writer authorization. Last-writer guard prevents removing final writer. Empty-writer groups allow bootstrap via explicit `/addwriter @self`. 10s timeout bounds Feishu API calls
+
+### Added
+
+#### Vault & Knowledge Graph 10k Optimization (2026-04-12)
+- **Graph visualization endpoints**: `GET /v1/vault/graph` (cross-tenant) + `GET /v1/agents/{agentID}/kg/graph/compact` for rendering document relationships and semantic entities with support for up to 10k nodes (up from 2k default limit)
+- **FA2 layout optimization**: Graph layout computation moved to web worker (non-blocking frontend rendering)
+- **Semantic zoom**: UI-level semantic zoom support for graph visualization
+- **`DEFAULT_NODE_LIMIT` increase**: 200 → 2000 nodes per graph view to support larger knowledge bases
+
+### Testing
+
+#### Test Speed-Up + Coverage Ratchet Removal (2026-04-11)
+- **Philosophy shift**: Signal over coverage %. Reject mock-heavy/slow/low-signal tests even if % drops. Coverage ratchet gate removed — was creating pressure to write forced tests instead of fast, valuable ones
+- **`internal/vault` retry tests**: 16.3s → 0.6s. New `fastBackoffsForTest(t)` helper overrides package-level `enrichRetryBackoffs`/`enrichRetryTimeouts` so retry tests don't wait through real exponential backoff (was 6s per all-retry test). Production behavior unchanged
+- **`internal/cron` scheduler tests**: 11.7s → 1.5s. `runLoopTickInterval` extracted as package var (default 1s, unchanged); test-only `setFastTick(t)` helper overrides to 20ms so 6 scheduler tests don't sleep 1.5s each waiting for ticks
+- **`internal/channels/facebook` retry tests**: 6.3s → 3.0s. `graphBackoffBase` extracted as package var (default 1s, unchanged); `newFakeGraph` helper overrides to 1ms so HTTP retry tests don't burn 3+2+1s of real waits
+- **Vault duplicates removed**: `TestCallClassifyWithRetry_FirstAttemptSuccess` (dup of `_Success`) and `_MaxRetriesConstant` (dup of `_RetriesAndBackoffs`)
+- **Total saved**: ~29s wall-clock (3 packages: 34.3s → 5.1s). Full `go test -race ./...` now runs in ~57s (was ≥90s with hangs)
+- **Removed**: `scripts/check_coverage.go` + `scripts/coverage_thresholds.json` + "Coverage ratchet gate" CI step. Coverage profile + `go tool cover -func` summary preserved as informational only
+
+#### Test Coverage Improvement — Wave 1-3 (2026-04-11)
+- **CI ratchet gate**: `scripts/check_coverage.go` parses `coverage.out` per package and fails CI if coverage drops below stored floors in `scripts/coverage_thresholds.json`. `--update` flag ratchets thresholds upward when coverage improves. 61 packages locked.
+- **`-coverpkg=./...`**: CI now runs `go test -race -coverpkg=./...` so integration tests in `tests/integration/` are attributed to the source packages under test.
+- **`internal/testutil`**: shared helpers — `TestDB()` (integration-tagged), context builders (`TenantCtx`, `UserCtx`, `AgentCtx`, `FullCtx`), mockgen generate hooks for `SessionStore`/`AgentStore`/`ContactStore`.
+- **~663 new test functions across 36 files**:
+  - Wave 1 — `store/pg` integration test depth (session pagination/isolation, agent context files/profiles, agent_links CRUD, cron CRUD+state, vault CRUD/search, memory BM25/isolation); `gateway` unit tests (ratelimit, event_filter, server auth); `gateway/methods` handlers (sessions, skills, cron); `http` auth helpers + path security; `tasks.TaskTicker` (lifecycle, recoverAll, followupInterval); `agent` (pruning, extractive memory, intent classify, loop utils, inject, evolution guardrails).
+  - Wave 2 — `config` (normalize, expand/contract home, env overlays, system configs); `skills` (BM25 tokenize/index/search/rebuild, frontmatter parser, loader/context); `mcp` (pool, manager status, bridge BM25, env resolution); `backup` (ArchiveDirectory, SanitizeDSN, WritePgpass, Backup.Run); `channels/slack` (mention, user cache, classifyMime); `channels/discord` (resolveDisplayName, command routing, classifyMediaType); `channels/telegram` (markdown→HTML, table rendering, detectMention, service message); `channels/whatsapp` (extractTextContent, chunkText, markdown→WhatsApp, mimeToExt, classifyDownloadError).
+  - Wave 3 — `cache.PermissionCache` (9 methods + invalidation); `sessions` key builders + manager edge cases; `knowledgegraph` extractor (mock provider success/filter/error/invalid-JSON/long-text chunking), splitChunks, mergeResults.
+- **Coverage deltas** (local `go test`, no DB):
+  - `internal/knowledgegraph` 47.1% → 91.8% (+44.7pp)
+  - `internal/skills` 7.7% → 37.5% (+29.8pp)
+  - `internal/config` 19.3% → 48.2% (+28.9pp)
+  - `internal/cache` 72.9% → 96.9% (+24.0pp)
+  - `internal/sessions` 70.7% → 94.4% (+23.7pp)
+  - `internal/gateway` 0% → 15.1%
+  - `internal/mcp` 12.1% → 26.3% (+14.2pp)
+  - `internal/channels/whatsapp` 8.8% → 21.3% (+12.5pp)
+  - `internal/channels/discord` 15.6% → 27.7% (+12.1pp)
+  - `internal/tasks` 0% → 55.4%
+  - `internal/agent` 28.8% → 36.8%
+  - store/pg integration test depth improved — coverage attribution requires live pgvector in CI
+- **Deferred to separate plans**: `channels/feishu` (0%, 102 funcs), `providers/acp` (0%, 41 funcs), `channels/zalo` (regressed to 5%), `providers` (56%, 325 funcs), `channels/facebook` (31.8%)
+
+#### Deferred Coverage Waves A-C — Resolved (2026-04-11)
+Follow-up to Wave 1-3 above. Addresses the 6 modules deferred as too-large/greenfield/regression. Plan: `plans/260411-2020-deferred-coverage-waves/`.
+- **Wave A** — `internal/providers` 57.0 → 62.5% (hotspot tests for adapter/retry/SSE); `channels/zalo` 7.2 → 65.3% (regression fix + parse/policy/HTTP coverage)
+- **Wave B** — `channels/facebook` 23.1 → 81.9% (full bot lifecycle, media, policy); `store/pg` 1.3 → 3.5% (⚠️ capped at unit-test-only; 30% target requires CI integration wiring + pre-existing failing tenant-isolation tests — deferred separately)
+- **Wave C** — `providers/acp` 0.0 → **80.0%** greenfield (7 test files, 2560 LOC; JSON-RPC framing with adversarial input fuzz, terminal sandbox + allowlist + deny-pattern enforcement, ProcessPool lifecycle, tool_bridge with 3 permission modes); `channels/feishu` 20.6 → **63.9%** (15 test files; AES-CBC webhook decrypt + tamper detection, WS proto framing, larkclient HTTP error paths, media send/receive, bot parse/policy, lifecycle)
+- **Security tests added**: ACP JSON-RPC parser no-panic on 7 adversarial inputs; sandbox path-traversal + binary allowlist + deny-pattern (`rm -rf` even under `bash`); env sanitization strips 8 prefixes + 13 exact-name vars (GOCLAW/ANTHROPIC/OPENAI/DATABASE/AWS/GITHUB/SSH/STRIPE/DB_DSN/PG*/NPM_TOKEN/SECRET_KEY/JWT_SECRET). Feishu AES-CBC tamper detection + token mismatch drop; no real credentials in any fixture
+- **Scale**: ~375 new test functions across 22 files (~5858 LOC); zero source modifications — pure additive coverage
+- **Ratchet bumped**: `scripts/coverage_thresholds.json` — feishu 0 → 63.89, acp 0 → 80.05
 
 ### Added
 

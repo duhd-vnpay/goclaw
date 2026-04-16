@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/nextlevelbuilder/goclaw/internal/audio"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
@@ -42,11 +43,16 @@ type telegramInstanceConfig struct {
 // Factory creates a Telegram channel from DB instance data (no extra stores).
 func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 	msgBus *bus.MessageBus, pairingSvc store.PairingStore) (channels.Channel, error) {
-	return buildChannel(name, creds, cfg, msgBus, pairingSvc)
+	return buildChannel(name, creds, cfg, msgBus, pairingSvc, nil)
 }
 
 // FactoryWithStores returns a ChannelFactory that includes optional stores via functional options.
 func FactoryWithStores(agentStore store.AgentStore, configPermStore store.ConfigPermissionStore, teamStore store.TeamStore, subagentTaskStore store.SubagentTaskStore, pendingStore store.PendingMessageStore, extraOpts ...Option) channels.ChannelFactory {
+	return FactoryWithStoresAndAudio(agentStore, configPermStore, teamStore, subagentTaskStore, pendingStore, nil, extraOpts...)
+}
+
+// FactoryWithStoresAndAudio returns a ChannelFactory with all stores and STT support.
+func FactoryWithStoresAndAudio(agentStore store.AgentStore, configPermStore store.ConfigPermissionStore, teamStore store.TeamStore, subagentTaskStore store.SubagentTaskStore, pendingStore store.PendingMessageStore, audioMgr *audio.Manager, extraOpts ...Option) channels.ChannelFactory {
 	return func(name string, creds json.RawMessage, cfg json.RawMessage,
 		msgBus *bus.MessageBus, pairingSvc store.PairingStore) (channels.Channel, error) {
 		opts := []Option{
@@ -57,12 +63,12 @@ func FactoryWithStores(agentStore store.AgentStore, configPermStore store.Config
 			WithPendingMessageStore(pendingStore),
 		}
 		opts = append(opts, extraOpts...)
-		return buildChannel(name, creds, cfg, msgBus, pairingSvc, opts...)
+		return buildChannel(name, creds, cfg, msgBus, pairingSvc, audioMgr, opts...)
 	}
 }
 
 func buildChannel(name string, creds json.RawMessage, cfg json.RawMessage,
-	msgBus *bus.MessageBus, pairingSvc store.PairingStore, opts ...Option) (channels.Channel, error) {
+	msgBus *bus.MessageBus, pairingSvc store.PairingStore, audioMgr *audio.Manager, opts ...Option) (channels.Channel, error) {
 
 	var c telegramCreds
 	if len(creds) > 0 {
@@ -119,7 +125,7 @@ func buildChannel(name string, creds json.RawMessage, cfg json.RawMessage,
 		tgCfg.GroupPolicy = "pairing"
 	}
 
-	ch, err := New(tgCfg, msgBus, pairingSvc, opts...)
+	ch, err := New(tgCfg, msgBus, pairingSvc, audioMgr, opts...)
 	if err != nil {
 		return nil, err
 	}

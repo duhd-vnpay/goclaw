@@ -89,3 +89,5 @@ compose.d/*
 /mise
 /.mise
 .gitnexus
+*.test
+goclaw-patched-linux-amd64

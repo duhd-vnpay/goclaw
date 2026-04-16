@@ -5,6 +5,7 @@ import { clearSetupSkippedState } from "@/lib/setup-skip";
 import type { TenantMembership } from "@/types/tenant";
 
 type UserRole = "owner" | "admin" | "operator" | "viewer" | "";
+export type Edition = "standard" | "lite";
 
 export interface OidcUserProfile {
   id: string;
@@ -28,6 +29,8 @@ interface AuthState {
   tenantName: string;
   tenantSlug: string;
   isOwner: boolean;
+  isMasterScope: boolean; // server-derived: owner OR on master tenant — advisory UI hint only
+  edition: Edition; // server edition — UI feature gating
   availableTenants: TenantMembership[];
   tenantSelected: boolean; // true after user picks a tenant (or auto-selected)
 
@@ -43,6 +46,7 @@ interface AuthState {
   setConnected: (connected: boolean, serverInfo?: { name?: string; version?: string }) => void;
   setRole: (role: UserRole) => void;
   setTenant: (id: string, name: string, slug: string, isOwner: boolean) => void;
+  setConnectInfo: (info: { isMasterScope: boolean; edition: Edition }) => void;
   setAvailableTenants: (tenants: TenantMembership[]) => void;
   setTenantSelected: (selected: boolean) => void;
   logout: () => void;
@@ -61,6 +65,8 @@ export const useAuthStore = create<AuthState>()(
       tenantName: "",
       tenantSlug: "",
       isOwner: false,
+      isMasterScope: false,
+      edition: "standard" as Edition,
       availableTenants: [],
       tenantSelected: !!localStorage.getItem(LOCAL_STORAGE_KEYS.TENANT_ID),
 
@@ -96,6 +102,10 @@ export const useAuthStore = create<AuthState>()(
         set({ tenantId: id, tenantName: name, tenantSlug: slug, isOwner });
       },
 
+      setConnectInfo: ({ isMasterScope, edition }) => {
+        set({ isMasterScope, edition });
+      },
+
       setAvailableTenants: (tenants) => {
         set({ availableTenants: tenants });
       },
@@ -111,8 +121,10 @@ export const useAuthStore = create<AuthState>()(
         clearSetupSkippedState();
         set({
           token: "", userId: "", senderID: "", connected: false, role: "", serverInfo: null,
-          tenantId: "", tenantName: "", tenantSlug: "", isOwner: false, availableTenants: [],
-          tenantSelected: false, oidcUser: null, oidcEnabled: false, oidcStatusLoaded: false,
+          tenantId: "", tenantName: "", tenantSlug: "", isOwner: false,
+          isMasterScope: false, edition: "standard",
+          availableTenants: [], tenantSelected: false,
+          oidcUser: null, oidcEnabled: false, oidcStatusLoaded: false,
         });
       },
     }),

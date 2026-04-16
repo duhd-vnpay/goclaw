@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mymmrac/telego"
 
+	"github.com/nextlevelbuilder/goclaw/internal/audio"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
@@ -45,6 +46,7 @@ type Channel struct {
 	pendingDraftID    sync.Map           // localKey string → int (draftID)
 	pairingHandler    *channels.PairingHandler // email-OTP pairing handler (nil if not configured)
 	pairingFlows      sync.Map                 // senderID string → *channels.PairingFlowEntry
+	audioMgr          *audio.Manager    // unified STT via audio.Manager (nil = no STT)
 	// pairingService, approvedGroups, pairingDebounce, groupHistory, historyLimit, requireMention
 	// are inherited from channels.BaseChannel.
 }
@@ -92,8 +94,9 @@ func WithPendingMessageStore(s store.PendingMessageStore) Option {
 
 // New creates a new Telegram channel from config.
 // pairingSvc is optional (nil = fall back to allowlist only).
+// audioMgr is optional (nil = STT disabled).
 // Optional stores are set via Option functions.
-func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore, chanOpts ...Option) (*Channel, error) {
+func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore, audioMgr *audio.Manager, chanOpts ...Option) (*Channel, error) {
 	var botOpts []telego.BotOption
 
 	if cfg.APIServer != "" {
@@ -159,6 +162,7 @@ func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.Pai
 		httpClient:  httpClient,
 		transport:   transport,
 		mentionMode: mentionMode,
+		audioMgr:    audioMgr,
 	}
 	ch.SetPairingService(pairingSvc)
 	ch.SetGroupHistory(channels.MakeHistory(channels.TypeTelegram, nil, base.TenantID()))

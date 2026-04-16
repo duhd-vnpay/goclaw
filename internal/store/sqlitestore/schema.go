@@ -3,6 +3,7 @@
 package sqlitestore
 
 import (
+	"context"
 	"database/sql"
 	_ "embed"
 	"errors"
@@ -15,7 +16,7 @@ var schemaSQL string
 
 // SchemaVersion is the current SQLite schema version.
 // Bump this when adding new migration steps below.
-const SchemaVersion = 16
+const SchemaVersion = 24
 
 // migrations maps version → SQL to apply when upgrading FROM that version.
 // schema.sql always represents the LATEST full schema (for fresh DBs).
@@ -413,9 +414,30 @@ CREATE INDEX IF NOT EXISTS idx_vault_docs_team ON vault_documents(team_id);`,
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cron_jobs_agent_tenant_name
   ON cron_jobs(agent_id, tenant_id, name);`,
 
-	// Version 15 → 16: Channel Pairing via Email OTP.
-	// Add pairing_verifications table, email + verified_user_id columns to channel_contacts and paired_devices.
-	15: `CREATE TABLE IF NOT EXISTS pairing_verifications (
+	// Version 15 → 16: vault media linking schema
+	// (team_task_attachments.base_name, vault_documents.path_basename,
+	//  vault_links.metadata, auto-linking indexes).
+	// Backfill of base_name / path_basename happens in backfillV16 below
+	// (Go-loop — SQLite has no regexp_replace in modernc.org/sqlite bundle).
+	// Also includes Channel Pairing via Email OTP (local feature).
+	15: `ALTER TABLE team_task_attachments ADD COLUMN base_name TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_tta_tenant_basename
+  ON team_task_attachments(tenant_id, base_name);
+
+ALTER TABLE vault_documents ADD COLUMN path_basename TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_vault_docs_basename
+  ON vault_documents(tenant_id, path_basename);
+
+ALTER TABLE vault_links ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_vault_links_source
+  ON vault_links(json_extract(metadata, '$.source'))
+  WHERE json_extract(metadata, '$.source') IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_vault_docs_delegation
+  ON vault_documents(json_extract(metadata, '$.delegation_id'))
+  WHERE json_extract(metadata, '$.delegation_id') IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS pairing_verifications (
     id              TEXT NOT NULL PRIMARY KEY,
     user_id         TEXT NOT NULL,
     email           VARCHAR(255) NOT NULL,
@@ -434,6 +456,208 @@ ALTER TABLE channel_contacts ADD COLUMN email VARCHAR(255);
 ALTER TABLE channel_contacts ADD COLUMN verified_user_id TEXT;
 ALTER TABLE paired_devices ADD COLUMN verified_user_id TEXT;
 ALTER TABLE paired_devices ADD COLUMN email VARCHAR(255);`,
+
+	// Version 16 → 17: path prefix index for vault tree lazy-load queries.
+	16: `CREATE INDEX IF NOT EXISTS idx_vault_docs_path_prefix ON vault_documents(tenant_id, path);`,
+
+	// Version 17 → 18: seed STT builtin_tools row.
+	17: `INSERT INTO builtin_tools (name, display_name, description, category, enabled, settings)
+VALUES ('stt', 'Speech-to-Text', 'Transcribe voice/audio messages to text using ElevenLabs Scribe or a proxy service', 'media', 1, '{}')
+ON CONFLICT (name) DO NOTHING;`,
+
+	// Version 18 → 19: backfill mode: "cache-ttl" for agents with custom
+	// context_pruning config missing the mode field. Mirrors PG migration 51.
+	// Preserves user intent after the opt-in default flip. NULL rows stay NULL.
+	18: `UPDATE agents
+SET context_pruning = json_set(context_pruning, '$.mode', 'cache-ttl')
+WHERE context_pruning IS NOT NULL
+  AND context_pruning <> ''
+  AND context_pruning <> '{}'
+  AND json_valid(context_pruning)
+  AND json_type(context_pruning) = 'object'
+  AND json_extract(context_pruning, '$.mode') IS NULL;`,
+
+	// Version 19 → 20: hooks system (mirrors PG migrations 000052–000055).
+	// Creates hooks, hook_agents, hook_executions, tenant_hook_budget tables
+	// with final schema. SQLite/desktop never shipped with intermediate names
+	// (agent_hooks, agent_hook_agents) so we create the final form directly.
+	19: addHooksTables,
+
+	// Versions 20–22: no-op — consolidated into v19 above.
+	20: `SELECT 1;`,
+	21: `SELECT 1;`,
+	22: `SELECT 1;`,
+
+	// Version 23 → 24: vault_documents scope/ownership consistency triggers.
+	// Mirrors PG migration 000055 CHECK constraint; SQLite cannot add CHECK via
+	// ALTER TABLE so we use BEFORE INSERT + BEFORE UPDATE triggers instead.
+	// fresh DBs get the inline CHECK in schema.sql; existing DBs get triggers.
+	23: `CREATE TRIGGER IF NOT EXISTS trg_vault_docs_scope_consistency_ins
+  BEFORE INSERT ON vault_documents
+  FOR EACH ROW
+  WHEN NOT (
+    (NEW.scope='personal' AND NEW.agent_id IS NOT NULL AND NEW.team_id IS NULL) OR
+    (NEW.scope='team'     AND NEW.team_id  IS NOT NULL AND NEW.agent_id IS NULL) OR
+    (NEW.scope='shared'   AND NEW.agent_id IS NULL     AND NEW.team_id  IS NULL) OR
+    NEW.scope='custom'
+  )
+  BEGIN
+    SELECT RAISE(ABORT, 'vault_documents_scope_consistency violation');
+  END;
+
+CREATE TRIGGER IF NOT EXISTS trg_vault_docs_scope_consistency_upd
+  BEFORE UPDATE OF scope, agent_id, team_id ON vault_documents
+  FOR EACH ROW
+  WHEN NOT (
+    (NEW.scope='personal' AND NEW.agent_id IS NOT NULL AND NEW.team_id IS NULL) OR
+    (NEW.scope='team'     AND NEW.team_id  IS NOT NULL AND NEW.agent_id IS NULL) OR
+    (NEW.scope='shared'   AND NEW.agent_id IS NULL     AND NEW.team_id  IS NULL) OR
+    NEW.scope='custom'
+  )
+  BEGIN
+    SELECT RAISE(ABORT, 'vault_documents_scope_consistency violation');
+  END;`,
+}
+
+// addHooksTables is the SQLite incremental migration for schema v19 → v20.
+// Mirrors PG migrations 000052–000055 (consolidated — desktop never shipped
+// with intermediate agent_hooks / agent_hook_agents names).
+const addHooksTables = `
+CREATE TABLE IF NOT EXISTS hooks (
+    id           TEXT NOT NULL PRIMARY KEY,
+    tenant_id    TEXT NOT NULL DEFAULT '0193a5b0-7000-7000-8000-000000000001',
+    scope        TEXT NOT NULL CHECK (scope IN ('global', 'tenant', 'agent')),
+    event        TEXT NOT NULL,
+    handler_type TEXT NOT NULL CHECK (handler_type IN ('command', 'http', 'prompt', 'script')),
+    config       TEXT NOT NULL DEFAULT '{}',
+    matcher      TEXT,
+    if_expr      TEXT,
+    timeout_ms   INTEGER NOT NULL DEFAULT 5000,
+    on_timeout   TEXT NOT NULL DEFAULT 'block' CHECK (on_timeout IN ('block', 'allow')),
+    priority     INTEGER NOT NULL DEFAULT 0,
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    version      INTEGER NOT NULL DEFAULT 1,
+    source       TEXT NOT NULL DEFAULT 'ui' CHECK (source IN ('ui', 'api', 'seed', 'builtin')),
+    metadata     TEXT NOT NULL DEFAULT '{}',
+    name         TEXT,
+    created_by   TEXT,
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_hooks_lookup
+    ON hooks (tenant_id, event)
+    WHERE enabled = 1;
+CREATE TABLE IF NOT EXISTS hook_agents (
+    hook_id  TEXT NOT NULL REFERENCES hooks(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    PRIMARY KEY (hook_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_hook_agents_agent
+    ON hook_agents (agent_id);
+CREATE TABLE IF NOT EXISTS hook_executions (
+    id           TEXT NOT NULL PRIMARY KEY,
+    hook_id      TEXT REFERENCES hooks(id) ON DELETE SET NULL,
+    session_id   TEXT,
+    event        TEXT NOT NULL,
+    input_hash   TEXT,
+    decision     TEXT NOT NULL CHECK (decision IN ('allow', 'block', 'error', 'timeout')),
+    duration_ms  INTEGER NOT NULL DEFAULT 0,
+    retry        INTEGER NOT NULL DEFAULT 0,
+    dedup_key    TEXT,
+    error        TEXT,
+    error_detail BLOB,
+    metadata     TEXT NOT NULL DEFAULT '{}',
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_hook_executions_session
+    ON hook_executions (session_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hook_executions_dedup
+    ON hook_executions (dedup_key)
+    WHERE dedup_key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS tenant_hook_budget (
+    tenant_id      TEXT NOT NULL PRIMARY KEY,
+    month_start    TEXT NOT NULL,
+    budget_total   INTEGER NOT NULL DEFAULT 0,
+    remaining      INTEGER NOT NULL DEFAULT 0,
+    last_warned_at TEXT,
+    metadata       TEXT NOT NULL DEFAULT '{}',
+    updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);`
+
+// backfillV16 populates base_name / path_basename for rows that existed
+// before the v15 → v16 migration. Idempotent — re-running on already-filled
+// rows is a no-op thanks to the WHERE base_name = '' filter.
+func backfillV16(ctx context.Context, db *sql.DB) error {
+	type row struct{ id, path string }
+
+	// ---- team_task_attachments ----
+	attRows, err := collectIDPath(ctx, db,
+		`SELECT id, path FROM team_task_attachments WHERE base_name = ''`)
+	if err != nil {
+		return fmt.Errorf("v16 scan attachments: %w", err)
+	}
+	if err := updateBaseNames(ctx, db,
+		`UPDATE team_task_attachments SET base_name = ? WHERE id = ?`, attRows); err != nil {
+		return fmt.Errorf("v16 update attachments: %w", err)
+	}
+
+	// ---- vault_documents ----
+	docRows, err := collectIDPath(ctx, db,
+		`SELECT id, path FROM vault_documents WHERE path_basename = ''`)
+	if err != nil {
+		return fmt.Errorf("v16 scan vault_docs: %w", err)
+	}
+	if err := updateBaseNames(ctx, db,
+		`UPDATE vault_documents SET path_basename = ? WHERE id = ?`, docRows); err != nil {
+		return fmt.Errorf("v16 update vault_docs: %w", err)
+	}
+	return nil
+}
+
+// collectIDPath reads (id, path) tuples for a SELECT that returns exactly
+// those two columns. Separated so backfillV16 stays readable.
+func collectIDPath(ctx context.Context, db *sql.DB, q string) ([][2]string, error) {
+	rows, err := db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out [][2]string
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return nil, err
+		}
+		out = append(out, [2]string{id, path})
+	}
+	return out, rows.Err()
+}
+
+// updateBaseNames runs a prepared UPDATE inside one transaction for all rows.
+// No-op when rows is empty. The prepared statement form keeps SQLite happy
+// on larger backfills (<= ~10k legacy rows on typical desktop lite DBs).
+func updateBaseNames(ctx context.Context, db *sql.DB, updateSQL string, rows [][2]string) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(ctx, updateSQL)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, r := range rows {
+		bn := ComputeAttachmentBaseName(r[1])
+		if _, err := stmt.ExecContext(ctx, bn, r[0]); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("update %s: %w", r[0], err)
+		}
+	}
+	return tx.Commit()
 }
 
 // EnsureSchema creates tables if they don't exist and applies incremental migrations.
@@ -500,6 +724,14 @@ func EnsureSchema(db *sql.DB) error {
 			}
 			if err := tx.Commit(); err != nil {
 				return fmt.Errorf("commit migration v%d: %w", v, err)
+			}
+			// Post-SQL backfill hooks for migrations needing app-side logic.
+			// modernc.org/sqlite lacks regexp_replace, so the v15 → v16
+			// basename columns must be populated via a Go loop.
+			if v == 15 {
+				if err := backfillV16(context.Background(), db); err != nil {
+					return fmt.Errorf("v16 backfill: %w", err)
+				}
 			}
 			slog.Info("sqlite: applied migration", "version", v+1)
 		}

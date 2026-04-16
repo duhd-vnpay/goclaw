@@ -147,8 +147,12 @@ func (r *MethodRouter) handleConnect(ctx context.Context, client *Client, req *p
 				client.authenticated = true
 				client.userID = keycloakID.String()
 				// All OIDC-authenticated users default to master tenant.
-				// Tenant scoping can be narrowed later via tenant selector UI.
 				client.tenantID = store.MasterTenantID
+
+				// Auto-provision: upsert org_users + tenant_users so first-time
+				// OIDC users don't need manual DB inserts.
+				r.provisionOIDCUser(ctx, keycloakID, claims)
+
 				r.sendConnectResponse(ctx, client, req.ID)
 				return
 			}
@@ -349,6 +353,53 @@ func (r *MethodRouter) sendConnectResponse(ctx context.Context, client *Client, 
 	}
 
 	client.SendResponse(protocol.NewOKResponse(reqID, resp))
+}
+
+// provisionOIDCUser upserts org_users and tenant_users for a Keycloak-authenticated user.
+// Runs in background goroutine so WS connect response is not delayed by DB writes.
+func (r *MethodRouter) provisionOIDCUser(ctx context.Context, keycloakID uuid.UUID, claims *auth.KeycloakClaims) {
+	go func() {
+		provCtx := store.WithTenantID(context.Background(), store.MasterTenantID)
+		now := time.Now()
+		displayName := claims.Name
+		authProvider := claims.AuthProvider
+		if authProvider == "" {
+			authProvider = "keycloak"
+		}
+		_, err := r.orgUsers.Upsert(provCtx, &store.OrgUserData{
+			ID:           keycloakID,
+			TenantID:     store.MasterTenantID,
+			Email:        claims.Email,
+			DisplayName:  &displayName,
+			AuthProvider: &authProvider,
+			LastLoginAt:  &now,
+			Status:       "active",
+		})
+		if err != nil {
+			slog.Warn("oidc.ws.org_user_upsert_failed", "email", claims.Email, "error", err)
+			return
+		}
+		if r.tenantStore != nil {
+			role := oidcRoleStringFromRealmRoles(claims.RealmRoles)
+			_, err = r.tenantStore.CreateTenantUserReturning(provCtx, store.MasterTenantID, claims.Email, claims.Name, role)
+			if err != nil {
+				slog.Warn("oidc.ws.tenant_user_upsert_failed", "email", claims.Email, "error", err)
+			}
+		}
+	}()
+}
+
+// oidcRoleStringFromRealmRoles returns the highest role name as a string for tenant_users.
+func oidcRoleStringFromRealmRoles(roles []string) string {
+	priority := map[string]int{"owner": 5, "admin": 4, "operator": 3, "member": 2, "viewer": 1}
+	highest, highestPri := "viewer", 0
+	for _, r := range roles {
+		if p, ok := priority[r]; ok && p > highestPri {
+			highest = r
+			highestPri = p
+		}
+	}
+	return highest
 }
 
 // oidcRoleFromRealmRoles maps Keycloak realm roles to a gateway permissions.Role.

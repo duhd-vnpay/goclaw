@@ -8,6 +8,7 @@ import { LOCAL_STORAGE_KEYS } from "@/lib/constants";
 import { useWsEvent } from "@/hooks/use-ws-event";
 import { TEAM_RELATED_EVENTS, Methods } from "@/api/protocol";
 import { useTeamEventStore } from "@/stores/use-team-event-store";
+import { useOidcAuth } from "@/hooks/use-oidc-auth";
 import type { TenantMembership } from "@/types/tenant";
 
 // In dev mode, connect directly to backend WS (bypass Vite proxy).
@@ -18,6 +19,8 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token);
   const userId = useAuthStore((s) => s.userId);
   const senderID = useAuthStore((s) => s.senderID);
+  const oidcEnabled = useAuthStore((s) => s.oidcEnabled);
+  const oidcStatusLoaded = useAuthStore((s) => s.oidcStatusLoaded);
 
   const wsRef = useRef<WsClient | null>(null);
 
@@ -99,33 +102,53 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
       () => useAuthStore.getState().senderID,
     );
     client.onAuthFailure = () => {
-      // Don't logout if authenticated via browser pairing (no token)
       const state = useAuthStore.getState();
+      // Don't logout if authenticated via browser pairing (no token)
       if (state.senderID && !state.token) return;
+      // In OIDC mode, userId is populated async from /me after the token arrives.
+      // A 401 while userId is still empty is a race condition, not an invalid session.
+      if (state.oidcEnabled && state.token && !state.userId) return;
       state.logout();
     };
     return client;
   }, []);
 
-  // Auto-connect when credentials are available (token or sender_id), disconnect when not.
+  // Auto-connect when credentials are available, disconnect when not.
+  // In OIDC mode, userId is populated async from /me after token arrives —
+  // connect as soon as token is present; the WS connect frame carries the JWT
+  // and userId will be resolved server-side from the token claims.
+  // Wait for oidcStatusLoaded before making any decision — otherwise we'd
+  // apply token-mode logic (requires userId) and call disconnect() prematurely.
   useEffect(() => {
-    if ((token || senderID) && userId) {
+    if (!oidcStatusLoaded) return; // don't connect or disconnect yet
+    const hasCredentials = oidcEnabled
+      ? !!token
+      : (!!token || !!senderID) && !!userId;
+    if (hasCredentials) {
       ws.connect();
     } else {
       ws.disconnect();
     }
-  }, [token, userId, senderID, ws]);
+  }, [token, userId, senderID, oidcEnabled, oidcStatusLoaded, ws]);
 
   const value = useMemo(() => ({ ws, http }), [ws, http]);
 
   return (
     <WsContext.Provider value={value}>
+      <OidcStatusLoader />
       <WsQueryInvalidation />
       <WsTeamEventCapture />
       <WsTenantRevocationListener />
       {children}
     </WsContext.Provider>
   );
+}
+
+/** Fetch /v1/auth/status once at app root so oidcStatusLoaded is always set
+ *  regardless of which route is active. Must be mounted before RequireAuth renders. */
+function OidcStatusLoader() {
+  useOidcAuth();
+  return null;
 }
 
 function WsQueryInvalidation() {

@@ -176,7 +176,11 @@ func (l *Loop) emitLLMSpanEnd(ctx context.Context, spanID uuid.UUID, start time.
 		limit := previewLimitForVerbose(collector.Verbose())
 		preview := resp.Content
 		if resp.Thinking != "" {
-			preview = "<thinking>\n" + resp.Thinking + "\n</thinking>\n" + resp.Content
+			if resp.Content != "" {
+				preview = "<thinking>\n" + resp.Thinking + "\n</thinking>\n" + resp.Content
+			} else {
+				preview = "<thinking>\n" + resp.Thinking + "\n</thinking>"
+			}
 		}
 		updates["output_preview"] = tracing.TruncateMid(preview, limit)
 	}

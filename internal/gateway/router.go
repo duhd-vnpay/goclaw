@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nextlevelbuilder/goclaw/internal/auth"
 	"github.com/nextlevelbuilder/goclaw/internal/cache"
 	httpapi "github.com/nextlevelbuilder/goclaw/internal/http"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
@@ -22,10 +23,12 @@ type MethodHandler func(ctx context.Context, client *Client, req *protocol.Reque
 
 // MethodRouter maps method names to handlers.
 type MethodRouter struct {
-	handlers    map[string]MethodHandler
-	server      *Server
-	tenantStore store.TenantStore      // optional, for enriching connect response
-	permCache   *cache.PermissionCache // optional, for caching tenant membership checks
+	handlers     map[string]MethodHandler
+	server       *Server
+	tenantStore  store.TenantStore      // optional, for enriching connect response
+	permCache    *cache.PermissionCache // optional, for caching tenant membership checks
+	jwtValidator *auth.JWTValidator     // optional, for Keycloak OIDC JWT ws auth
+	orgUsers     store.OrgUserStore     // optional, paired with jwtValidator
 }
 
 func NewMethodRouter(server *Server) *MethodRouter {
@@ -42,6 +45,15 @@ func (r *MethodRouter) SetTenantStore(ts store.TenantStore) { r.tenantStore = ts
 
 // SetPermissionCache sets the permission cache for tenant membership checks.
 func (r *MethodRouter) SetPermissionCache(pc *cache.PermissionCache) { r.permCache = pc }
+
+// SetOIDCAuth wires the Keycloak JWT validator and org user store so the
+// websocket connect handler can authenticate SPA sessions with the same
+// access token returned by /v1/auth/callback. Both args must be non-nil
+// for OIDC ws auth to activate.
+func (r *MethodRouter) SetOIDCAuth(validator *auth.JWTValidator, orgUsers store.OrgUserStore) {
+	r.jwtValidator = validator
+	r.orgUsers = orgUsers
+}
 
 // Register adds a method handler.
 func (r *MethodRouter) Register(method string, handler MethodHandler) {
@@ -121,6 +133,27 @@ func (r *MethodRouter) handleConnect(ctx context.Context, client *Client, req *p
 	client.locale = i18n.Normalize(params.Locale)
 
 	configToken := r.server.cfg.Gateway.Token
+
+	// Path 0: Keycloak OIDC JWT from SPA session.
+	// When Keycloak is wired and the token parses as a signed JWT from the
+	// configured realm, trust it. Skip constant-time compare below — a JWT
+	// can never equal the gateway token (structure + length differ), so the
+	// fall-through is safe.
+	if r.jwtValidator != nil && r.orgUsers != nil && params.Token != "" {
+		if claims, err := r.jwtValidator.Validate(params.Token); err == nil {
+			keycloakID, parseErr := uuid.Parse(claims.KeycloakID)
+			if parseErr == nil {
+				client.role = oidcRoleFromRealmRoles(claims.RealmRoles)
+				client.authenticated = true
+				client.userID = keycloakID.String()
+				// All OIDC-authenticated users default to master tenant.
+				// Tenant scoping can be narrowed later via tenant selector UI.
+				client.tenantID = store.MasterTenantID
+				r.sendConnectResponse(ctx, client, req.ID)
+				return
+			}
+		}
+	}
 
 	// Path 1: Valid gateway token → admin (constant-time comparison)
 	if configToken != "" && subtle.ConstantTimeCompare([]byte(params.Token), []byte(configToken)) == 1 {
@@ -316,6 +349,31 @@ func (r *MethodRouter) sendConnectResponse(ctx context.Context, client *Client, 
 	}
 
 	client.SendResponse(protocol.NewOKResponse(reqID, resp))
+}
+
+// oidcRoleFromRealmRoles maps Keycloak realm roles to a gateway permissions.Role.
+// Priority: owner > admin > operator > member → operator > viewer (fallback).
+func oidcRoleFromRealmRoles(roles []string) permissions.Role {
+	has := func(name string) bool {
+		for _, r := range roles {
+			if r == name {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("owner"):
+		return permissions.RoleOwner
+	case has("admin"):
+		return permissions.RoleAdmin
+	case has("operator"):
+		return permissions.RoleOperator
+	case has("member"):
+		return permissions.RoleOperator
+	default:
+		return permissions.RoleViewer
+	}
 }
 
 // isOwnerID checks if the given user ID is in the configured owner list.

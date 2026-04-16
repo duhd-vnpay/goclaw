@@ -188,11 +188,23 @@ func extractKeycloakClaims(claims jwt.MapClaims) *KeycloakClaims {
 		kc.Name = name
 	}
 
-	// realm_roles: custom claim mapped in Keycloak client
+	// realm_roles: custom claim mapped in Keycloak client (explicit mapper)
 	if roles, ok := claims["realm_roles"].([]any); ok {
 		for _, r := range roles {
 			if s, ok := r.(string); ok {
 				kc.RealmRoles = append(kc.RealmRoles, s)
+			}
+		}
+	}
+	// realm_access.roles: standard Keycloak JWT structure (fallback when no custom mapper)
+	if len(kc.RealmRoles) == 0 {
+		if realmAccess, ok := claims["realm_access"].(map[string]any); ok {
+			if roles, ok := realmAccess["roles"].([]any); ok {
+				for _, r := range roles {
+					if s, ok := r.(string); ok {
+						kc.RealmRoles = append(kc.RealmRoles, s)
+					}
+				}
 			}
 		}
 	}

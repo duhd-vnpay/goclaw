@@ -11,7 +11,16 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   const availableTenants = useAuthStore((s) => s.availableTenants);
   const isOwner = useAuthStore((s) => s.isOwner);
   const oidcEnabled = useAuthStore((s) => s.oidcEnabled);
+  const oidcStatusLoaded = useAuthStore((s) => s.oidcStatusLoaded);
   const location = useLocation();
+
+  // Wait for OIDC status to load before making auth decisions.
+  // oidcEnabled starts false and is set async from /v1/auth/status.
+  // Without this guard, we'd incorrectly apply token-mode logic (which requires userId)
+  // before knowing we're in OIDC mode (which only requires token).
+  if (!oidcStatusLoaded) {
+    return null;
+  }
 
   // Not authenticated
   // In OIDC mode, the JWT token alone is the credential — userId is populated async from /me.

@@ -42,9 +42,11 @@ export function useOidcAuth() {
       });
   }, [setOidcEnabled]);
 
-  // Fetch /me when we have a token but no oidcUser
+  // Fetch /me when we have a token but userId is not yet populated.
+  // Also re-fetch if oidcUser exists but userId is missing (stale persist after logout+relogin).
+  const userId = useAuthStore((s) => s.userId);
   useEffect(() => {
-    if (!token || oidcUser) return;
+    if (!token || userId) return;
 
     fetch("/v1/auth/me", {
       headers: { Authorization: `Bearer ${token}` },
@@ -72,7 +74,7 @@ export function useOidcAuth() {
       .catch(() => {
         // /me failed -- token might be invalid
       });
-  }, [token, oidcUser, setOidcUser, setCredentials]);
+  }, [token, userId, setOidcUser, setCredentials]);
 
   const loginWithOidc = useCallback(
     (redirectPath?: string) => {

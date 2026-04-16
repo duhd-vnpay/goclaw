@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
 import { ShieldAlert, LogOut } from "lucide-react";
@@ -10,10 +11,18 @@ export function TenantSelectorPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const availableTenants = useAuthStore((s) => s.availableTenants);
+  const tenantSelected = useAuthStore((s) => s.tenantSelected);
   const isOwner = useAuthStore((s) => s.isOwner);
   const logout = useAuthStore((s) => s.logout);
 
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname;
+
+  // Auto-redirect when tenant gets selected (e.g. auto-selected by ws-provider)
+  useEffect(() => {
+    if (tenantSelected) {
+      navigate(from || ROUTES.OVERVIEW, { replace: true });
+    }
+  }, [tenantSelected, navigate, from]);
 
   const handleSelect = (slug: string) => {
     localStorage.setItem(LOCAL_STORAGE_KEYS.TENANT_ID, slug);

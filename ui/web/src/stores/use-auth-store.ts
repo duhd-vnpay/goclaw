@@ -34,6 +34,7 @@ interface AuthState {
   // OIDC identity (from Keycloak)
   oidcUser: OidcUserProfile | null;
   oidcEnabled: boolean; // true if backend has Keycloak configured
+  oidcStatusLoaded: boolean; // true after /v1/auth/status has been fetched (even if disabled)
   setOidcUser: (user: OidcUserProfile | null) => void;
   setOidcEnabled: (enabled: boolean) => void;
 
@@ -65,13 +66,14 @@ export const useAuthStore = create<AuthState>()(
 
       oidcUser: null,
       oidcEnabled: false,
+      oidcStatusLoaded: false,
 
       setOidcUser: (user) => {
         set({ oidcUser: user });
       },
 
       setOidcEnabled: (enabled) => {
-        set({ oidcEnabled: enabled });
+        set({ oidcEnabled: enabled, oidcStatusLoaded: true });
       },
 
       setCredentials: (token, userId) => {
@@ -110,7 +112,7 @@ export const useAuthStore = create<AuthState>()(
         set({
           token: "", userId: "", senderID: "", connected: false, role: "", serverInfo: null,
           tenantId: "", tenantName: "", tenantSlug: "", isOwner: false, availableTenants: [],
-          tenantSelected: false, oidcUser: null, oidcEnabled: false,
+          tenantSelected: false, oidcUser: null, oidcEnabled: false, oidcStatusLoaded: false,
         });
       },
     }),

@@ -163,6 +163,11 @@ func (d *gatewayDeps) wireHTTPHandlersOnServer(
 			d.pgStores.Tenants,
 		)
 		d.server.SetAuthOIDCHandler(authHandler)
+		// Wire the same validator into the ws connect handler so SPA
+		// sessions can authenticate via the Keycloak access token.
+		d.server.Router().SetOIDCAuth(jwtValidator, d.pgStores.OrgUsers)
+		// Wire OIDC JWT validation into HTTP auth so API endpoints accept Keycloak tokens.
+		httpapi.InitOIDCAuth(jwtValidator, d.pgStores.OrgUsers)
 		slog.Info("identity: Keycloak OIDC auth handler enabled", "realm", d.cfg.Keycloak.RealmURL)
 	}
 

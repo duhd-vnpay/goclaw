@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nextlevelbuilder/goclaw/internal/auth"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/crypto"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
@@ -83,6 +84,15 @@ var pkgAPIKeyCache *apiKeyCache
 var pkgPairingStore store.PairingStore
 var pkgTenantCache *tenantCache
 var pkgOwnerIDs []string
+var pkgJWTValidator *auth.JWTValidator
+var pkgOrgUsers store.OrgUserStore
+
+// InitOIDCAuth sets the JWT validator and org user store for OIDC HTTP auth.
+// Must be called once during server startup when Keycloak is configured.
+func InitOIDCAuth(v *auth.JWTValidator, ou store.OrgUserStore) {
+	pkgJWTValidator = v
+	pkgOrgUsers = ou
+}
 
 // InitGatewayToken sets the gateway bearer token for HTTP auth.
 // Must be called once during server startup before handling requests.
@@ -157,6 +167,7 @@ type authResult struct {
 	KeyData       *store.APIKeyData // non-nil when authenticated via API key
 	TenantID      uuid.UUID         // resolved tenant; always concrete after resolution
 	TenantSlug    string            // resolved tenant slug for filesystem paths
+	OIDCUserID    string            // non-empty when authenticated via OIDC JWT (keycloak UUID)
 }
 
 // resolveAuth determines the caller's role from the request.
@@ -168,6 +179,32 @@ func resolveAuth(r *http.Request) authResult {
 // resolveAuthWithBearer is like resolveAuth but accepts a pre-extracted bearer token.
 // Useful for handlers that also accept tokens from query params.
 func resolveAuthWithBearer(r *http.Request, bearer string) authResult {
+	// OIDC JWT → role from realm roles (Keycloak).
+	// Checked before gateway token because JWTs are structurally distinct (3-part dot-separated).
+	if pkgJWTValidator != nil && bearer != "" && strings.Count(bearer, ".") == 2 {
+		if claims, err := pkgJWTValidator.Validate(bearer); err == nil {
+			keycloakID, parseErr := uuid.Parse(claims.KeycloakID)
+			if parseErr == nil {
+				role := oidcHTTPRole(claims.RealmRoles)
+				tenantScope := r.Header.Get("X-GoClaw-Tenant-Id")
+				tenantID, allowed := resolveTenantHint(r.Context(), tenantScope, keycloakID.String())
+				if !allowed {
+					return authResult{}
+				}
+				if tenantID == uuid.Nil {
+					tenantID = store.MasterTenantID
+				}
+				return authResult{
+					Role:          role,
+					Authenticated: true,
+					TenantID:      tenantID,
+					TenantSlug:    resolveTenantSlug(r.Context(), tenantID),
+					OIDCUserID:    keycloakID.String(),
+				}
+			}
+		}
+	}
+
 	// Gateway token → admin.
 	// Only configured owner IDs get unrestricted tenant scoping; other callers may
 	// only narrow to tenants where the supplied user already has membership.
@@ -300,6 +337,30 @@ func resolveTenantHint(ctx context.Context, hint, userID string) (uuid.UUID, boo
 	return tid, true
 }
 
+// oidcHTTPRole maps Keycloak realm roles to a gateway permissions.Role for HTTP auth.
+func oidcHTTPRole(roles []string) permissions.Role {
+	has := func(name string) bool {
+		for _, r := range roles {
+			if r == name {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("owner"):
+		return permissions.RoleOwner
+	case has("admin"):
+		return permissions.RoleAdmin
+	case has("operator"):
+		return permissions.RoleOperator
+	case has("member"):
+		return permissions.RoleOperator
+	default:
+		return permissions.RoleViewer
+	}
+}
+
 // httpMinRole returns the minimum role required for an HTTP endpoint based on HTTP method.
 func httpMinRole(method string) permissions.Role {
 	switch method {
@@ -316,6 +377,10 @@ func enrichContext(ctx context.Context, r *http.Request, auth authResult) contex
 	ctx = store.WithLocale(ctx, extractLocale(r))
 	ctx = store.WithRole(ctx, string(auth.Role))
 	userID := extractUserID(r)
+	// OIDC-authenticated requests: use the Keycloak UUID as userID when header is absent.
+	if userID == "" && auth.OIDCUserID != "" {
+		userID = auth.OIDCUserID
+	}
 	// Security: In dev mode (no gateway token configured), do not trust the
 	// X-GoClaw-User-Id header — force "system" to prevent identity spoofing.
 	if pkgGatewayToken == "" && auth.KeyData == nil && userID != "" {

@@ -22,57 +22,57 @@ func NewPGDefinitionStore(db *sqlx.DB) *PGDefinitionStore {
 }
 
 type Domain struct {
-	ID           uuid.UUID       `db:"id"`
-	TenantID     uuid.UUID       `db:"tenant_id"`
-	Slug         string          `db:"slug"`
-	Name         string          `db:"name"`
-	Description  *string         `db:"description"`
-	DepartmentID *uuid.UUID      `db:"department_id"`
-	DefaultTier  string          `db:"default_tier"`
-	Settings     json.RawMessage `db:"settings"`
-	CreatedAt    time.Time       `db:"created_at"`
-	UpdatedAt    time.Time       `db:"updated_at"`
+	ID           uuid.UUID       `db:"id" json:"id"`
+	TenantID     uuid.UUID       `db:"tenant_id" json:"tenant_id"`
+	Slug         string          `db:"slug" json:"slug"`
+	Name         string          `db:"name" json:"name"`
+	Description  *string         `db:"description" json:"description,omitempty"`
+	DepartmentID *uuid.UUID      `db:"department_id" json:"department_id,omitempty"`
+	DefaultTier  string          `db:"default_tier" json:"default_tier"`
+	Settings     json.RawMessage `db:"settings" json:"settings"`
+	CreatedAt    time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 type Workflow struct {
-	ID            uuid.UUID       `db:"id"`
-	TenantID      uuid.UUID       `db:"tenant_id"`
-	DomainID      uuid.UUID       `db:"domain_id"`
-	Slug          string          `db:"slug"`
-	Name          string          `db:"name"`
-	Description   *string         `db:"description"`
-	Version       int             `db:"version"`
-	Tier          string          `db:"tier"`
-	TriggerConfig json.RawMessage `db:"trigger_config"`
-	Variables     json.RawMessage `db:"variables"`
-	Settings      json.RawMessage `db:"settings"`
-	Visibility    string          `db:"visibility"`
-	Status        string          `db:"status"`
-	CreatedBy     *uuid.UUID      `db:"created_by"`
-	PublishedAt   *time.Time      `db:"published_at"`
-	CreatedAt     time.Time       `db:"created_at"`
-	UpdatedAt     time.Time       `db:"updated_at"`
+	ID            uuid.UUID       `db:"id" json:"id"`
+	TenantID      uuid.UUID       `db:"tenant_id" json:"tenant_id"`
+	DomainID      uuid.UUID       `db:"domain_id" json:"domain_id"`
+	Slug          string          `db:"slug" json:"slug"`
+	Name          string          `db:"name" json:"name"`
+	Description   *string         `db:"description" json:"description,omitempty"`
+	Version       int             `db:"version" json:"version"`
+	Tier          string          `db:"tier" json:"tier"`
+	TriggerConfig json.RawMessage `db:"trigger_config" json:"trigger_config"`
+	Variables     json.RawMessage `db:"variables" json:"variables"`
+	Settings      json.RawMessage `db:"settings" json:"settings"`
+	Visibility    string          `db:"visibility" json:"visibility"`
+	Status        string          `db:"status" json:"status"`
+	CreatedBy     *uuid.UUID      `db:"created_by" json:"created_by,omitempty"`
+	PublishedAt   *time.Time      `db:"published_at" json:"published_at,omitempty"`
+	CreatedAt     time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt     time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 type Step struct {
-	ID             uuid.UUID       `db:"id"`
-	WorkflowID     uuid.UUID       `db:"workflow_id"`
-	Slug           string          `db:"slug"`
-	Name           string          `db:"name"`
-	Description    *string         `db:"description"`
-	Position       int             `db:"position"`
-	AgentKey       *string         `db:"agent_key"`
-	TaskTemplate   *string         `db:"task_template"`
-	DependsOn      pq.StringArray  `db:"depends_on"`
-	Condition      *string         `db:"condition"`
-	Timeout        string          `db:"timeout"`
-	Constraints    json.RawMessage `db:"constraints"`
-	Continuity     json.RawMessage `db:"continuity"`
-	Evaluation     json.RawMessage `db:"evaluation"`
-	Gate           json.RawMessage `db:"gate"`
-	DispatchTo     *string         `db:"dispatch_to"`
-	DispatchTarget *string         `db:"dispatch_target"`
-	CreatedAt      time.Time       `db:"created_at"`
+	ID             uuid.UUID       `db:"id" json:"id"`
+	WorkflowID     uuid.UUID       `db:"workflow_id" json:"workflow_id"`
+	Slug           string          `db:"slug" json:"slug"`
+	Name           string          `db:"name" json:"name"`
+	Description    *string         `db:"description" json:"description,omitempty"`
+	Position       int             `db:"position" json:"position"`
+	AgentKey       *string         `db:"agent_key" json:"agent_key,omitempty"`
+	TaskTemplate   *string         `db:"task_template" json:"task_template,omitempty"`
+	DependsOn      pq.StringArray  `db:"depends_on" json:"depends_on"`
+	Condition      *string         `db:"condition" json:"condition,omitempty"`
+	Timeout        string          `db:"timeout" json:"timeout"`
+	Constraints    json.RawMessage `db:"constraints" json:"constraints"`
+	Continuity     json.RawMessage `db:"continuity" json:"continuity"`
+	Evaluation     json.RawMessage `db:"evaluation" json:"evaluation"`
+	Gate           json.RawMessage `db:"gate" json:"gate"`
+	DispatchTo     *string         `db:"dispatch_to" json:"dispatch_to,omitempty"`
+	DispatchTarget *string         `db:"dispatch_target" json:"dispatch_target,omitempty"`
+	CreatedAt      time.Time       `db:"created_at" json:"created_at"`
 }
 
 func (s *PGDefinitionStore) GetDomain(ctx context.Context, tenantID uuid.UUID, slug string) (*Domain, error) {

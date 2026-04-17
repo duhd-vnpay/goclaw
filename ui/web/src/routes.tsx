@@ -194,7 +194,7 @@ export function AppRoutes() {
           <Route path={ROUTES.WORKFLOWS} element={<WorkflowsPage key="list" />} />
           <Route path={ROUTES.WORKFLOW_NEW} element={<WorkflowBuilderPage key="new" />} />
           <Route path={ROUTES.WORKFLOW_EDIT} element={<WorkflowBuilderPage key="edit" />} />
-          <Route path={ROUTES.WORKFLOW_DETAIL} element={<WorkflowsPage key="detail" />} />
+          <Route path={ROUTES.WORKFLOW_DETAIL} element={<WorkflowBuilderPage key="detail" />} />
           <Route path={ROUTES.WORKFLOW_RUN_DETAIL} element={<RunPage />} />
           <Route path={ROUTES.MY_TASKS} element={<MyTasksPage />} />
           <Route path={ROUTES.DOMAINS} element={<RequireAdmin><DomainsPage /></RequireAdmin>} />

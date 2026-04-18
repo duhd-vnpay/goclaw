@@ -47,6 +47,8 @@ type Channel struct {
 	pairingHandler    *channels.PairingHandler // email-OTP pairing handler (nil if not configured)
 	pairingFlows      sync.Map                 // senderID string → *channels.PairingFlowEntry
 	audioMgr          *audio.Manager    // unified STT via audio.Manager (nil = no STT)
+	writerHealMu      sync.Mutex         // guards writerHealLastTry for /writers self-heal
+	writerHealLastTry map[string]time.Time // key "chatID|userID" → last attempt timestamp
 	// pairingService, approvedGroups, pairingDebounce, groupHistory, historyLimit, requireMention
 	// are inherited from channels.BaseChannel.
 }

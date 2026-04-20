@@ -158,15 +158,15 @@ func (h *SkillsHandler) handleListFiles(w http.ResponseWriter, r *http.Request) 
 	}
 
 	versionDir := filepath.Join(slugDir, strconv.Itoa(version))
-	if _, err := os.Stat(versionDir); err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": i18n.T(locale, i18n.MsgVersionNotFound)})
-		return
+
+	var files []fileEntry
+	if _, err := os.Stat(versionDir); err == nil {
+		files = walkSkillFiles(versionDir)
 	}
 
-	files := walkSkillFiles(versionDir)
-
-	// Fallback: if managed dir has no files (seeder CopyDir may have failed),
-	// try the bundled skills dir — only for system skills to prevent slug collision attacks.
+	// Fallback: if managed dir is missing or empty (seeder CopyDir may have failed,
+	// or versioned managed store not yet populated), try the bundled skills dir —
+	// only for system skills to prevent slug collision attacks.
 	if len(files) == 0 && isSystem && h.bundledDir != "" {
 		bundledDir := filepath.Join(h.bundledDir, slug)
 		if _, err := os.Stat(bundledDir); err == nil {
@@ -174,9 +174,11 @@ func (h *SkillsHandler) handleListFiles(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	if files == nil {
-		files = []fileEntry{}
+	if len(files) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": i18n.T(locale, i18n.MsgVersionNotFound)})
+		return
 	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"files": files})
 }
 

@@ -281,14 +281,20 @@ func CopyDir(src, dst string) error {
 	})
 }
 
-// needsReCopy returns true when the managed copy's scripts/ is missing or has fewer
-// entries than the bundled source — symptom of a previous failed copy caused by a
-// symlink-to-directory stopping filepath.Walk early (e.g. scripts/office/ symlink).
+// needsReCopy returns true when the managed copy is incomplete and should be
+// re-copied from the bundled source. Triggers:
+//   - managed SKILL.md missing (dir absent entirely, or populated but missing SKILL.md)
+//   - scripts/ present in bundled but missing/partial in managed (symptom of a
+//     previous failed copy caused by a symlink-to-directory stopping
+//     filepath.Walk early, e.g. scripts/office/ symlink)
 func needsReCopy(bundledDir, managedDir string) bool {
+	if _, err := os.Stat(filepath.Join(managedDir, "SKILL.md")); err != nil {
+		return true // managed dir missing or incomplete (no SKILL.md)
+	}
 	srcScripts := filepath.Join(bundledDir, "scripts")
 	srcEntries, err := os.ReadDir(srcScripts)
 	if err != nil || len(srcEntries) == 0 {
-		return false // bundled has no scripts; nothing to check
+		return false // bundled has no scripts; nothing further to check
 	}
 	dstScripts := filepath.Join(managedDir, "scripts")
 	dstEntries, err := os.ReadDir(dstScripts)

@@ -280,6 +280,14 @@ func isAdminMethod(method string) bool {
 		protocol.MethodTTSEnable,
 		protocol.MethodTTSDisable,
 		protocol.MethodTTSSetProvider,
+
+		// Ardenn — domain + workflow structural mutations (delete, domain write).
+		// Runs execute as the workflow definition — destructive domain/workflow
+		// changes require admin.
+		protocol.MethodArdennDomainsCreate,
+		protocol.MethodArdennDomainsUpdate,
+		protocol.MethodArdennDomainsDelete,
+		protocol.MethodArdennWorkflowsDelete,
 	}
 	return slices.Contains(adminMethods, method)
 }
@@ -319,6 +327,15 @@ func isWriteMethod(method string) bool {
 		// Channel pairing starts (QR scan flows).
 		protocol.MethodZaloPersonalQRStart,
 		protocol.MethodWhatsAppQRStart,
+
+		// Ardenn — workflow authoring + run lifecycle (operator scope).
+		protocol.MethodArdennWorkflowsCreate,
+		protocol.MethodArdennWorkflowsUpdate,
+		protocol.MethodArdennWorkflowsPublish,
+		protocol.MethodArdennRunsStart,
+		protocol.MethodArdennRunsCancel,
+		protocol.MethodArdennRunsApprove,
+		protocol.MethodArdennRunsReject,
 	}
 	return slices.Contains(writeExact, method)
 }
@@ -414,6 +431,15 @@ func isReadMethod(method string) bool {
 
 		// Zalo personal contacts listing
 		protocol.MethodZaloPersonalContacts,
+
+		// Ardenn — read-only listings + events stream + personal tasks.
+		protocol.MethodArdennDomainsList,
+		protocol.MethodArdennWorkflowsList,
+		protocol.MethodArdennWorkflowsGet,
+		protocol.MethodArdennRunsList,
+		protocol.MethodArdennRunsGet,
+		protocol.MethodArdennEventsStream,
+		protocol.MethodArdennMyTasks,
 	}
 	return slices.Contains(readMethods, method)
 }

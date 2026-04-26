@@ -37,6 +37,51 @@ const (
 	PromptNone    PromptMode = "none"    // no system prompt (raw tool calls only)
 )
 
+// CacheBoundaryMarker separates stable (agent config) from dynamic (per-turn) prompt content.
+// Anthropic provider splits at this marker into 2 system blocks: stable gets cache_control, dynamic doesn't.
+const CacheBoundaryMarker = providers.CacheBoundaryMarker
+
+// modeRank orders prompt modes from most-restrictive (0) to least-restrictive (3).
+// Used by minMode to enforce caps for auto-detected sessions (heartbeat/cron/subagent).
+var modeRank = map[PromptMode]int{PromptFull: 3, PromptTask: 2, PromptMinimal: 1, PromptNone: 0}
+
+// minMode returns the more restrictive of two modes (lower rank wins).
+func minMode(a, b PromptMode) PromptMode {
+	if modeRank[a] <= modeRank[b] {
+		return a
+	}
+	return b
+}
+
+// resolvePromptMode picks the effective PromptMode for a turn given runtime override,
+// session key (used for auto-detect), and the agent's configured default.
+// Precedence:
+//  1. Explicit runtime override wins (used by harness/delegate to force a mode).
+//  2. Heartbeat session caps at minimal.
+//  3. Subagent or cron session caps at task.
+//  4. Configured mode otherwise; if unset, default to full.
+func resolvePromptMode(runtimeOverride PromptMode, sessionKey string, configMode PromptMode) PromptMode {
+	if runtimeOverride != "" {
+		return runtimeOverride
+	}
+	if bootstrap.IsHeartbeatSession(sessionKey) {
+		if configMode != "" {
+			return minMode(configMode, PromptMinimal)
+		}
+		return PromptMinimal
+	}
+	if bootstrap.IsSubagentSession(sessionKey) || bootstrap.IsCronSession(sessionKey) {
+		if configMode != "" {
+			return minMode(configMode, PromptTask)
+		}
+		return PromptTask
+	}
+	if configMode != "" {
+		return configMode
+	}
+	return PromptFull
+}
+
 // SystemPromptConfig holds all inputs for system prompt construction.
 // Matches the params of TS buildAgentSystemPrompt().
 type SystemPromptConfig struct {
@@ -360,7 +405,10 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 		lines = append(lines, buildUserIdentitySection(cfg.OwnerIDs)...)
 	}
 
-	// 8. Time
+	// ── CACHE BOUNDARY ── stable config above, dynamic per-turn/per-user below.
+	lines = append(lines, CacheBoundaryMarker, "")
+
+	// 8. Time (below boundary — date changes don't bust the stable cache)
 	lines = append(lines, buildTimeSection()...)
 
 	// 9.5. Channel formatting hints (e.g. Zalo → plain text)

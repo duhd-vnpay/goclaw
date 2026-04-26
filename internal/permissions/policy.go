@@ -300,6 +300,7 @@ func isWriteMethod(method string) bool {
 		protocol.MethodSessionsDelete,
 		protocol.MethodSessionsReset,
 		protocol.MethodSessionsPatch,
+		protocol.MethodSessionsCompact,
 		protocol.MethodCronCreate,
 		protocol.MethodCronUpdate,
 		protocol.MethodCronDelete,

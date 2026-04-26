@@ -129,7 +129,7 @@ type PermissionRequirer interface {
 func ToProviderDef(t Tool) providers.ToolDefinition {
 	return providers.ToolDefinition{
 		Type: "function",
-		Function: providers.ToolFunctionSchema{
+		Function: &providers.ToolFunctionSchema{
 			Name:        t.Name(),
 			Description: t.Description(),
 			Parameters:  t.Parameters(),

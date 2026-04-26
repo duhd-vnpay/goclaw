@@ -35,7 +35,7 @@ func (s *stubAgent) Provider() providers.Provider                        { retur
 // from the input (used for dual-tenant tests where each tenant has a distinct
 // UUID but the same agent_key).
 func stubResolver(agentKey string) ResolverFunc {
-	return func(_ context.Context, _ string) (Agent, error) {
+	return func(_ context.Context, _ string, _ ResolveOpts) (Agent, error) {
 		return &stubAgent{id: agentKey}, nil
 	}
 }
@@ -82,7 +82,7 @@ func TestRouterGet_UUIDInputStoresCanonicalKey(t *testing.T) {
 func TestRouterGet_IdempotentCacheUnderKeyOrUUID(t *testing.T) {
 	r := NewRouter()
 	var resolveCount atomic.Int32
-	r.SetResolver(func(_ context.Context, _ string) (Agent, error) {
+	r.SetResolver(func(_ context.Context, _ string, _ ResolveOpts) (Agent, error) {
 		resolveCount.Add(1)
 		return &stubAgent{id: "my-agent"}, nil
 	})
@@ -118,7 +118,7 @@ func TestRouterGet_IdempotentCacheUnderKeyOrUUID(t *testing.T) {
 func TestRouterGet_UUIDCallerResolvesEveryTime(t *testing.T) {
 	r := NewRouter()
 	var resolveCount atomic.Int32
-	r.SetResolver(func(_ context.Context, _ string) (Agent, error) {
+	r.SetResolver(func(_ context.Context, _ string, _ ResolveOpts) (Agent, error) {
 		resolveCount.Add(1)
 		return &stubAgent{id: "fixed-key"}, nil
 	})
@@ -188,7 +188,7 @@ func TestRouterGet_StaleRawUUIDEntryEvictedOnGet(t *testing.T) {
 	r := NewRouter()
 
 	var resolveCount atomic.Int32
-	r.SetResolver(func(_ context.Context, _ string) (Agent, error) {
+	r.SetResolver(func(_ context.Context, _ string, _ ResolveOpts) (Agent, error) {
 		resolveCount.Add(1)
 		return &stubAgent{id: "fresh-agent"}, nil
 	})
@@ -240,7 +240,7 @@ func TestRouterGet_CanonicalDoubleCheckEvictsStaleEntry(t *testing.T) {
 
 	var resolveCount atomic.Int32
 	calls := 0
-	r.SetResolver(func(_ context.Context, _ string) (Agent, error) {
+	r.SetResolver(func(_ context.Context, _ string, _ ResolveOpts) (Agent, error) {
 		resolveCount.Add(1)
 		calls++
 		return &stubAgent{id: "goctech-leader", running: calls == 1}, nil

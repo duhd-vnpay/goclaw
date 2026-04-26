@@ -8,6 +8,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"github.com/nextlevelbuilder/goclaw/internal/store/pg"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
@@ -16,7 +17,7 @@ var (
 	pkgArdennCompletion *hands.CompletionRegistry
 )
 
-func initArdenn(_ *store.Stores, _ *bus.MessageBus) (*ardenn.Engine, *hands.CompletionRegistry) {
+func initArdenn(_ *store.Stores, _ *bus.MessageBus, _ *pg.PGProfileResolver) (*ardenn.Engine, *hands.CompletionRegistry) {
 	return nil, nil
 }
 

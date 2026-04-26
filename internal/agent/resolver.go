@@ -497,6 +497,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			DisabledTools:          disabledTools,
 			ReasoningConfig:        store.ResolveEffectiveReasoningConfig(providerReasoningDefaults, ag.ParseReasoningConfig()),
 			SelfEvolve:             ag.ParseSelfEvolve(),
+			AllowImageGeneration:   ag.ParseAllowImageGeneration(),
 			TTSAutoMode:            deps.TTSAutoMode,
 			SkillEvolve:            ag.AgentType == store.AgentTypePredefined && ag.ParseSkillEvolve(),
 			SkillNudgeInterval:     ag.ParseSkillNudgeInterval(),

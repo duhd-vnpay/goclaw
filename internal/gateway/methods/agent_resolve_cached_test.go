@@ -110,7 +110,7 @@ func TestResolveAgentUUIDCached_CacheHitSkipsDBPath(t *testing.T) {
 	// Prime the router cache via a resolver that returns the stub. Router.Get
 	// canonicalizes under `tenantID:agentKey` so a subsequent cache-aware
 	// lookup with the same (ctx, agentKey) resolves via the fast path.
-	r.SetResolver(func(_ context.Context, _ string) (agent.Agent, error) {
+	r.SetResolver(func(_ context.Context, _ string, _ agent.ResolveOpts) (agent.Agent, error) {
 		return &cacheHitStubAgent{id: agentKey, uid: expectedUUID}, nil
 	})
 	tenantID := uuid.New()

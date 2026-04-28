@@ -46,9 +46,19 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		return ErrorResult(err.Error())
 	}
 
-	// Gate: must list tasks before creating to prevent duplicates in concurrent group chat.
+	// Soft + Hard gate against duplicate-task / runaway-create loops.
+	// Soft: tool description (buildActionDescription) instructs LLM to call
+	// search/list first. Hard: if the LLM ignores it (weak models like
+	// MiniMax-M2.7 emit parallel creates without listing — see trace
+	// 019dd320-...), auto-call executeList to flip the MarkListed gate then
+	// warn in the result so the model learns. Subsequent parallel creates in
+	// the same turn fall through (HasListed() == true after first call).
+	var autoListed bool
 	if ptd := PendingTeamDispatchFromCtx(ctx); ptd != nil && !ptd.HasListed() {
-		return ErrorResult("You must check existing tasks first. Call team_tasks(action=\"search\", query=\"<keywords>\") to check for similar tasks before creating — this saves tokens vs listing all. Alternatively use action=\"list\" to see the full board.")
+		if r := t.executeList(ctx, map[string]any{}); r.IsError {
+			return r
+		}
+		autoListed = true
 	}
 
 	subject, _ := args["subject"].(string)
@@ -338,6 +348,9 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		if hasCompound {
 			msg += "\n\nWarning: This task subject suggests multiple deliverables. Consider splitting into separate tasks if they need different skills."
 		}
+	}
+	if autoListed {
+		msg += "\n\nWarning: Auto-listed existing tasks because you skipped search-before-create. Next time call team_tasks(action=\"search\", query=\"<keywords>\") BEFORE create to avoid duplicates and save tokens."
 	}
 	return NewResult(msg)
 }

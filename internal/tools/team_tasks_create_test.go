@@ -11,6 +11,49 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
+func TestCreate_AutoListBypassesGate(t *testing.T) {
+	// Hard fix: when LLM emits create without first calling search/list (e.g.
+	// MiniMax-M2.7 parallel-create runaway loop), executeCreate should auto-call
+	// executeList to flip the gate, append a warning to the result, and proceed
+	// with the create instead of returning ErrorResult.
+	mb, tool, _, _, ctx := newTestTeamSetup()
+	ptd := NewPendingTeamDispatch()
+	ctx = WithPendingTeamDispatch(ctx, ptd)
+
+	if ptd.HasListed() {
+		t.Fatal("expected HasListed=false before create")
+	}
+
+	result := tool.Execute(ctx, map[string]any{
+		"action":      "create",
+		"subject":     "Auto-listed task",
+		"description": "Should succeed despite skipping search",
+		"assignee":    "member-agent",
+	})
+	if result.IsError {
+		t.Fatalf("expected success after auto-list, got error: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "Task created") {
+		t.Errorf("expected 'Task created' in response, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "Auto-listed existing tasks") {
+		t.Errorf("expected auto-list warning in response, got: %s", result.ForLLM)
+	}
+	if !ptd.HasListed() {
+		t.Error("expected HasListed=true after auto-list bypass")
+	}
+	mb.taskStore.mu.Lock()
+	created := len(mb.taskStore.tasks)
+	mb.taskStore.mu.Unlock()
+	if created != 1 {
+		t.Errorf("expected 1 task created via auto-list bypass, got %d", created)
+	}
+	// Release the team-create mutex (production releases this at post-turn dispatch).
+	// Required because the global teamCreateLocks sync.Map keys on (teamID:chatID) —
+	// fixtures use a fixed testTeamID, so leaking the lock deadlocks later tests.
+	ptd.ReleaseTeamLock()
+}
+
 func TestCreate(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		mb, tool, _, _, ctx := newTestTeamSetup()
@@ -134,22 +177,27 @@ func TestCreate(t *testing.T) {
 		_ = mb
 	})
 
-	t.Run("RequiresSearchGate", func(t *testing.T) {
+	t.Run("AutoListsWhenGateNotPassed", func(t *testing.T) {
+		// Hard fix replaced "ErrorResult when not listed" with "auto-list + warn".
+		// Verify executeCreate succeeds AND surfaces the warning so the LLM can learn.
 		_, tool, _, _, ctx := newTestTeamSetup()
-		// ptd exists but HasListed=false
 		ptd := NewPendingTeamDispatch()
 		ctx = WithPendingTeamDispatch(ctx, ptd)
+		defer ptd.ReleaseTeamLock()
 
 		result := tool.Execute(ctx, map[string]any{
 			"action":   "create",
 			"subject":  "Test task",
 			"assignee": "member-agent",
 		})
-		if !result.IsError {
-			t.Fatal("expected error when list gate not passed")
+		if result.IsError {
+			t.Fatalf("expected success after auto-list, got error: %s", result.ForLLM)
 		}
-		if !strings.Contains(result.ForLLM, "check existing tasks") {
-			t.Errorf("expected gate message, got: %s", result.ForLLM)
+		if !strings.Contains(result.ForLLM, "Auto-listed existing tasks") {
+			t.Errorf("expected auto-list warning, got: %s", result.ForLLM)
+		}
+		if !ptd.HasListed() {
+			t.Error("expected HasListed=true after auto-list")
 		}
 	})
 

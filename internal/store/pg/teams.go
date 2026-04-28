@@ -277,7 +277,7 @@ func (s *PGTeamStore) GetTeamForAgent(ctx context.Context, agentID uuid.UUID) (*
 			args = append(args, tid)
 		}
 	}
-	q += ` ORDER BY (t.lead_agent_id = $1) DESC LIMIT 1`
+	q += ` ORDER BY (t.lead_agent_id = $1) DESC, t.created_at ASC LIMIT 1`
 
 	row := s.db.QueryRowContext(ctx, q, args...)
 	d, err := scanTeamRow(row)

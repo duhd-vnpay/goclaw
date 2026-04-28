@@ -113,6 +113,10 @@ func (t *TeamTasksTool) buildActionDescription() string {
 	if t.policy.IsAllowed("retry") {
 		base.WriteString(" retry: re-dispatch a stale/failed task.")
 	}
+	// Hard rule against runaway-create loops in weak models (see trace 019dd297-...).
+	// Search/list flips an internal gate that create checks; without this rule,
+	// some models loop on create→error→create with the same args until a guard fires.
+	base.WriteString("\n\nIMPORTANT: Before any action=\"create\", you MUST first call action=\"search\" (with query=keywords of the new task) or action=\"list\" at least once in this turn. This prevents duplicates in concurrent group chats and is enforced — create will fail until search/list has run.")
 	// Per-action param guide — only list actions allowed by policy.
 	base.WriteString("\n\nParams per action (only send listed params):\n")
 	guide := map[string]string{

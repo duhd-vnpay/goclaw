@@ -42,8 +42,16 @@ func (noopAgentLink) ListLinksTo(_ context.Context, _ uuid.UUID) ([]store.AgentL
 func (noopAgentLink) CanDelegate(_ context.Context, _, _ uuid.UUID) (bool, error) {
 	return true, nil
 }
-func (noopAgentLink) GetLinkBetween(_ context.Context, _, _ uuid.UUID) (*store.AgentLinkData, error) {
-	return nil, nil
+func (noopAgentLink) GetLinkBetween(_ context.Context, from, to uuid.UUID) (*store.AgentLinkData, error) {
+	// Return a valid link so the delegate tool's permission check passes.
+	// Empty Settings → mode default falls back to "async" (matches old CanDelegate behavior).
+	return &store.AgentLinkData{
+		BaseModel:     store.BaseModel{ID: uuid.New()},
+		SourceAgentID: from,
+		TargetAgentID: to,
+		Direction:     store.LinkDirectionOutbound,
+		Status:        store.LinkStatusActive,
+	}, nil
 }
 func (noopAgentLink) DelegateTargets(_ context.Context, _ uuid.UUID) ([]store.AgentLinkData, error) {
 	return nil, nil

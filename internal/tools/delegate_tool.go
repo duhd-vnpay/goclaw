@@ -100,10 +100,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *Result {
 	agentKey, _ := args["agent_key"].(string)
 	task, _ := args["task"].(string)
-	mode, _ := args["mode"].(string)
-	if mode == "" {
-		mode = "async"
-	}
+	explicitMode, _ := args["mode"].(string)
 	timeoutSec := 300
 	if ts, ok := args["timeout"].(float64); ok && int(ts) > 0 {
 		timeoutSec = int(ts)
@@ -128,14 +125,33 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *Result
 		return ErrorResult(fmt.Sprintf("target agent %q not found", agentKey))
 	}
 
-	// Permission check via agent_links
-	allowed, err := t.links.CanDelegate(ctx, fromAgentID, target.ID)
+	// Permission check + fetch link settings via GetLinkBetween.
+	// Returns full link data including Settings JSONB for per-link defaults.
+	link, err := t.links.GetLinkBetween(ctx, fromAgentID, target.ID)
 	if err != nil {
 		slog.Warn("delegate.permission_check_error", "from", fromAgentID, "to", target.ID, "error", err)
 		return ErrorResult("failed to check delegation permission")
 	}
-	if !allowed {
+	if link == nil {
 		return ErrorResult(fmt.Sprintf("no delegation link from current agent to %q", agentKey))
+	}
+
+	// Resolve mode: explicit args > link.Settings.DefaultMode > "async".
+	// Per-link default catches the LLM-omits-mode case (#trace-fabricate bug):
+	// helper→ops link sets default_mode="sync" so omission no longer leaks an
+	// async "delegated" stub that the parent fabricates a fake reply around.
+	mode := explicitMode
+	if mode == "" {
+		var settings store.AgentLinkSettings
+		if len(link.Settings) > 0 {
+			_ = json.Unmarshal(link.Settings, &settings)
+		}
+		switch settings.DefaultMode {
+		case "sync", "async":
+			mode = settings.DefaultMode
+		default:
+			mode = "async"
+		}
 	}
 
 	delegationID := uuid.New().String()

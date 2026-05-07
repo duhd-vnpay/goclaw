@@ -20,6 +20,14 @@ const (
 	LinkStatusDisabled = "disabled"
 )
 
+// AgentLinkSettings is the parsed shape of agent_links.settings JSONB.
+// DefaultMode controls the delegate tool's mode when caller omits the
+// `mode` argument. Resolution order in delegate_tool: explicit args >
+// link.Settings.DefaultMode > global default ("async").
+type AgentLinkSettings struct {
+	DefaultMode string `json:"default_mode,omitempty"` // "sync" | "async"
+}
+
 // AgentLinkData represents a directional link between two agents for delegation.
 type AgentLinkData struct {
 	BaseModel

@@ -31,8 +31,11 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 	// Drop user-visible reasoning for models flagged as leakers (e.g. Kimi,
 	// DeepSeek-Reasoner). Usage.ThinkingTokens is preserved so billing stays
 	// correct (Phase 1 depends on this).
+	// Exception: models that require reasoning_content to be echoed back in
+	// subsequent calls (Moonshot kimi). Clearing Thinking here would cause
+	// HTTP 400 "reasoning_content missing" on the next LLM call.
 	if resp != nil {
-		if strip, _ := req.Options[OptStripThinking].(bool); strip {
+		if strip, _ := req.Options[OptStripThinking].(bool); strip && !openAIWireAssistantReasoningContent(model) {
 			resp.Thinking = ""
 		}
 	}
@@ -126,9 +129,13 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 		if reasoning == "" {
 			reasoning = delta.Reasoning
 		}
-		if reasoning != "" && !stripThinking {
+		if reasoning != "" {
+			// Always accumulate Thinking — models like Moonshot kimi require
+			// reasoning_content to be echoed in every subsequent assistant message.
+			// Stripping here would zero out Message.Thinking and trigger HTTP 400
+			// "reasoning_content missing" on the next LLM call.
 			result.Thinking += reasoning
-			if onChunk != nil {
+			if onChunk != nil && !stripThinking {
 				onChunk(StreamChunk{Thinking: reasoning})
 			}
 		}

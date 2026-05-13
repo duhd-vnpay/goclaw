@@ -183,7 +183,12 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 		// only the mini/nano reasoning variants reject it.
 		skipTemp := strings.HasPrefix(capabilityModel, "gpt-5-mini") || strings.HasPrefix(capabilityModel, "gpt-5-nano") || strings.HasPrefix(capabilityModel, "o1") || strings.HasPrefix(capabilityModel, "o3") || strings.HasPrefix(capabilityModel, "o4")
 		if !skipTemp {
-			body["temperature"] = v
+			// Kimi (Moonshot) models only accept temperature=1 (API constraint).
+			if strings.Contains(strings.ToLower(model), "kimi") {
+				body["temperature"] = float64(1)
+			} else {
+				body["temperature"] = v
+			}
 		}
 	}
 

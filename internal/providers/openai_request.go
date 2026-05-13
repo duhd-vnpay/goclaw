@@ -56,8 +56,14 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 
 		// Echo reasoning_content only for APIs/models that accept it on assistant history.
 		// Together Qwen and many OpenAI-compat gateways reject unknown message fields → HTTP 400.
-		if m.Thinking != "" && m.Role == "assistant" && openAIWireAssistantReasoningContent(model) {
-			msg["reasoning_content"] = m.Thinking
+		if m.Role == "assistant" && openAIWireAssistantReasoningContent(model) {
+			if m.Thinking != "" {
+				msg["reasoning_content"] = m.Thinking
+			} else if strings.Contains(strings.ToLower(model), "kimi") {
+				// Moonshot requires reasoning_content present (even "") in all assistant
+				// messages when thinking is enabled; omitting the field causes HTTP 400.
+				msg["reasoning_content"] = ""
+			}
 		}
 
 		// Include content; omit empty content for assistant messages with tool_calls

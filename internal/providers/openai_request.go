@@ -60,9 +60,11 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 			if m.Thinking != "" {
 				msg["reasoning_content"] = m.Thinking
 			} else if strings.Contains(strings.ToLower(model), "kimi") {
-				// Moonshot requires reasoning_content present (even "") in all assistant
-				// messages when thinking is enabled; omitting the field causes HTTP 400.
-				msg["reasoning_content"] = ""
+				// Moonshot requires non-empty reasoning_content in all assistant messages
+				// when thinking is enabled. Empty string "" is considered "missing" and
+				// triggers HTTP 400. Use " " (space) as minimal placeholder — matches
+				// LiteLLM's fill_reasoning_content() behavior for kimi-k2.x models.
+				msg["reasoning_content"] = " "
 			}
 		}
 

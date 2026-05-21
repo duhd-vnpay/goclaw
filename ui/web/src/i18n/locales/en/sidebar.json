@@ -47,6 +47,7 @@
     "backupRestore": "Backup & Restore",
     "workflows": "Workflows",
     "myTasks": "My Tasks",
-    "domains": "Domains"
+    "domains": "Domains",
+    "workstations": "Workstations"
   }
 }

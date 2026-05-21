@@ -46,6 +46,7 @@
     "backupRestore": "备份与恢复",
     "workflows": "工作流",
     "myTasks": "我的任务",
-    "domains": "域"
+    "domains": "域",
+    "workstations": "工作站"
   }
 }

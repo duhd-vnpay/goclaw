@@ -56,4 +56,13 @@ type Stores struct {
 	ArdennEvents      interface{} // ardenn.EventStore — uses interface{} to avoid import cycle
 	ArdennDefinitions interface{} // *pgardenn.PGDefinitionStore
 	ArdennProjections interface{} // *pgardenn.PGProjectionStore
+
+	Webhooks     WebhookStore
+	WebhookCalls WebhookCallStore
+
+	// Workstations — Standard edition only (gated at router registration).
+	Workstations           WorkstationStore
+	WorkstationLinks       AgentWorkstationLinkStore
+	WorkstationPermissions WorkstationPermissionStore
+	WorkstationActivity    WorkstationActivityStore
 }

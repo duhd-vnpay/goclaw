@@ -57,4 +57,6 @@ export const ROUTES = {
   DOMAINS: "/settings/domains",
   HOOKS: "/hooks",
   HOOK_DETAIL: "/hooks/:id",
+  WORKSTATIONS: "/workstations",
+  WORKSTATION_DETAIL: "/workstations/:id",
 } as const;

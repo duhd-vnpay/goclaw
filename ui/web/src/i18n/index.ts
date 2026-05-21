@@ -42,6 +42,7 @@ import enV3Capabilities from "./locales/en/v3-capabilities.json";
 import enBackup from "./locales/en/backup.json";
 import enArdenn from "./locales/en/ardenn.json";
 import enHooks from "./locales/en/hooks.json";
+import enWorkstations from "./locales/en/workstations.json";
 
 // --- VI namespaces ---
 import viCommon from "./locales/vi/common.json";
@@ -84,6 +85,7 @@ import viV3Capabilities from "./locales/vi/v3-capabilities.json";
 import viBackup from "./locales/vi/backup.json";
 import viArdenn from "./locales/vi/ardenn.json";
 import viHooks from "./locales/vi/hooks.json";
+import viWorkstations from "./locales/vi/workstations.json";
 
 // --- ZH namespaces ---
 import zhCommon from "./locales/zh/common.json";
@@ -126,6 +128,7 @@ import zhV3Capabilities from "./locales/zh/v3-capabilities.json";
 import zhBackup from "./locales/zh/backup.json";
 import zhArdenn from "./locales/zh/ardenn.json";
 import zhHooks from "./locales/zh/hooks.json";
+import zhWorkstations from "./locales/zh/workstations.json";
 
 const STORAGE_KEY = "goclaw:language";
 
@@ -149,6 +152,7 @@ const ns = [
   "backup",
   "ardenn",
   "hooks",
+  "workstations",
 ] as const;
 
 i18n.use(initReactI18next).init({
@@ -172,6 +176,7 @@ i18n.use(initReactI18next).init({
       backup: enBackup,
       ardenn: enArdenn,
       hooks: enHooks,
+      workstations: enWorkstations,
     },
     vi: {
       common: viCommon, sidebar: viSidebar, topbar: viTopbar, login: viLogin,
@@ -192,6 +197,7 @@ i18n.use(initReactI18next).init({
       backup: viBackup,
       ardenn: viArdenn,
       hooks: viHooks,
+      workstations: viWorkstations,
     },
     zh: {
       common: zhCommon, sidebar: zhSidebar, topbar: zhTopbar, login: zhLogin,
@@ -212,6 +218,7 @@ i18n.use(initReactI18next).init({
       backup: zhBackup,
       ardenn: zhArdenn,
       hooks: zhHooks,
+      workstations: zhWorkstations,
     },
   },
   ns: [...ns],

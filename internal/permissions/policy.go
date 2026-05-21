@@ -212,6 +212,7 @@ func isAdminMethod(method string) bool {
 		protocol.MethodConfigSchema,
 		protocol.MethodConfigDefaults,
 		protocol.MethodConfigPermissionsList,
+		protocol.MethodConfigPermissionsCheck,
 		protocol.MethodConfigPermissionsGrant,
 		protocol.MethodConfigPermissionsRevoke,
 
@@ -288,6 +289,17 @@ func isAdminMethod(method string) bool {
 		protocol.MethodArdennDomainsUpdate,
 		protocol.MethodArdennDomainsDelete,
 		protocol.MethodArdennWorkflowsDelete,
+
+		// Workstations — credentials + remote exec; create/update/delete and
+		// agent linking + permission mutations are admin-only.
+		protocol.MethodWorkstationsCreate,
+		protocol.MethodWorkstationsUpdate,
+		protocol.MethodWorkstationsDelete,
+		protocol.MethodWorkstationsLinkAgent,
+		protocol.MethodWorkstationsUnlinkAgent,
+		protocol.MethodWorkstationsPermAdd,
+		protocol.MethodWorkstationsPermRemove,
+		protocol.MethodWorkstationsPermToggle,
 	}
 	return slices.Contains(adminMethods, method)
 }
@@ -337,6 +349,9 @@ func isWriteMethod(method string) bool {
 		protocol.MethodArdennRunsCancel,
 		protocol.MethodArdennRunsApprove,
 		protocol.MethodArdennRunsReject,
+
+		// Workstations — connection test invokes SSH side-effects.
+		protocol.MethodWorkstationsTest,
 	}
 	return slices.Contains(writeExact, method)
 }
@@ -441,6 +456,12 @@ func isReadMethod(method string) bool {
 		protocol.MethodArdennRunsGet,
 		protocol.MethodArdennEventsStream,
 		protocol.MethodArdennMyTasks,
+
+		// Workstations read
+		protocol.MethodWorkstationsList,
+		protocol.MethodWorkstationsGet,
+		protocol.MethodWorkstationsPermList,
+		protocol.MethodWorkstationsListActivity,
 	}
 	return slices.Contains(readMethods, method)
 }

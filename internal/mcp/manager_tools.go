@@ -119,7 +119,7 @@ func DiscoverTools(ctx context.Context, transportType, command string, args []st
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	client, err := createClient(transportType, command, args, env, url, headers)
+	client, err := createClient(transportType, command, args, env, url, headers, 0)
 	if err != nil {
 		return nil, fmt.Errorf("create client: %w", err)
 	}

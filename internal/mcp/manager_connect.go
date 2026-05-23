@@ -18,7 +18,7 @@ import (
 // definitions. The caller is responsible for registering tools and starting
 // the health loop. This function is shared by both Manager and Pool.
 func connectAndDiscover(ctx context.Context, name, transportType, command string, args []string, env map[string]string, url string, headers map[string]string, timeoutSec int) (*serverState, []mcpgo.Tool, error) {
-	client, err := createClient(transportType, command, args, env, url, headers)
+	client, err := createClient(transportType, command, args, env, url, headers, timeoutSec)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create client: %w", err)
 	}
@@ -230,7 +230,10 @@ func (m *Manager) registerPoolBridgeTools(entry *poolEntry, serverName, toolPref
 }
 
 // createClient creates the appropriate MCP client based on transport type.
-func createClient(transportType, command string, args []string, env map[string]string, url string, headers map[string]string) (*mcpclient.Client, error) {
+// timeoutSec, if > 0, sets the per-request SSE response timeout (sse) or HTTP
+// request/stream timeout (streamable-http). Without it, mcp-go transport caps
+// SSE responses at 60s regardless of the caller's context deadline.
+func createClient(transportType, command string, args []string, env map[string]string, url string, headers map[string]string, timeoutSec int) (*mcpclient.Client, error) {
 	switch transportType {
 	case "stdio":
 		envSlice := mapToEnvSlice(env)
@@ -241,12 +244,18 @@ func createClient(transportType, command string, args []string, env map[string]s
 		if len(headers) > 0 {
 			opts = append(opts, mcpclient.WithHeaders(headers))
 		}
+		if timeoutSec > 0 {
+			opts = append(opts, transport.WithResponseTimeout(time.Duration(timeoutSec)*time.Second))
+		}
 		return mcpclient.NewSSEMCPClient(url, opts...)
 
 	case "streamable-http":
 		var opts []transport.StreamableHTTPCOption
 		if len(headers) > 0 {
 			opts = append(opts, transport.WithHTTPHeaders(headers))
+		}
+		if timeoutSec > 0 {
+			opts = append(opts, transport.WithHTTPTimeout(time.Duration(timeoutSec)*time.Second))
 		}
 		return mcpclient.NewStreamableHttpClient(url, opts...)
 
@@ -383,7 +392,7 @@ func reconnectWithBackoff(ctx context.Context, ss *serverState, logPrefix string
 func fullReconnect(ctx context.Context, ss *serverState) bool {
 	slog.Info("mcp.full_reconnect", "server", ss.name, "transport", ss.transport)
 
-	newClient, err := createClient(ss.transport, ss.conn.command, ss.conn.args, ss.conn.env, ss.conn.url, ss.conn.headers)
+	newClient, err := createClient(ss.transport, ss.conn.command, ss.conn.args, ss.conn.env, ss.conn.url, ss.conn.headers, ss.timeoutSec)
 	if err != nil {
 		slog.Warn("mcp.reconnect_create_failed", "server", ss.name, "error", err)
 		return false

@@ -3,11 +3,13 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
+	"github.com/nextlevelbuilder/goclaw/internal/sessions"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
@@ -110,6 +112,12 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *Resul
 	deliver := true
 	if v, ok := args["deliver"].(bool); ok {
 		deliver = v
+	}
+	if !deliver && sessions.IsCronSession(ToolSessionKeyFromCtx(ctx)) {
+		slog.Info("write_file.deliver_forced_true_in_cron",
+			"reason", "LLM passed deliver=false in cron context; report files must be auto-delivered",
+			"path", path)
+		deliver = true
 	}
 	if path == "" {
 		return ErrorResult("path is required")

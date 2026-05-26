@@ -609,6 +609,16 @@ func poolHealthLoop(ctx context.Context, ss *serverState) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ss.reconnectSignal:
+			// Sub-tick wake from mcp-go OnConnectionLost callback (SSE GET stream
+			// broke). Bypass the consecutive-failure tolerance: the server-side
+			// session is already dead, ping would just stretch the latency.
+			slog.Info("mcp.pool.reconnect_signal", "server", ss.name)
+			ss.connected.Store(false)
+			ss.mu.Lock()
+			ss.healthFailures = healthFailThreshold
+			ss.mu.Unlock()
+			poolTryReconnect(ctx, ss)
 		case <-ticker.C:
 			if err := ss.client.Ping(ctx); err != nil {
 				if isMethodNotFound(err) {

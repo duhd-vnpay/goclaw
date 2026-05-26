@@ -74,6 +74,14 @@ type serverState struct {
 	reconnAttempts  int
 	healthFailures  int // consecutive ping failures (resets on success)
 	lastErr         string
+
+	// reconnectSignal is poked by the mcp-go SSE client's OnConnectionLost
+	// callback when the persistent SSE stream breaks (pod restart, network RST,
+	// EOF). Health loops select on this channel for sub-tick reconnect — avoids
+	// waiting healthFailThreshold * healthCheckInterval (~90s) to notice a
+	// session that is already irrecoverable on the server side. Buffer cap=1
+	// so duplicate signals coalesce; sends use default-case drop pattern.
+	reconnectSignal chan struct{}
 }
 
 // Manager orchestrates MCP server connections and tool registration.

@@ -93,11 +93,36 @@ func connectAndDiscover(ctx context.Context, name, transportType, command string
 			url:     url,
 			headers: headers,
 		},
+		reconnectSignal: make(chan struct{}, 1),
 	}
 	ss.clientPtr.Store(client)
 	ss.connected.Store(true)
+	registerOnConnectionLost(client, ss)
 
 	return ss, toolsResult.Tools, nil
+}
+
+// registerOnConnectionLost wires the mcp-go client's connection-lost callback
+// to ss.reconnectSignal. Fires when the SSE GET stream returns EOF / errors out
+// (pod restart, TCP reset). For non-SSE transports the underlying Client.OnConnectionLost
+// is a no-op (type assertion miss), so calling unconditionally is safe.
+//
+// The handler is rebound on every successful fullReconnect because each
+// reconnect creates a brand-new client; the old client's handler still fires
+// during Close(), but the stale-check via clientPtr.Load() drops it.
+func registerOnConnectionLost(client *mcpclient.Client, ss *serverState) {
+	captured := client
+	client.OnConnectionLost(func(err error) {
+		stale := ss.clientPtr.Load() != captured
+		slog.Warn("mcp.connection_lost", "server", ss.name, "error", err, "stale", stale)
+		if stale {
+			return
+		}
+		select {
+		case ss.reconnectSignal <- struct{}{}:
+		default:
+		}
+	})
 }
 
 // connectServer creates a client, initializes the connection, discovers tools, and registers them.
@@ -284,6 +309,16 @@ func (m *Manager) healthLoop(ctx context.Context, ss *serverState) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ss.reconnectSignal:
+			// Sub-tick wake from mcp-go OnConnectionLost callback (SSE GET stream
+			// broke). Bypass the consecutive-failure tolerance: the server-side
+			// session is already dead, ping would just stretch the latency.
+			slog.Info("mcp.server.reconnect_signal", "server", ss.name)
+			ss.connected.Store(false)
+			ss.mu.Lock()
+			ss.healthFailures = healthFailThreshold
+			ss.mu.Unlock()
+			m.tryReconnect(ctx, ss)
 		case <-ticker.C:
 			if err := ss.client.Ping(ctx); err != nil {
 				if isMethodNotFound(err) {
@@ -427,6 +462,11 @@ func fullReconnect(ctx context.Context, ss *serverState) bool {
 	ss.healthFailures = 0
 	ss.lastErr = ""
 	ss.mu.Unlock()
+
+	// Rebind connection-lost handler to the new client. Old client's handler
+	// still fires during Close() below, but the stale-check in the handler
+	// drops it because clientPtr.Load() now returns newClient.
+	registerOnConnectionLost(newClient, ss)
 
 	_ = oldClient.Close()
 	return true

@@ -349,3 +349,54 @@ func TestTTSConfigSave_WriteFailuresReturnError(t *testing.T) {
 		t.Fatalf("unexpected success body: %q", rr.Body.String())
 	}
 }
+
+// TestTTSConfigSave_ProviderEmptyStringPersists verifies that POST {"provider":""}
+// clears tts.provider so the UI's "None (Disabled)" button actually disables TTS.
+// Regression: empty string was previously skipped by a `req.Provider != ""` guard,
+// leaving the old provider in DB so reload still showed the previous selection.
+func TestTTSConfigSave_ProviderEmptyStringPersists(t *testing.T) {
+	setupTestToken(t, "")
+
+	sc := &validationSystemConfigStore{data: map[string]string{
+		"tts.provider": "minimax",
+	}}
+	cs := &validationSecretsStore{data: map[string]string{}}
+	mux := newValidationTTSConfigMux(sc, cs)
+
+	req := httptest.NewRequest("POST", "/v1/tts/config", strings.NewReader(`{"provider":""}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if got, ok := sc.data["tts.provider"]; !ok || got != "" {
+		t.Fatalf("tts.provider = %q (ok=%v), want empty string persisted", got, ok)
+	}
+}
+
+// TestTTSConfigSave_ProviderOmittedLeavesValue verifies that POST without the
+// "provider" field at all does NOT touch tts.provider — partial updates of
+// other fields (auto/mode/credentials) must preserve the active provider.
+func TestTTSConfigSave_ProviderOmittedLeavesValue(t *testing.T) {
+	setupTestToken(t, "")
+
+	sc := &validationSystemConfigStore{data: map[string]string{
+		"tts.provider": "minimax",
+	}}
+	cs := &validationSecretsStore{data: map[string]string{}}
+	mux := newValidationTTSConfigMux(sc, cs)
+
+	req := httptest.NewRequest("POST", "/v1/tts/config", strings.NewReader(`{"auto":"off"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := sc.data["tts.provider"]; got != "minimax" {
+		t.Fatalf("tts.provider = %q, want unchanged 'minimax'", got)
+	}
+}

@@ -92,7 +92,15 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
       // Don't logout if authenticated via browser pairing (no token)
       const state = useAuthStore.getState();
       if (state.senderID && !state.token) return;
+      // Capture OIDC mode BEFORE logout (logout resets oidcEnabled to false)
+      const isOidcMode = state.oidcEnabled;
       state.logout();
+      // Force redirect to Keycloak in OIDC mode — RequireAuth only fires on wrapped routes,
+      // missing initial-mount race when API call (e.g. /v1/providers) 401s before route renders.
+      if (isOidcMode) {
+        const callbackUrl = encodeURIComponent(window.location.origin + "/auth/callback");
+        window.location.href = `/v1/auth/login?redirect=${callbackUrl}`;
+      }
     };
   }
   const ws = wsRef.current;
@@ -111,7 +119,15 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
       // In OIDC mode, userId is populated async from /me after the token arrives.
       // A 401 while userId is still empty is a race condition, not an invalid session.
       if (state.oidcEnabled && state.token && !state.userId) return;
+      // Capture OIDC mode BEFORE logout (logout resets oidcEnabled to false)
+      const isOidcMode = state.oidcEnabled;
       state.logout();
+      // Force redirect to Keycloak in OIDC mode — RequireAuth only fires on wrapped routes,
+      // missing initial-mount race when API call (e.g. /v1/providers) 401s before route renders.
+      if (isOidcMode) {
+        const callbackUrl = encodeURIComponent(window.location.origin + "/auth/callback");
+        window.location.href = `/v1/auth/login?redirect=${callbackUrl}`;
+      }
     };
     return client;
   }, []);

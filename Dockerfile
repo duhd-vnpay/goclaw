@@ -80,11 +80,14 @@ ARG ENABLE_CLAUDE_CLI=false
 # requirements-skills.txt: additional deps only for ENABLE_FULL_SKILLS.
 COPY docker/requirements-base.txt docker/requirements-skills.txt /tmp/
 
-# Install ca-certificates + wget (healthcheck) + optional runtimes.
+# Install ca-certificates + wget (healthcheck) + tzdata + optional runtimes.
+# tzdata: required for `date` command + subprocess TZ inheritance (psql, agent reports).
+#         Go binary embeds tzdata via `_ "time/tzdata"` in main.go, but OS-level tzdata
+#         needed for system commands. Default TZ set below via ENV block.
 # ENABLE_FULL_SKILLS=true pre-installs all skill deps (larger image, no on-demand install needed).
 # Otherwise, skill packages are installed on-demand via the admin UI.
 RUN set -eux; \
-    apk add --no-cache ca-certificates wget su-exec; \
+    apk add --no-cache ca-certificates wget su-exec tzdata; \
     if [ "$ENABLE_SANDBOX" = "true" ]; then \
         apk add --no-cache docker-cli; \
     fi; \
@@ -157,7 +160,12 @@ RUN mkdir -p /app/workspace /app/data/.runtime/pip /app/data/.runtime/npm-global
     && chmod 0755 /app/data/.runtime/bin
 
 # Default environment
-ENV GOCLAW_CONFIG=/app/config.json \
+# TZ defaults to Asia/Ho_Chi_Minh (canonical IANA, +07:00). Override at runtime
+# with `-e TZ=...` or k8s env if deploying in a different region. Apps that use
+# `cron_jobs.timezone = 'Asia/Saigon'` (deprecated alias) will resolve via Go's
+# embedded tzdata. System commands (date, psql) use this TZ env var.
+ENV TZ=Asia/Ho_Chi_Minh \
+    GOCLAW_CONFIG=/app/config.json \
     GOCLAW_WORKSPACE=/app/workspace \
     GOCLAW_DATA_DIR=/app/data \
     GOCLAW_SKILLS_DIR=/app/skills \

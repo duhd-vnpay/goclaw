@@ -90,18 +90,51 @@ func buildMemoryFlushPromptConfig(
 	}
 }
 
+// isNonInteractiveSession returns true for any session type that runs as a
+// self-contained workflow rather than as an open-ended user chat. Memory-flush
+// is harmful for these because the 90s blocking sub-agent + subsequent
+// compaction strip pending workflow steps from the agent's context — model
+// then decides "task done" prematurely.
+//
+// Covers:
+//   - cron sessions      (agent:X:cron:Y)
+//   - heartbeat sessions (agent:X:heartbeat or agent:X:heartbeat:ms)
+//   - team sessions      (agent:X:team:Y)
+//   - subagent sessions  (agent:X:subagent:Y) — same canonical scheme
+//   - delegate sessions  (delegate:...) — uses its own session-key scheme
+//     (see internal/tools/delegate_tool.go SenderID "subagent:delegate:...")
+//
+// Interactive sessions (agent:X:main, agent:X:dm:..., agent:X:group:...) are
+// the only category where memory-flush is actually useful: a user is chatting
+// across runs and we want to persist durable knowledge between turns.
+func isNonInteractiveSession(sessionKey string) bool {
+	if strings.HasPrefix(sessionKey, "delegate:") {
+		return true
+	}
+	return sessions.IsCronSession(sessionKey) ||
+		sessions.IsHeartbeatSession(sessionKey) ||
+		sessions.IsTeamSession(sessionKey) ||
+		sessions.IsSubagentSession(sessionKey)
+}
+
 // shouldRunMemoryFlush checks whether a memory flush should run before compaction.
 // Flush always runs when compaction triggers (called inside maybeSummarize),
 // gated only by enabled/memory checks and a dedup guard per compaction cycle.
 //
-// Skips for cron sessions: cron jobs are self-contained workflows (e.g. weekly
-// analytics report). Running an in-loop memory-flush sub-agent (90s blocking)
-// + compaction at mid-workflow strips pending workflow steps (delegate, send_file,
-// etc.) from the agent's effective context — model decides "task done" after
-// the just-written file even when SOUL system prompt still requires further
-// steps. Cron has no need to persist memories across runs anyway; skip flush
-// entirely. (Incident 2026-06-01: ai-usage-analyst weekly cron skipped Step 6
-// delegate to report-docx-converter 3 times in a row because of this.)
+// Skips for non-interactive sessions: cron, heartbeat, team, subagent, delegate.
+// All are self-contained workflows. Running an in-loop memory-flush sub-agent
+// (90s blocking) + compaction at mid-workflow strips pending workflow steps
+// (delegate, send_file, etc.) from the agent's effective context — model
+// decides "task done" after the just-written file even when SOUL system prompt
+// still requires further steps. None of these session types need to persist
+// memories across runs.
+//
+// Incident 2026-06-01:
+//   - ai-usage-analyst weekly cron (agent:X:cron:Y) skipped Step 6 delegate
+//     3 runs in a row → fork.9 added IsCronSession check.
+//   - Then report-docx-converter delegated worker (delegate:...) ALSO triggered
+//     memory-flush mid-workflow → fork.10b added isNonInteractiveSession check
+//     (broader: covers delegate + subagent + heartbeat + team too).
 func (l *Loop) shouldRunMemoryFlush(ctx context.Context, sessionKey string, totalTokens int, settings *MemoryFlushSettings) bool {
 	if settings == nil || !settings.Enabled || !l.hasMemory {
 		return false
@@ -111,10 +144,10 @@ func (l *Loop) shouldRunMemoryFlush(ctx context.Context, sessionKey string, tota
 		return false
 	}
 
-	if sessions.IsCronSession(sessionKey) {
-		slog.Info("memory flush: skipped for cron session",
+	if isNonInteractiveSession(sessionKey) {
+		slog.Info("memory flush: skipped for non-interactive session",
 			"session", sessionKey,
-			"reason", "cron workflows must not be interrupted by mid-loop memory dump")
+			"reason", "non-interactive workflows (cron/heartbeat/team/subagent/delegate) must not be interrupted by mid-loop memory dump")
 		return false
 	}
 
@@ -131,16 +164,15 @@ func (l *Loop) shouldRunMemoryFlush(ctx context.Context, sessionKey string, tota
 // runMemoryFlush executes a memory flush turn: sends flush prompt to LLM with tools
 // so it can write memory files. Matching TS agent-runner-memory.ts.
 //
-// Defense-in-depth cron guard: there are two callers (maybeSummarize and
-// pipeline's makeRunMemoryFlush callback) — the latter bypasses
+// Defense-in-depth non-interactive guard: there are two callers (maybeSummarize
+// and pipeline's makeRunMemoryFlush callback) — the latter bypasses
 // shouldRunMemoryFlush, so this early-return protects every code path that
-// reaches runMemoryFlush. See shouldRunMemoryFlush for the full rationale
-// (cron workflows must not be interrupted by mid-loop memory dump).
+// reaches runMemoryFlush. See shouldRunMemoryFlush for the full rationale.
 func (l *Loop) runMemoryFlush(ctx context.Context, sessionKey string, settings *MemoryFlushSettings) {
-	if sessions.IsCronSession(sessionKey) {
-		slog.Info("memory flush: skipped for cron session",
+	if isNonInteractiveSession(sessionKey) {
+		slog.Info("memory flush: skipped for non-interactive session",
 			"session", sessionKey,
-			"reason", "cron workflows must not be interrupted by mid-loop memory dump")
+			"reason", "non-interactive workflows (cron/heartbeat/team/subagent/delegate) must not be interrupted by mid-loop memory dump")
 		return
 	}
 

@@ -99,30 +99,49 @@ func TestShouldRunMemoryFlush_SkipsCronSession(t *testing.T) {
 	}
 }
 
-// TestRunMemoryFlush_SkipsCronSession asserts runMemoryFlush itself has a
-// defense-in-depth early-return for cron sessions. Without this, the
-// pipeline callback (makeRunMemoryFlush in loop_pipeline_callbacks.go) would
-// bypass shouldRunMemoryFlush and call runMemoryFlush directly — letting
-// the bug back in through that path.
+// TestRunMemoryFlush_SkipsNonInteractive asserts runMemoryFlush itself has a
+// defense-in-depth early-return for every non-interactive session prefix.
+// Without this, the pipeline callback (makeRunMemoryFlush in
+// loop_pipeline_callbacks.go) would bypass shouldRunMemoryFlush and call
+// runMemoryFlush directly — letting the bug back in through that path.
 //
-// Regression: deploy v3.12.0-fork.9 added the cron check ONLY to
-// shouldRunMemoryFlush; cron sessions still emitted "memory flush: starting"
-// because the pipeline callback bypasses the check. fork.10 adds this guard
-// to make the early-return live on runMemoryFlush itself.
+// Regression history:
+//   - fork.9 added IsCronSession check ONLY to shouldRunMemoryFlush; cron
+//     sessions still emitted "memory flush: starting" because pipeline
+//     callback bypasses the check.
+//   - fork.10 added IsCronSession check to runMemoryFlush too. But delegated
+//     subagent sessions (delegate:... session-key scheme) still triggered
+//     memory-flush mid-render-workflow, breaking report-docx-converter.
+//   - fork.10b broadened to isNonInteractiveSession (covers cron + heartbeat
+//     + team + subagent + delegate). This test guards every prefix.
 //
-// The cron check happens at the top of runMemoryFlush, before any l.sessions
-// access, so a minimal Loop with no sessions store can exercise it.
-func TestRunMemoryFlush_SkipsCronSession(t *testing.T) {
+// The early-return happens at the top of runMemoryFlush, before any
+// l.sessions access, so a minimal Loop with no sessions store can exercise it.
+func TestRunMemoryFlush_SkipsNonInteractive(t *testing.T) {
 	t.Parallel()
 
-	loop := &Loop{id: "ai-usage-analyst", hasMemory: true}
+	loop := &Loop{id: "test-agent", hasMemory: true}
 	settings := &MemoryFlushSettings{Enabled: true}
 
-	cronKey := "agent:ai-usage-analyst:cron:019e4d84-76c0-7612-b14f-a86cb6b2289b"
+	cases := []struct {
+		name string
+		key  string
+	}{
+		{"cron", "agent:test-agent:cron:job-uuid"},
+		{"heartbeat", "agent:test-agent:heartbeat"},
+		{"heartbeat-isolated", "agent:test-agent:heartbeat:1717250000000"},
+		{"subagent", "agent:test-agent:subagent:task-uuid"},
+		{"team", "agent:test-agent:team:task-uuid"},
+		{"delegate", "delegate:cronid:report-docx-converter:run-uuid"},
+	}
 
-	// Must return cleanly — without panic on nil sessions store.
-	// runMemoryFlush is void; the assertion is that it does not panic.
-	loop.runMemoryFlush(context.Background(), cronKey, settings)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Must return cleanly — without panic on nil sessions store.
+			// runMemoryFlush is void; the assertion is that it does not panic.
+			loop.runMemoryFlush(context.Background(), tc.key, settings)
+		})
+	}
 }
 
 // TestShouldRunMemoryFlush_DisabledSettings asserts the early-return for

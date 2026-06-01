@@ -130,7 +130,20 @@ func (l *Loop) shouldRunMemoryFlush(ctx context.Context, sessionKey string, tota
 
 // runMemoryFlush executes a memory flush turn: sends flush prompt to LLM with tools
 // so it can write memory files. Matching TS agent-runner-memory.ts.
+//
+// Defense-in-depth cron guard: there are two callers (maybeSummarize and
+// pipeline's makeRunMemoryFlush callback) — the latter bypasses
+// shouldRunMemoryFlush, so this early-return protects every code path that
+// reaches runMemoryFlush. See shouldRunMemoryFlush for the full rationale
+// (cron workflows must not be interrupted by mid-loop memory dump).
 func (l *Loop) runMemoryFlush(ctx context.Context, sessionKey string, settings *MemoryFlushSettings) {
+	if sessions.IsCronSession(sessionKey) {
+		slog.Info("memory flush: skipped for cron session",
+			"session", sessionKey,
+			"reason", "cron workflows must not be interrupted by mid-loop memory dump")
+		return
+	}
+
 	slog.Info("memory flush: starting", "session", sessionKey)
 
 	flushCtx, cancel := context.WithTimeout(ctx, 90*time.Second)

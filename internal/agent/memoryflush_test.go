@@ -99,6 +99,32 @@ func TestShouldRunMemoryFlush_SkipsCronSession(t *testing.T) {
 	}
 }
 
+// TestRunMemoryFlush_SkipsCronSession asserts runMemoryFlush itself has a
+// defense-in-depth early-return for cron sessions. Without this, the
+// pipeline callback (makeRunMemoryFlush in loop_pipeline_callbacks.go) would
+// bypass shouldRunMemoryFlush and call runMemoryFlush directly — letting
+// the bug back in through that path.
+//
+// Regression: deploy v3.12.0-fork.9 added the cron check ONLY to
+// shouldRunMemoryFlush; cron sessions still emitted "memory flush: starting"
+// because the pipeline callback bypasses the check. fork.10 adds this guard
+// to make the early-return live on runMemoryFlush itself.
+//
+// The cron check happens at the top of runMemoryFlush, before any l.sessions
+// access, so a minimal Loop with no sessions store can exercise it.
+func TestRunMemoryFlush_SkipsCronSession(t *testing.T) {
+	t.Parallel()
+
+	loop := &Loop{id: "ai-usage-analyst", hasMemory: true}
+	settings := &MemoryFlushSettings{Enabled: true}
+
+	cronKey := "agent:ai-usage-analyst:cron:019e4d84-76c0-7612-b14f-a86cb6b2289b"
+
+	// Must return cleanly — without panic on nil sessions store.
+	// runMemoryFlush is void; the assertion is that it does not panic.
+	loop.runMemoryFlush(context.Background(), cronKey, settings)
+}
+
 // TestShouldRunMemoryFlush_DisabledSettings asserts the early-return for
 // nil/disabled settings still works (defense in depth before the cron check).
 func TestShouldRunMemoryFlush_DisabledSettings(t *testing.T) {

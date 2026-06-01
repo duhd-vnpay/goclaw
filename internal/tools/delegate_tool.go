@@ -263,7 +263,9 @@ func (t *DelegateTool) executeSyncMode(ctx context.Context, req DelegateRequest,
 // executeAsyncMode spawns a goroutine and returns immediately.
 func (t *DelegateTool) executeAsyncMode(ctx context.Context, req DelegateRequest) *Result {
 	// Detach from parent cancel but add a deadline to prevent goroutine leaks.
-	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+	// 20min ceiling: reasoning subagents (sonnet 4.6 + extended thinking + 15-20KB JS gen)
+	// can need 5-8min per iter × 6-10 iter for parse+render+validate+send workflows.
+	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Minute)
 
 	go func() {
 		defer cancel()

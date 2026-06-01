@@ -10,6 +10,7 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
+	"github.com/nextlevelbuilder/goclaw/internal/sessions"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
@@ -92,12 +93,28 @@ func buildMemoryFlushPromptConfig(
 // shouldRunMemoryFlush checks whether a memory flush should run before compaction.
 // Flush always runs when compaction triggers (called inside maybeSummarize),
 // gated only by enabled/memory checks and a dedup guard per compaction cycle.
+//
+// Skips for cron sessions: cron jobs are self-contained workflows (e.g. weekly
+// analytics report). Running an in-loop memory-flush sub-agent (90s blocking)
+// + compaction at mid-workflow strips pending workflow steps (delegate, send_file,
+// etc.) from the agent's effective context — model decides "task done" after
+// the just-written file even when SOUL system prompt still requires further
+// steps. Cron has no need to persist memories across runs anyway; skip flush
+// entirely. (Incident 2026-06-01: ai-usage-analyst weekly cron skipped Step 6
+// delegate to report-docx-converter 3 times in a row because of this.)
 func (l *Loop) shouldRunMemoryFlush(ctx context.Context, sessionKey string, totalTokens int, settings *MemoryFlushSettings) bool {
 	if settings == nil || !settings.Enabled || !l.hasMemory {
 		return false
 	}
 
 	if totalTokens <= 0 {
+		return false
+	}
+
+	if sessions.IsCronSession(sessionKey) {
+		slog.Info("memory flush: skipped for cron session",
+			"session", sessionKey,
+			"reason", "cron workflows must not be interrupted by mid-loop memory dump")
 		return false
 	}
 

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/uuid"
@@ -67,5 +68,49 @@ func TestBuildMemoryFlushPromptConfig_ZeroUUIDStringified(t *testing.T) {
 
 	if cfg.AgentUUID != uuid.Nil.String() {
 		t.Errorf("AgentUUID = %q, want %q", cfg.AgentUUID, uuid.Nil.String())
+	}
+}
+
+// TestShouldRunMemoryFlush_SkipsCronSession asserts that cron sessions never
+// trigger memory-flush. Memory-flush runs as a synchronous sub-agent (~90s
+// blocking) and is followed by compaction that summarizes ~70% of messages.
+// For cron workflows (weekly analytics report, daily ops report), this strips
+// pending workflow steps (delegate, send_file) from the agent's effective
+// context — the model decides "task done" after the just-written file even
+// when SOUL still requires further steps.
+//
+// Regression guard: incident 2026-06-01 — ai-usage-analyst weekly cron
+// skipped Step 6 delegate to report-docx-converter 3 runs in a row.
+//
+// The early-return for cron happens BEFORE the sessions store calls, so a
+// minimal Loop without sessions can exercise this branch.
+func TestShouldRunMemoryFlush_SkipsCronSession(t *testing.T) {
+	t.Parallel()
+
+	loop := &Loop{
+		id:        "ai-usage-analyst",
+		hasMemory: true,
+	}
+	settings := &MemoryFlushSettings{Enabled: true}
+
+	cronKey := "agent:ai-usage-analyst:cron:019e4d84-76c0-7612-b14f-a86cb6b2289b"
+	if loop.shouldRunMemoryFlush(context.Background(), cronKey, 80000, settings) {
+		t.Fatalf("shouldRunMemoryFlush must return false for cron session, got true (key=%s)", cronKey)
+	}
+}
+
+// TestShouldRunMemoryFlush_DisabledSettings asserts the early-return for
+// nil/disabled settings still works (defense in depth before the cron check).
+func TestShouldRunMemoryFlush_DisabledSettings(t *testing.T) {
+	t.Parallel()
+
+	loop := &Loop{id: "x", hasMemory: true}
+
+	if loop.shouldRunMemoryFlush(context.Background(), "any-key", 100, nil) {
+		t.Fatal("expected false with nil settings")
+	}
+
+	if loop.shouldRunMemoryFlush(context.Background(), "any-key", 100, &MemoryFlushSettings{Enabled: false}) {
+		t.Fatal("expected false with disabled settings")
 	}
 }

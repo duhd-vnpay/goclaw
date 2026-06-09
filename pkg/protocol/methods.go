@@ -229,18 +229,18 @@ const (
 	MethodHooksHistory = "hooks.history"
 )
 
-// Identity — Departments
+// Identity — Departments (LOCAL fork)
 const (
-	MethodDepartmentsList        = "departments.list"
-	MethodDepartmentsCreate      = "departments.create"
-	MethodDepartmentsUpdate      = "departments.update"
-	MethodDepartmentsDelete      = "departments.delete"
-	MethodDepartmentsMembersList = "departments.members.list"
-	MethodDepartmentsMembersAdd  = "departments.members.add"
+	MethodDepartmentsList          = "departments.list"
+	MethodDepartmentsCreate        = "departments.create"
+	MethodDepartmentsUpdate        = "departments.update"
+	MethodDepartmentsDelete        = "departments.delete"
+	MethodDepartmentsMembersList   = "departments.members.list"
+	MethodDepartmentsMembersAdd    = "departments.members.add"
 	MethodDepartmentsMembersRemove = "departments.members.remove"
 )
 
-// Identity — Project Members
+// Identity — Project Members (LOCAL fork)
 const (
 	MethodProjectMembersList       = "projects.members.list"
 	MethodProjectMembersAdd        = "projects.members.add"
@@ -248,12 +248,12 @@ const (
 	MethodProjectMembersUpdateRole = "projects.members.update_role"
 )
 
-// Ardenn — Enterprise Workflow Engine
+// Ardenn — Enterprise Workflow Engine (LOCAL fork)
 const (
-	MethodArdennDomainsList      = "ardenn.domains.list"
-	MethodArdennDomainsCreate    = "ardenn.domains.create"
-	MethodArdennDomainsUpdate    = "ardenn.domains.update"
-	MethodArdennDomainsDelete    = "ardenn.domains.delete"
+	MethodArdennDomainsList   = "ardenn.domains.list"
+	MethodArdennDomainsCreate = "ardenn.domains.create"
+	MethodArdennDomainsUpdate = "ardenn.domains.update"
+	MethodArdennDomainsDelete = "ardenn.domains.delete"
 
 	MethodArdennWorkflowsList    = "ardenn.workflows.list"
 	MethodArdennWorkflowsGet     = "ardenn.workflows.get"
@@ -262,13 +262,22 @@ const (
 	MethodArdennWorkflowsPublish = "ardenn.workflows.publish"
 	MethodArdennWorkflowsDelete  = "ardenn.workflows.delete"
 
-	MethodArdennRunsList         = "ardenn.runs.list"
-	MethodArdennRunsGet          = "ardenn.runs.get"
-	MethodArdennRunsStart        = "ardenn.runs.start"
-	MethodArdennRunsCancel       = "ardenn.runs.cancel"
-	MethodArdennRunsApprove      = "ardenn.runs.approve"
-	MethodArdennRunsReject       = "ardenn.runs.reject"
+	MethodArdennRunsList    = "ardenn.runs.list"
+	MethodArdennRunsGet     = "ardenn.runs.get"
+	MethodArdennRunsStart   = "ardenn.runs.start"
+	MethodArdennRunsCancel  = "ardenn.runs.cancel"
+	MethodArdennRunsApprove = "ardenn.runs.approve"
+	MethodArdennRunsReject  = "ardenn.runs.reject"
 
-	MethodArdennEventsStream     = "ardenn.events.stream"
-	MethodArdennMyTasks          = "ardenn.tasks.my"
+	MethodArdennEventsStream = "ardenn.events.stream"
+	MethodArdennMyTasks      = "ardenn.tasks.my"
+)
+
+// Bitrix24 portal management (self-service onboarding for the bitrix24 channel).
+// See plans/260513-1648-bitrix24-portal-self-service-ux/phase-02-backend-rpc-portals.md.
+const (
+	MethodBitrixPortalsList          = "bitrix.portals.list"
+	MethodBitrixPortalsCreate        = "bitrix.portals.create"
+	MethodBitrixPortalsGetInstallURL = "bitrix.portals.get_install_url"
+	MethodBitrixPortalsDelete        = "bitrix.portals.delete"
 )

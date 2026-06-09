@@ -100,6 +100,7 @@ func validCronRow(payloadJSON []byte) []any {
 		(*time.Time)(nil),   // last_run_at
 		(*string)(nil),      // last_status
 		(*string)(nil),      // last_error
+		(*int64)(nil),       // timeout_ms (schema v85)
 		now,                 // created_at
 		now,                 // updated_at
 	}

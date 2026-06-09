@@ -35,6 +35,10 @@ type CronJob struct {
 	DeliverChannel string       `json:"deliverChannel" db:"deliver_channel"`
 	DeliverTo      string       `json:"deliverTo" db:"deliver_to"`
 	WakeHeartbeat  bool         `json:"wakeHeartbeat" db:"wake_heartbeat"`
+	// TimeoutMS overrides cfg.Cron.JobTimeoutDuration() for this specific job.
+	// NULL/zero means "use config default". Useful for long-running orchestrator
+	// agents that should fail fast instead of consuming the full retry budget.
+	TimeoutMS *int64 `json:"timeoutMs,omitempty" db:"timeout_ms"`
 }
 
 // CronSchedule defines when a job should run.

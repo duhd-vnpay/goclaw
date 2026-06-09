@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -80,7 +81,14 @@ func makeCronJobHandler(sched *scheduler.Scheduler, msgBus *bus.MessageBus, cfg 
 
 		// Build context with tenant scope and timeout so agent loop events are
 		// scoped correctly and a hung agent can't block the cron scheduler forever.
+		// Per-job timeout override (added schema v85): jobs with non-NULL timeout_ms
+		// in cron_jobs use that value instead of the global config default. Useful
+		// for orchestrator agents (e.g. newsroom-conductor delegating via team_tasks)
+		// that should fail fast — 5min override instead of 30m × 4 retries = 2h.
 		jobTimeout := cfg.Cron.JobTimeoutDuration()
+		if job.TimeoutMS != nil && *job.TimeoutMS > 0 {
+			jobTimeout = time.Duration(*job.TimeoutMS) * time.Millisecond
+		}
 		cronCtx, cancelCron := context.WithTimeout(context.Background(), jobTimeout)
 		defer cancelCron()
 		cronCtx = store.WithTenantID(cronCtx, job.TenantID)

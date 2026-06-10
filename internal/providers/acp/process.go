@@ -176,16 +176,18 @@ func (pp *ProcessPool) spawn(ctx context.Context, poolKey string) (*ACPProcess, 
 
 	cmd := exec.CommandContext(procCtx, pp.agentBinary, pp.agentArgs...)
 	cmd.Dir = pp.workDir
-	cmd.Env = filterACPEnv(os.Environ())
+	cmd.Env = acpSubprocessEnv(os.Environ())
 	cmd.SysProcAttr = sysProcAttr()
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
+		slog.Error("acp: spawn failed", "pool_key", poolKey, "stage", "stdin_pipe", "error", err)
 		cancel()
 		return nil, fmt.Errorf("acp: stdin pipe: %w", err)
 	}
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
+		slog.Error("acp: spawn failed", "pool_key", poolKey, "stage", "stdout_pipe", "error", err)
 		cancel()
 		return nil, fmt.Errorf("acp: stdout pipe: %w", err)
 	}
@@ -193,6 +195,7 @@ func (pp *ProcessPool) spawn(ctx context.Context, poolKey string) (*ACPProcess, 
 
 	slog.Info("acp: starting subprocess", "pool_key", poolKey, "binary", pp.agentBinary, "args", pp.agentArgs)
 	if err := cmd.Start(); err != nil {
+		slog.Error("acp: spawn failed", "pool_key", poolKey, "stage", "start", "binary", pp.agentBinary, "error", err)
 		cancel()
 		return nil, fmt.Errorf("acp: start %s: %w", pp.agentBinary, err)
 	}
@@ -234,6 +237,7 @@ func (pp *ProcessPool) spawn(ctx context.Context, poolKey string) (*ACPProcess, 
 
 	slog.Info("acp: performing handshake (initialize)", "pool_key", poolKey)
 	if err := proc.Initialize(ctx); err != nil {
+		slog.Error("acp: spawn failed", "pool_key", poolKey, "stage", "handshake", "error", err)
 		cancel()
 		return nil, err
 	}

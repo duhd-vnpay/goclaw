@@ -226,3 +226,35 @@ func TestLimitedWriter_ImplementsWriter(t *testing.T) {
 	// compile-time check already in helpers.go but verify via interface assignment
 	var _ interface{ Write([]byte) (int, error) } = (*limitedWriter)(nil)
 }
+
+// --- acpSubprocessEnv tests ---
+
+func TestAcpSubprocessEnv_AppendsLoopGuard(t *testing.T) {
+	env := acpSubprocessEnv([]string{"HOME=/root", "PATH=/usr/bin"})
+	var found bool
+	for _, e := range env {
+		if e == "INSIDE_GOCLAW_ACP=1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected INSIDE_GOCLAW_ACP=1 in env, got %v", env)
+	}
+}
+
+func TestAcpSubprocessEnv_StripsSensitiveBeforeAppend(t *testing.T) {
+	env := acpSubprocessEnv([]string{
+		"GOCLAW_TOKEN=secret",
+		"ANTHROPIC_API_KEY=sk-ant-xxx",
+		"HOME=/root",
+	})
+	for _, e := range env {
+		if strings.HasPrefix(e, "GOCLAW_TOKEN=") {
+			t.Errorf("GOCLAW_TOKEN should be stripped, got %q", e)
+		}
+		if strings.HasPrefix(e, "ANTHROPIC_API_KEY=") {
+			t.Errorf("ANTHROPIC_API_KEY should be stripped, got %q", e)
+		}
+	}
+}

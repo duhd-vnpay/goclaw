@@ -84,6 +84,17 @@ func filterACPEnv(environ []string) []string {
 	return filtered
 }
 
+// acpSubprocessEnv builds the env slice for an ACP subprocess. It first strips
+// sensitive vars via filterACPEnv, then appends the INSIDE_GOCLAW_ACP=1 loop
+// guard sentinel so child processes (e.g. claude) can short-circuit any code
+// path that would try to start the goclaw MCP server and recurse.
+//
+// Append AFTER filterACPEnv so the sentinel cannot be forged from the parent
+// environment: filterACPEnv would strip any GOCLAW_-prefixed value first.
+func acpSubprocessEnv(environ []string) []string {
+	return append(filterACPEnv(environ), "INSIDE_GOCLAW_ACP=1")
+}
+
 // limitedWriter captures up to max bytes of output for diagnostics.
 type limitedWriter struct {
 	mu  sync.Mutex

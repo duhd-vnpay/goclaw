@@ -137,6 +137,8 @@ func TestFilterACPEnv_AllowedAuthEnvsPassThrough(t *testing.T) {
 	envs := []string{
 		"CLAUDE_CODE_OAUTH_TOKEN=oat_long_lived_token_xxx",
 		"ANTHROPIC_API_KEY=sk-ant-xxx",
+		"ANTHROPIC_BASE_URL=http://cli-proxy-api.sdlc-go-prod.svc.cluster.local:8317",
+		"ANTHROPIC_AUTH_TOKEN=at_xxx",
 	}
 	filtered := filterACPEnv(envs)
 	for _, want := range envs {

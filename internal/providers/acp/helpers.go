@@ -49,6 +49,11 @@ var allowedEnvExact = map[string]bool{
 	"GCP_PROJECT":                    true,
 	"CLAUDE_CODE_OAUTH_TOKEN":        true,
 	"ANTHROPIC_API_KEY":              true,
+	// ANTHROPIC_BASE_URL: endpoint override for the Anthropic API client.
+	// Required when routing through CLIProxyAPI (Claude OAuth proxy) instead
+	// of api.anthropic.com directly.
+	"ANTHROPIC_BASE_URL":  true,
+	"ANTHROPIC_AUTH_TOKEN": true,
 }
 
 // sensitiveEnvExact lists exact env var names stripped from ACP subprocesses.

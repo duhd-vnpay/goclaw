@@ -22,9 +22,11 @@ func TestFilterACPEnv_RemovesSensitivePrefixes(t *testing.T) {
 			kept:    []string{"HOME=/root"},
 		},
 		{
+			// ANTHROPIC_API_KEY itself is now whitelisted (Phase 3 — ACP
+			// upstream auth). Use a non-whitelisted ANTHROPIC_* var here.
 			name:    "ANTHROPIC prefix",
-			env:     []string{"ANTHROPIC_API_KEY=sk-ant-123", "PATH=/usr/bin"},
-			removed: []string{"ANTHROPIC_API_KEY=sk-ant-123"},
+			env:     []string{"ANTHROPIC_INTERNAL_SECRET=zzz", "PATH=/usr/bin"},
+			removed: []string{"ANTHROPIC_INTERNAL_SECRET=zzz"},
 			kept:    []string{"PATH=/usr/bin"},
 		},
 		{
@@ -126,6 +128,28 @@ func TestFilterACPEnv_AllSafe(t *testing.T) {
 	filtered := filterACPEnv(env)
 	if len(filtered) != len(env) {
 		t.Errorf("expected all %d vars kept, got %d", len(env), len(filtered))
+	}
+}
+
+func TestFilterACPEnv_AllowedAuthEnvsPassThrough(t *testing.T) {
+	// These envs match sensitive prefixes (CLAUDE_, ANTHROPIC_) but must pass
+	// through because claude-agent-acp and friends need them for upstream auth.
+	envs := []string{
+		"CLAUDE_CODE_OAUTH_TOKEN=oat_long_lived_token_xxx",
+		"ANTHROPIC_API_KEY=sk-ant-xxx",
+	}
+	filtered := filterACPEnv(envs)
+	for _, want := range envs {
+		var found bool
+		for _, got := range filtered {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected %q to pass through allowedEnvExact, got filtered=%v", want, filtered)
+		}
 	}
 }
 
@@ -244,17 +268,20 @@ func TestAcpSubprocessEnv_AppendsLoopGuard(t *testing.T) {
 }
 
 func TestAcpSubprocessEnv_StripsSensitiveBeforeAppend(t *testing.T) {
+	// GOCLAW_TOKEN must still be stripped. ANTHROPIC_API_KEY is now whitelisted
+	// (allowedEnvExact, Phase 3 ACP upstream auth) so use ANTHROPIC_INTERNAL_*
+	// for the strip assertion instead.
 	env := acpSubprocessEnv([]string{
 		"GOCLAW_TOKEN=secret",
-		"ANTHROPIC_API_KEY=sk-ant-xxx",
+		"ANTHROPIC_INTERNAL_SECRET=zzz",
 		"HOME=/root",
 	})
 	for _, e := range env {
 		if strings.HasPrefix(e, "GOCLAW_TOKEN=") {
 			t.Errorf("GOCLAW_TOKEN should be stripped, got %q", e)
 		}
-		if strings.HasPrefix(e, "ANTHROPIC_API_KEY=") {
-			t.Errorf("ANTHROPIC_API_KEY should be stripped, got %q", e)
+		if strings.HasPrefix(e, "ANTHROPIC_INTERNAL_SECRET=") {
+			t.Errorf("ANTHROPIC_INTERNAL_SECRET should be stripped, got %q", e)
 		}
 	}
 }

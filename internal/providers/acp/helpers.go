@@ -37,12 +37,18 @@ var sensitiveEnvPrefixes = []string{
 }
 
 // allowedEnvExact lists env vars explicitly allowed even if they match sensitive prefixes.
-// These are required for Google/GCP authentication in ACP subprocesses (e.g., Gemini).
+// These are required for upstream LLM authentication in ACP subprocesses:
+//   - GOOGLE_*: Gemini CLI as ACP agent.
+//   - CLAUDE_CODE_OAUTH_TOKEN: long-lived OAuth token from `claude setup-token`
+//     (headless mode for Claude Max subscription); used by claude-agent-acp wrapper.
+//   - ANTHROPIC_API_KEY: API key fallback when OAuth not viable (separate billing).
 var allowedEnvExact = map[string]bool{
 	"GOOGLE_API_KEY":                 true,
 	"GOOGLE_APPLICATION_CREDENTIALS": true,
 	"GOOGLE_CLOUD_PROJECT":           true,
 	"GCP_PROJECT":                    true,
+	"CLAUDE_CODE_OAUTH_TOKEN":        true,
+	"ANTHROPIC_API_KEY":              true,
 }
 
 // sensitiveEnvExact lists exact env var names stripped from ACP subprocesses.

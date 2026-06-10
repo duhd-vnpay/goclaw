@@ -15,6 +15,11 @@ const (
 	HandlerKindBuiltin    HandlerKind = "builtin"
 )
 
+// DefaultToolTimeout is the per-tool dispatch timeout applied when a
+// ToolDescriptor leaves TimeoutMs at zero. 60s mirrors the mcp.Manager
+// timeout floor used for ops-mcp / cve-intel SSE clients.
+const DefaultToolTimeout = 60 * time.Second
+
 // ToolDescriptor is the resolved view of a tool that the shim will advertise
 // over MCP for one ACP session. It is the resolver's output (Task 2) and
 // feeds the per-session allowlist computed by the server (Task 3).
@@ -24,14 +29,14 @@ const (
 // underlying mark3labs StreamableHTTPServer via convertToMCPTool in
 // bridge_server.go.
 type ToolDescriptor struct {
-	Name        string          // wire name, e.g. "mcp_ops__litellm_psql_query"
-	Description string          // human-readable summary for tools/list
-	Schema      json.RawMessage // JSON-Schema object — mirrors mcp-go Tool.InputSchema
-	Kind        HandlerKind
-	MCPServer   string // for HandlerKindMCPManager: server key (e.g. "ops")
-	MCPName     string // for HandlerKindMCPManager: tool name without the "mcp_<server>__" prefix
-	BuiltinName string // for HandlerKindBuiltin: registry name (e.g. "write_file")
-	TimeoutMs   int    // per-tool timeout; 0 → default 60_000
+	Name        string          `json:"name"`        // wire name, e.g. "mcp_ops__litellm_psql_query"
+	Description string          `json:"description"` // human-readable summary for tools/list
+	Schema      json.RawMessage `json:"schema"`      // JSON-Schema object — mirrors mcp-go Tool.InputSchema
+	Kind        HandlerKind     `json:"kind"`
+	MCPServer   string          `json:"mcpServer,omitempty"`   // for HandlerKindMCPManager: server key (e.g. "ops")
+	MCPName     string          `json:"mcpName,omitempty"`     // for HandlerKindMCPManager: tool name without the "mcp_<server>__" prefix
+	BuiltinName string          `json:"builtinName,omitempty"` // for HandlerKindBuiltin: registry name (e.g. "write_file")
+	Timeout     time.Duration   `json:"timeout,omitempty"`     // per-tool timeout; zero → DefaultToolTimeout
 }
 
 // CronContext is the tuple captured at ACP session registration and
@@ -40,12 +45,12 @@ type ToolDescriptor struct {
 // SessionKey were added under Revision 1 to satisfy the routing context
 // expected by tools.ExecuteWithContext and outbound bus metadata.
 type CronContext struct {
-	AgentID       string
-	RunID         string
-	ChannelID     string
-	DeliverTarget string
-	PeerKind      string // "private" | "group" — needed for outbound bus metadata
-	SessionKey    string // session_key for cron sessions (used by tool routing context)
+	AgentID       string `json:"agentId"`
+	RunID         string `json:"runId"`
+	ChannelID     string `json:"channelId"`
+	DeliverTarget string `json:"deliverTarget"`
+	PeerKind      string `json:"peerKind"`   // "private" | "group" — needed for outbound bus metadata
+	SessionKey    string `json:"sessionKey"` // session_key for cron sessions (used by tool routing context)
 }
 
 // SessionEntry is the per-ACP-session state held by the shim's sync.Map.

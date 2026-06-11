@@ -15,6 +15,7 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
+	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/oauth"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/providers/acp"
@@ -726,4 +727,66 @@ func setupACPShim(toolsReg *tools.Registry, msgBus *bus.MessageBus, pgStores *st
 		CtxReader: toolsCtxReader{},
 		CfgReader: cfgReader,
 	}
+}
+
+// wireACPMCPSessionBuilder is the fork.15f-acp Bug E2 fix entry point. It
+// constructs the per-session MCP catalog builder used by mcp_shim.Server when
+// claude-agent-acp opens a session and calls tools/list — without this the
+// shim's process-wide catalog only carries builtins (resolver clones the
+// registry per-agent before MCP bridge tool registration; the shim's pointer
+// to the GLOBAL registry never sees those clones).
+//
+// The builder mirrors internal/agent/resolver.go's clone+Manager+LoadForAgent
+// pattern: Clone the global tools registry, attach a per-session mcpbridge.
+// Manager that uses the shared process-wide Pool, then LoadForAgent populates
+// the clone with the agent's granted DB-driven mcp_<server>__<tool> tools.
+// The shim then walks the allowlist and registers each tool onto a fresh
+// per-session mcp-go MCPServer.
+//
+// Degrades silently when prerequisites are missing — shim falls back to the
+// pre-15f global catalog (which works for builtin-only agents).
+func wireACPMCPSessionBuilder(deps ACPDeps, toolsReg *tools.Registry, mcpPool *mcpbridge.Pool, pgStores *store.Stores) {
+	if deps.Shim == nil {
+		return
+	}
+	if toolsReg == nil || mcpPool == nil || pgStores == nil || pgStores.MCP == nil {
+		slog.Info("acp.shim.session_builder_skipped",
+			"reason", "missing deps (pool / mcp store / tools registry)")
+		return
+	}
+
+	// Agent-key → UUID resolver. PGAgentStore implements GetAgentIDByKey, but
+	// the cmd package only sees stores.Agents as the broad store.AgentStore
+	// interface. We type-assert through the same narrow ACPToolsLookup the
+	// resolver wiring uses.
+	agentLookup, ok := pgStores.Agents.(mcp_shim.ACPToolsLookup)
+	if !ok {
+		slog.Warn("acp.shim.session_builder_skipped",
+			"reason", "agents store does not implement ACPToolsLookup")
+		return
+	}
+
+	builder := mcp_shim.MCPSessionBuilder(func(ctx context.Context, agentKey string) (*tools.Registry, error) {
+		aid, err := agentLookup.GetAgentIDByKey(ctx, agentKey)
+		if err != nil {
+			return nil, err
+		}
+		// Clone the global registry so per-session MCP bridge tool registration
+		// does NOT pollute the shared toolsReg (preserves the cross-agent leak
+		// guarantee documented at internal/agent/resolver.go:317-321).
+		sessReg := toolsReg.Clone()
+		mgr := mcpbridge.NewManager(sessReg,
+			mcpbridge.WithStore(pgStores.MCP),
+			mcpbridge.WithPool(mcpPool),
+		)
+		if err := mgr.LoadForAgent(ctx, aid, ""); err != nil {
+			// Partial success is acceptable — return the clone with whatever
+			// connected, plus the error so the shim can log it. Builtins still
+			// dispatch via the clone (Clone() copies refs from global).
+			return sessReg, err
+		}
+		return sessReg, nil
+	})
+
+	deps.Shim.SetMCPSessionBuilder(any(builder))
 }

@@ -324,6 +324,7 @@ func (f *fakeShim) URL() string                  { return "http://shim.local/mcp
 func (f *fakeShim) SessionURL(sid string) string { return "http://shim.local/mcp?session=" + sid }
 func (f *fakeShim) RegisterSession(entry any)    { f.registered = append(f.registered, "any") }
 func (f *fakeShim) UnregisterSession(sid string) {}
+func (f *fakeShim) SetMCPSessionBuilder(fn any)  {}
 
 // mcpEntryURL extracts the `url` field from a marshaled McpServer entry.
 // After JSON round-trip into []any the element is a map[string]any, so

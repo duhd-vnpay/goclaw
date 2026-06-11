@@ -380,6 +380,13 @@ func runGateway() {
 		defer mcpPool.Stop()
 	}
 
+	// Bug E2 fix (fork.15f-acp, 2026-06-11): late-bind the per-session MCP
+	// catalog builder onto the shim. mcpPool + pgStores.MCP only exist after
+	// wireExtras returns, so setupACPShim couldn't construct the builder
+	// inline. The shim degrades to global catalog when SetMCPSessionBuilder
+	// stays unwired, so this is purely additive.
+	wireACPMCPSessionBuilder(acpDeps, toolsReg, mcpPool, pgStores)
+
 	// Initialize user profile resolver for system prompt identity injection.
 	// Keep concrete type for Ardenn adapter (ardennProfileResolverAdapter wraps it).
 	var pgProfileResolver *pg.PGProfileResolver

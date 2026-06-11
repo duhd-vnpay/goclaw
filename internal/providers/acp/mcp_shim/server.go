@@ -59,6 +59,23 @@ type ServerConfig struct {
 	Version string
 }
 
+// MCPSessionBuilder builds a per-session *tools.Registry containing every tool
+// the agent is granted access to (builtins + DB-driven MCP bridge tools). It
+// captures the shared mcpbridge.Pool + store.MCPServerStore from cmd wiring so
+// the shim can construct a per-session catalog without importing those types
+// itself (keeps mcp_shim → store cycle off the import graph). Returns nil
+// registry when no per-agent catalog is needed (e.g. agent has no MCP grants);
+// the shim then falls back to the process-wide global catalog. Errors are
+// logged at RegisterSession but do not abort session creation — the session
+// still works for builtin tools that survived the lazy-sync path.
+//
+// Fork.15f-acp (2026-06-11) — fixes Bug E2: previously the shim only saw the
+// process-wide tools.Registry, but mcp_ops__* tools live in per-agent CLONES
+// (internal/agent/resolver.go:312-326) that the shim never references. The
+// per-session builder closes that gap by mirroring resolver.go's clone+Manager
+// pattern for the duration of the ACP session.
+type MCPSessionBuilder func(ctx context.Context, agentKey string) (*tools.Registry, error)
+
 // Server is the in-process HTTP MCP shim. One per goclaw process; many ACP
 // sessions multiplex over it via ?session=<sid>.
 type Server struct {
@@ -71,12 +88,24 @@ type Server struct {
 	// inner + registry + msgBus retained so handleMCP can lazy-sync tools
 	// that registered AFTER NewServer ran (e.g. DB-driven MCP bridge tools
 	// connect on first agent grant resolution, well after shim startup).
-	inner   *mcpserver.MCPServer
+	inner    *mcpserver.MCPServer
 	registry *tools.Registry
-	msgBus  *bus.MessageBus
+	msgBus   *bus.MessageBus
+	version  string
 
 	regMu           sync.Mutex
 	registeredTools map[string]bool
+
+	// Per-session MCP catalogs (Bug E2 fix). When mcpSessionBuilder is wired,
+	// RegisterSession builds a per-session mcp-go MCPServer containing the
+	// agent's full granted catalog (builtins + DB-driven MCP bridge tools)
+	// and stores it here keyed by SID. handleMCP routes incoming /mcp
+	// requests to the per-session server when present, else falls back to
+	// the global s.mcp. Cleared in UnregisterSession.
+	mcpBuilderMu      sync.RWMutex
+	mcpSessionBuilder MCPSessionBuilder
+	sessionServers    sync.Map // string → *mcpserver.StreamableHTTPServer
+	sessionRegs       sync.Map // string → *tools.Registry (lifetime anchor for sessionServers)
 }
 
 // allowlistCtxKey is the context key used to thread the per-session allowlist
@@ -117,6 +146,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		listener:        ln,
 		registry:        cfg.Registry,
 		msgBus:          cfg.MsgBus,
+		version:         cfg.Version,
 		registeredTools: make(map[string]bool),
 	}
 
@@ -167,9 +197,34 @@ func (s *Server) SessionURL(sid string) string {
 	return s.URL() + "?session=" + sid
 }
 
+// SetMCPSessionBuilder wires the per-session MCP catalog builder. Called once
+// at startup by cmd wiring AFTER mcpbridge.Pool + store.MCPServerStore exist
+// (those are created inside wireExtras, which runs after setupACPShim). Safe
+// to call before any session is registered. Nil clears the builder.
+func (s *Server) SetMCPSessionBuilder(fn MCPSessionBuilder) {
+	s.mcpBuilderMu.Lock()
+	s.mcpSessionBuilder = fn
+	s.mcpBuilderMu.Unlock()
+	slog.Info("acp.shim.session_builder_wired", "set", fn != nil)
+}
+
+// getSessionBuilder returns the current per-session builder under a read lock.
+// Returns nil when no builder is wired — RegisterSession then degrades to the
+// pre-15f behavior (global catalog only).
+func (s *Server) getSessionBuilder() MCPSessionBuilder {
+	s.mcpBuilderMu.RLock()
+	defer s.mcpBuilderMu.RUnlock()
+	return s.mcpSessionBuilder
+}
+
 // RegisterSession adds a session to the registry. Idempotent; later
 // registrations overwrite earlier ones (callers must not reuse sid for
 // different agents).
+//
+// When MCPSessionBuilder is wired and the session carries an AgentID, this
+// builds a per-session mcp-go MCPServer containing the agent's full granted
+// catalog (builtins + DB-driven mcp_<server>__<tool> bridge tools). handleMCP
+// routes incoming /mcp requests to the per-session server when present.
 func (s *Server) RegisterSession(e SessionEntry) {
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now()
@@ -178,19 +233,111 @@ func (s *Server) RegisterSession(e SessionEntry) {
 		e.rateBucket = newRateBucket(defaultRateCapacity, defaultRateRefillEvery)
 	}
 	s.sessions.Store(e.SID, &e)
+
+	// Bug E2 fix: build per-session MCP server with full per-agent catalog.
+	// Done after sessions.Store so handleMCP can find the SessionEntry even
+	// if a request races the catalog build (it falls back to global s.mcp).
+	perSessionTools := s.buildSessionServer(e)
+
 	slog.Info("acp.shim.session_registered",
 		"sid", e.SID,
 		"agent", e.Cron.AgentID,
 		"run", e.Cron.RunID,
 		"channel", e.Cron.ChannelID,
-		"tools", len(e.Allowlist),
+		"allowlist", len(e.Allowlist),
+		"per_session_tools", perSessionTools,
 	)
+}
+
+// buildSessionServer constructs the per-session MCP server when the builder is
+// wired and the session carries an AgentID. Returns the number of tools wired
+// into the per-session server (0 if no per-session catalog was built). The
+// catalog is stored in s.sessionServers + s.sessionRegs keyed by SID.
+//
+// Errors are logged but never abort session registration — handleMCP then
+// transparently uses the global s.mcp catalog, which contains at least the
+// process-wide builtin set.
+func (s *Server) buildSessionServer(e SessionEntry) int {
+	builder := s.getSessionBuilder()
+	if builder == nil || e.Cron.AgentID == "" {
+		return 0
+	}
+	if len(e.Allowlist) == 0 {
+		// No granted tools — even the per-session server would be empty.
+		// Skip the build to avoid burning a Pool connection + tools/list RTT
+		// upstream when there's nothing to advertise.
+		return 0
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	sessReg, err := builder(ctx, e.Cron.AgentID)
+	if err != nil {
+		slog.Warn("acp.shim.session_builder_failed",
+			"sid", e.SID, "agent", e.Cron.AgentID, "error", err)
+		if sessReg == nil {
+			return 0
+		}
+		// Partial result: builder returned a registry but reported errors
+		// (e.g. one MCP server failed to connect). We still use what we got.
+	}
+	if sessReg == nil {
+		return 0
+	}
+
+	// Build a fresh mcp-go MCPServer wrapping exactly the allowed tools.
+	// makeSessionAwareHandler binds to sessReg so MCP bridge tools dispatch
+	// via the per-session manager's connections (and so the audit log /
+	// rate-limit context still flows through ctx values attached upstream
+	// in handleMCP).
+	inner := mcpserver.NewMCPServer("goclaw-acp-shim", s.version,
+		mcpserver.WithToolCapabilities(false),
+	)
+	allow := e.AllowlistSet()
+	var registered int
+	var missing []string
+	for _, name := range e.Allowlist {
+		if !allow[name] {
+			continue
+		}
+		t, ok := sessReg.Get(name)
+		if !ok {
+			// Fall back to global registry — covers builtins that the
+			// builder didn't clone (shouldn't happen with the cmd wiring
+			// using Clone()+LoadForAgent, but defensive in case the
+			// builder returns a fresh empty registry).
+			t, ok = s.registry.Get(name)
+			if !ok {
+				missing = append(missing, name)
+				continue
+			}
+		}
+		mcpTool := mcp.ConvertToMCPTool(t)
+		inner.AddTool(mcpTool, s.makeSessionAwareHandler(sessReg, s.msgBus, name))
+		registered++
+	}
+
+	if len(missing) > 0 {
+		slog.Warn("acp.shim.session_tools_missing",
+			"sid", e.SID, "agent", e.Cron.AgentID,
+			"missing", missing)
+	}
+
+	httpSrv := mcpserver.NewStreamableHTTPServer(inner,
+		mcpserver.WithStateLess(true),
+	)
+	s.sessionServers.Store(e.SID, httpSrv)
+	s.sessionRegs.Store(e.SID, sessReg)
+	return registered
 }
 
 // UnregisterSession removes a session from the registry. Subsequent requests
 // to the session URL will receive HTTP 404.
 func (s *Server) UnregisterSession(sid string) {
 	s.sessions.Delete(sid)
+	s.sessionServers.Delete(sid)
+	s.sessionRegs.Delete(sid)
 	slog.Info("acp.shim.session_unregistered", "sid", sid)
 }
 
@@ -284,14 +431,35 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		"body_preview", bodyPreview,
 	)
 
+	// Bug E2 fix: prefer per-session MCP server (built at RegisterSession with
+	// the agent's full DB-driven catalog) over the process-wide s.mcp. The
+	// per-session server is constructed only when SetMCPSessionBuilder is wired
+	// and the session carries an AgentID — sessions registered before late-bind
+	// (or without an agent) still hit the global path below.
+	target := s.mcp
+	usingPerSession := false
+	if v, ok := s.sessionServers.Load(sid); ok {
+		if perSess, ok := v.(*mcpserver.StreamableHTTPServer); ok && perSess != nil {
+			target = perSess
+			usingPerSession = true
+		}
+	}
+
 	if method == "tools/list" {
 		rec := &capturingWriter{header: http.Header{}}
-		s.mcp.ServeHTTP(rec, r)
+		target.ServeHTTP(rec, r)
+		// Per-session server is already built with only allowed tools, so the
+		// allowlist filter is redundant — but cheap, and double-applying keeps
+		// the security gate uniform whether we're hitting the per-session or
+		// global catalog.
 		s.writeFilteredToolsList(w, rec, sess.AllowlistSet())
+		if usingPerSession {
+			slog.Debug("acp.shim.tools_list_per_session", "sid", sid)
+		}
 		return
 	}
 
-	s.mcp.ServeHTTP(w, r)
+	target.ServeHTTP(w, r)
 }
 
 // peekMethod parses just enough of the JSON-RPC body to extract the method

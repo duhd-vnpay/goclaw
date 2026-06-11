@@ -95,6 +95,27 @@ func (h *Handle) UnregisterSession(sid string) {
 	h.srv.UnregisterSession(sid)
 }
 
+// SetMCPSessionBuilder accepts the cycle-free any-typed callback and forwards
+// it to the concrete *Server. Production wiring passes the MCPSessionBuilder
+// type; anything else is logged + ignored so a wiring bug surfaces loudly in
+// the startup log instead of silently degrading sessions to global catalog.
+func (h *Handle) SetMCPSessionBuilder(fn any) {
+	if h == nil || h.srv == nil {
+		return
+	}
+	if fn == nil {
+		h.srv.SetMCPSessionBuilder(nil)
+		return
+	}
+	builder, ok := fn.(MCPSessionBuilder)
+	if !ok {
+		slog.Warn("acp.shim.set_builder_type_mismatch",
+			"want", "mcp_shim.MCPSessionBuilder")
+		return
+	}
+	h.srv.SetMCPSessionBuilder(builder)
+}
+
 // Underlying exposes the wrapped *Server so startup wiring can defer Close
 // without re-importing the listener. Returns nil if Handle was constructed
 // against a nil server.

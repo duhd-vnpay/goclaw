@@ -27,6 +27,11 @@ type ShimHandle interface {
 	SessionURL(sid string) string
 	RegisterSession(entry any)
 	UnregisterSession(sid string)
+	// SetMCPSessionBuilder wires the per-session MCP catalog builder. Phase 4
+	// (fork.15f-acp) added this so cmd wiring can deferred-bind mcpbridge.Pool
+	// after wireExtras returns. Passed as any to keep the acp package free of
+	// mcp_shim/tools/mcp imports — the concrete Handle does the type cast.
+	SetMCPSessionBuilder(fn any)
 }
 
 // ShimSessionEntry is the cycle-free payload the ACP provider passes to

@@ -95,13 +95,31 @@ func (r *Resolver) ResolveToolSlice(ctx context.Context, agentID, tenantID strin
 	return out, nil
 }
 
+// init validates every hardBlacklist pattern at process start so that a
+// malformed entry surfaces immediately instead of silently letting tools
+// slip through the blacklist at runtime (this is a security defense gate,
+// so we fail-fast at startup rather than fail-open at request time).
+func init() {
+	for _, pat := range hardBlacklist {
+		if _, err := filepath.Match(pat, "_validate"); err != nil {
+			panic("mcp_shim: malformed hardBlacklist pattern " + pat + ": " + err.Error())
+		}
+	}
+}
+
 // isBlacklisted runs filepath.Match for glob patterns. Exact matches are
-// also globs (no wildcard) so the same function handles both.
+// also globs (no wildcard) so the same function handles both. Patterns are
+// validated at package init so filepath.Match errors are not expected here;
+// if one occurs anyway we treat the tool as blacklisted (fail-closed for
+// a security-relevant defense layer).
 func (r *Resolver) isBlacklisted(name string) bool {
 	lower := strings.ToLower(name)
 	for _, pat := range hardBlacklist {
 		ok, err := filepath.Match(pat, lower)
-		if err == nil && ok {
+		if err != nil {
+			return true
+		}
+		if ok {
 			return true
 		}
 	}

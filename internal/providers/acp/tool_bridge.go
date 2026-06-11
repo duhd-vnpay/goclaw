@@ -112,7 +112,7 @@ func (tb *ToolBridge) Handle(ctx context.Context, method string, params json.Raw
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 		return tb.killTerminal(req)
-	case "permission/request":
+	case "session/request_permission":
 		var req RequestPermissionRequest
 		if err := json.Unmarshal(params, &req); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
@@ -151,23 +151,67 @@ func (tb *ToolBridge) writeFile(req WriteTextFileRequest) (*WriteTextFileRespons
 	return &WriteTextFileResponse{}, nil
 }
 
-// handlePermission responds to permission requests based on configured mode.
+// handlePermission picks one option from req.Options based on the configured
+// permission mode and returns it as a "selected" outcome. Per schema, outcome
+// must be either "cancelled" (never used here — no user to cancel) or
+// "selected" with a non-empty optionId chosen from the provided options[].
+//
+// Selection strategy:
+//   - "deny-all": prefer reject_always, fall back to reject_once, then first option
+//   - "approve-reads": if toolCall.kind ∈ {read, search, fetch}, behave like approve-all;
+//     otherwise behave like deny-all
+//   - "approve-all" (default): prefer allow_always, fall back to allow_once, then first option
+//
+// If req.Options is empty (should not happen per schema) we still return
+// "selected" with empty optionId rather than error — the wrapper will reject
+// it client-side, but that's clearer than crashing the dispatch.
 func (tb *ToolBridge) handlePermission(req RequestPermissionRequest) (*RequestPermissionResponse, error) {
+	approve := func() string {
+		if id := pickOptionByKind(req.Options, "allow_always"); id != "" {
+			return id
+		}
+		if id := pickOptionByKind(req.Options, "allow_once"); id != "" {
+			return id
+		}
+		if len(req.Options) > 0 {
+			return req.Options[0].OptionID
+		}
+		return ""
+	}
+	deny := func() string {
+		if id := pickOptionByKind(req.Options, "reject_always"); id != "" {
+			return id
+		}
+		if id := pickOptionByKind(req.Options, "reject_once"); id != "" {
+			return id
+		}
+		if len(req.Options) > 0 {
+			return req.Options[0].OptionID
+		}
+		return ""
+	}
+
 	switch tb.permMode {
 	case "deny-all":
-		return &RequestPermissionResponse{Outcome: "denied"}, nil
+		return &RequestPermissionResponse{Outcome: "selected", OptionID: deny()}, nil
 	case "approve-reads":
-		// Approve read-only tools, deny write/exec tools
-		lower := strings.ToLower(req.ToolName)
-		if strings.Contains(lower, "read") || strings.Contains(lower, "glob") ||
-			strings.Contains(lower, "grep") || strings.Contains(lower, "search") ||
-			strings.Contains(lower, "list") || strings.Contains(lower, "view") {
-			return &RequestPermissionResponse{Outcome: "approved"}, nil
+		kind := strings.ToLower(req.ToolCall.Kind)
+		if kind == "read" || kind == "search" || kind == "fetch" {
+			return &RequestPermissionResponse{Outcome: "selected", OptionID: approve()}, nil
 		}
-		return &RequestPermissionResponse{Outcome: "denied"}, nil
+		return &RequestPermissionResponse{Outcome: "selected", OptionID: deny()}, nil
 	default: // "approve-all" or unknown → approve
-		return &RequestPermissionResponse{Outcome: "approved"}, nil
+		return &RequestPermissionResponse{Outcome: "selected", OptionID: approve()}, nil
 	}
+}
+
+func pickOptionByKind(opts []PermissionOption, kind string) string {
+	for _, o := range opts {
+		if o.Kind == kind {
+			return o.OptionID
+		}
+	}
+	return ""
 }
 
 // resolvePath validates that a path stays within the workspace boundary.

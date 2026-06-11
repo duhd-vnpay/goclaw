@@ -222,11 +222,39 @@ type KillTerminalRequest struct {
 
 type KillTerminalResponse struct{}
 
+// RequestPermissionRequest matches schema.json/$defs/RequestPermissionRequest
+// (x-method "session/request_permission", x-side "client"). The wrapper sends
+// this before every tool call; required fields per schema: sessionId, toolCall,
+// options. ToolCall is left as raw JSON because we only need to introspect
+// `kind` for the approve-reads mode; everything else is opaque pass-through.
 type RequestPermissionRequest struct {
-	ToolName    string `json:"toolName"`
-	Description string `json:"description"`
+	SessionID string             `json:"sessionId"`
+	ToolCall  PermissionToolCall `json:"toolCall"`
+	Options   []PermissionOption `json:"options"`
 }
 
+// PermissionToolCall is the subset of ToolCallUpdate we read for permission
+// decisions. Other fields (locations, content, status) are ignored.
+type PermissionToolCall struct {
+	ToolCallID string `json:"toolCallId"`
+	Title      string `json:"title,omitempty"`
+	Kind       string `json:"kind,omitempty"`
+}
+
+// PermissionOption matches schema.json/$defs/PermissionOption. Kind is one of
+// allow_once|allow_always|reject_once|reject_always per PermissionOptionKind.
+type PermissionOption struct {
+	OptionID string `json:"optionId"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+}
+
+// RequestPermissionResponse matches schema.json/$defs/RequestPermissionResponse.
+// outcome is a discriminated union: {"outcome":"cancelled"} or
+// {"outcome":"selected", "optionId":"..."}. We always return "selected" — the
+// wrapper never sees cancelled outcomes today (Phase 4 cron has no user to
+// cancel mid-flight).
 type RequestPermissionResponse struct {
-	Outcome string `json:"outcome"` // "proceed_always", "approved", "denied"
+	Outcome  string `json:"outcome"`
+	OptionID string `json:"optionId,omitempty"`
 }

@@ -140,65 +140,124 @@ func TestResolvePath_NonExistentFile_AllowedForWrites(t *testing.T) {
 }
 
 // --- handlePermission ---
+//
+// Schema (post fork.15c-acp): wrapper sends `session/request_permission` with
+// options[] of kinds {allow_once, allow_always, reject_once, reject_always}.
+// We reply {outcome:"selected", optionId:<one of>}. Tests build the standard
+// 4-option set the wrapper actually sends.
+
+func standardPermOptions() []PermissionOption {
+	return []PermissionOption{
+		{OptionID: "allow_once", Name: "Allow once", Kind: "allow_once"},
+		{OptionID: "allow_always", Name: "Allow always", Kind: "allow_always"},
+		{OptionID: "reject_once", Name: "Reject once", Kind: "reject_once"},
+		{OptionID: "reject_always", Name: "Reject always", Kind: "reject_always"},
+	}
+}
 
 func TestHandlePermission_ApproveAll(t *testing.T) {
 	tb, _ := newTestBridge(t, WithPermMode("approve-all"))
-	resp, err := tb.handlePermission(RequestPermissionRequest{ToolName: "bash", Description: "run"})
+	resp, err := tb.handlePermission(RequestPermissionRequest{
+		SessionID: "sid",
+		ToolCall:  PermissionToolCall{ToolCallID: "tc1", Title: "bash", Kind: "execute"},
+		Options:   standardPermOptions(),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.Outcome != "approved" {
-		t.Errorf("expected 'approved', got %q", resp.Outcome)
+	if resp.Outcome != "selected" || resp.OptionID != "allow_always" {
+		t.Errorf("expected selected/allow_always, got %q/%q", resp.Outcome, resp.OptionID)
 	}
 }
 
 func TestHandlePermission_DenyAll(t *testing.T) {
 	tb, _ := newTestBridge(t, WithPermMode("deny-all"))
-	resp, err := tb.handlePermission(RequestPermissionRequest{ToolName: "any_tool"})
+	resp, err := tb.handlePermission(RequestPermissionRequest{
+		SessionID: "sid",
+		ToolCall:  PermissionToolCall{ToolCallID: "tc1", Title: "any_tool"},
+		Options:   standardPermOptions(),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.Outcome != "denied" {
-		t.Errorf("expected 'denied', got %q", resp.Outcome)
+	if resp.Outcome != "selected" || resp.OptionID != "reject_always" {
+		t.Errorf("expected selected/reject_always, got %q/%q", resp.Outcome, resp.OptionID)
 	}
 }
 
-func TestHandlePermission_ApproveReads_ReadTool(t *testing.T) {
+func TestHandlePermission_ApproveReads_ReadKind(t *testing.T) {
 	tb, _ := newTestBridge(t, WithPermMode("approve-reads"))
-	cases := []string{"readFile", "glob_files", "search_code", "list_dir", "grep_search", "view_file"}
-	for _, name := range cases {
-		t.Run(name, func(t *testing.T) {
-			resp, err := tb.handlePermission(RequestPermissionRequest{ToolName: name})
+	for _, kind := range []string{"read", "search", "fetch"} {
+		t.Run(kind, func(t *testing.T) {
+			resp, err := tb.handlePermission(RequestPermissionRequest{
+				SessionID: "sid",
+				ToolCall:  PermissionToolCall{ToolCallID: "tc1", Title: "x", Kind: kind},
+				Options:   standardPermOptions(),
+			})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if resp.Outcome != "approved" {
-				t.Errorf("expected approved for %q, got %q", name, resp.Outcome)
+			if resp.OptionID != "allow_always" {
+				t.Errorf("expected allow_always for kind %q, got %q", kind, resp.OptionID)
 			}
 		})
 	}
 }
 
-func TestHandlePermission_ApproveReads_WriteTool(t *testing.T) {
+func TestHandlePermission_ApproveReads_WriteKind(t *testing.T) {
 	tb, _ := newTestBridge(t, WithPermMode("approve-reads"))
-	resp, err := tb.handlePermission(RequestPermissionRequest{ToolName: "write_file"})
+	resp, err := tb.handlePermission(RequestPermissionRequest{
+		SessionID: "sid",
+		ToolCall:  PermissionToolCall{ToolCallID: "tc1", Title: "write_file", Kind: "edit"},
+		Options:   standardPermOptions(),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.Outcome != "denied" {
-		t.Errorf("expected denied for write_file, got %q", resp.Outcome)
+	if resp.OptionID != "reject_always" {
+		t.Errorf("expected reject_always for write kind, got %q", resp.OptionID)
 	}
 }
 
 func TestHandlePermission_DefaultMode_Approves(t *testing.T) {
 	// permMode = "" defaults to "approve-all" behaviour (unknown → approve)
 	tb := &ToolBridge{permMode: "unknown-mode"}
-	resp, err := tb.handlePermission(RequestPermissionRequest{ToolName: "anything"})
+	resp, err := tb.handlePermission(RequestPermissionRequest{
+		SessionID: "sid",
+		ToolCall:  PermissionToolCall{ToolCallID: "tc1"},
+		Options:   standardPermOptions(),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.Outcome != "approved" {
-		t.Errorf("expected approved, got %q", resp.Outcome)
+	if resp.OptionID != "allow_always" {
+		t.Errorf("expected allow_always, got %q", resp.OptionID)
+	}
+}
+
+func TestHandlePermission_FallbackToAllowOnce(t *testing.T) {
+	// When allow_always is missing, approve-all falls back to allow_once.
+	tb, _ := newTestBridge(t, WithPermMode("approve-all"))
+	opts := []PermissionOption{
+		{OptionID: "ao", Name: "Allow once", Kind: "allow_once"},
+		{OptionID: "ro", Name: "Reject", Kind: "reject_once"},
+	}
+	resp, _ := tb.handlePermission(RequestPermissionRequest{Options: opts})
+	if resp.OptionID != "ao" {
+		t.Errorf("expected allow_once fallback, got %q", resp.OptionID)
+	}
+}
+
+func TestHandlePermission_EmptyOptions(t *testing.T) {
+	// Defensive: empty options[] returns selected with empty optionId rather
+	// than crashing. Wrapper schema requires non-empty so this should never fire.
+	tb, _ := newTestBridge(t)
+	resp, err := tb.handlePermission(RequestPermissionRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Outcome != "selected" || resp.OptionID != "" {
+		t.Errorf("expected selected/empty, got %q/%q", resp.Outcome, resp.OptionID)
 	}
 }
 
@@ -329,14 +388,18 @@ func TestHandle_FsWriteTextFile_ApproveReads(t *testing.T) {
 
 func TestHandle_PermissionRequest(t *testing.T) {
 	tb, _ := newTestBridge(t)
-	params, _ := json.Marshal(RequestPermissionRequest{ToolName: "bash"})
-	result, err := tb.Handle(context.Background(), "permission/request", params)
+	params, _ := json.Marshal(RequestPermissionRequest{
+		SessionID: "sid",
+		ToolCall:  PermissionToolCall{ToolCallID: "tc1", Title: "bash", Kind: "execute"},
+		Options:   standardPermOptions(),
+	})
+	result, err := tb.Handle(context.Background(), "session/request_permission", params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	resp := result.(*RequestPermissionResponse)
-	if resp.Outcome != "approved" {
-		t.Errorf("expected approved, got %q", resp.Outcome)
+	if resp.Outcome != "selected" || resp.OptionID != "allow_always" {
+		t.Errorf("expected selected/allow_always, got %q/%q", resp.Outcome, resp.OptionID)
 	}
 }
 
@@ -357,7 +420,7 @@ func TestHandle_MalformedParams(t *testing.T) {
 		"fs/readTextFile", "fs/writeTextFile",
 		"terminal/output", "terminal/release",
 		"terminal/waitForExit", "terminal/kill",
-		"permission/request",
+		"session/request_permission",
 	}
 	for _, m := range methods {
 		t.Run(m, func(t *testing.T) {

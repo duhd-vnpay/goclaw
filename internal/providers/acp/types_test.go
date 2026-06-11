@@ -199,16 +199,22 @@ func TestTerminalTypes_RoundTrip(t *testing.T) {
 }
 
 func TestPermissionTypes_RoundTrip(t *testing.T) {
-	req := RequestPermissionRequest{ToolName: "bash", Description: "run a script"}
+	req := RequestPermissionRequest{
+		SessionID: "sess-1",
+		ToolCall:  PermissionToolCall{ToolCallID: "tc-1", Title: "bash", Kind: "execute"},
+		Options: []PermissionOption{
+			{OptionID: "ao", Name: "Allow once", Kind: "allow_once"},
+		},
+	}
 	_, got := roundTrip(t, req)
-	if got.ToolName != "bash" || got.Description != "run a script" {
+	if got.SessionID != "sess-1" || got.ToolCall.ToolCallID != "tc-1" || len(got.Options) != 1 || got.Options[0].Kind != "allow_once" {
 		t.Errorf("RequestPermissionRequest round-trip: %+v", got)
 	}
 
-	resp := RequestPermissionResponse{Outcome: "approved"}
+	resp := RequestPermissionResponse{Outcome: "selected", OptionID: "ao"}
 	_, gotResp := roundTrip(t, resp)
-	if gotResp.Outcome != "approved" {
-		t.Errorf("RequestPermissionResponse.Outcome: got %q", gotResp.Outcome)
+	if gotResp.Outcome != "selected" || gotResp.OptionID != "ao" {
+		t.Errorf("RequestPermissionResponse: got %+v", gotResp)
 	}
 }
 

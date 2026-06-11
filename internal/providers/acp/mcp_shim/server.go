@@ -67,6 +67,16 @@ type Server struct {
 	mcp       *mcpserver.StreamableHTTPServer
 	sessions  sync.Map // string → *SessionEntry
 	closeOnce sync.Once
+
+	// inner + registry + msgBus retained so handleMCP can lazy-sync tools
+	// that registered AFTER NewServer ran (e.g. DB-driven MCP bridge tools
+	// connect on first agent grant resolution, well after shim startup).
+	inner   *mcpserver.MCPServer
+	registry *tools.Registry
+	msgBus  *bus.MessageBus
+
+	regMu           sync.Mutex
+	registeredTools map[string]bool
 }
 
 // allowlistCtxKey is the context key used to thread the per-session allowlist
@@ -103,30 +113,25 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("mcp_shim listen: %w", err)
 	}
 
-	s := &Server{listener: ln}
+	s := &Server{
+		listener:        ln,
+		registry:        cfg.Registry,
+		msgBus:          cfg.MsgBus,
+		registeredTools: make(map[string]bool),
+	}
 
 	// Build the underlying MCP server with every potentially-allowed tool.
 	// Per-session filtering happens in the handler via ctx allowlist; the
 	// registration here is intentionally permissive — the security gate is
 	// the allowlist check inside makeSessionAwareHandler.
-	inner := mcpserver.NewMCPServer("goclaw-acp-shim", cfg.Version,
+	s.inner = mcpserver.NewMCPServer("goclaw-acp-shim", cfg.Version,
 		mcpserver.WithToolCapabilities(false),
 	)
 
-	candidates := allCandidateTools(cfg.Registry)
-	var registered int
-	for _, name := range candidates {
-		t, ok := cfg.Registry.Get(name)
-		if !ok {
-			continue
-		}
-		mcpTool := mcp.ConvertToMCPTool(t)
-		inner.AddTool(mcpTool, s.makeSessionAwareHandler(cfg.Registry, cfg.MsgBus, name))
-		registered++
-	}
-	slog.Info("acp.shim.tools_registered", "count", registered, "candidates", len(candidates))
+	registered := s.syncTools()
+	slog.Info("acp.shim.tools_registered", "count", registered)
 
-	s.mcp = mcpserver.NewStreamableHTTPServer(inner,
+	s.mcp = mcpserver.NewStreamableHTTPServer(s.inner,
 		mcpserver.WithStateLess(true),
 	)
 
@@ -220,6 +225,13 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess := v.(*SessionEntry)
+
+	// Lazy-sync newly-registered tools (e.g. DB-driven MCP bridge tools that
+	// connected AFTER NewServer ran). Cheap when nothing changed — just a
+	// map lookup per registry entry under regMu.
+	if added := s.syncTools(); added > 0 {
+		slog.Info("acp.shim.tools_synced", "added", added)
+	}
 
 	// Attach per-session ctx so the session-aware tool handler can:
 	//   1. Consult the allowlist before dispatch.
@@ -418,5 +430,44 @@ func (c *capturingWriter) statusCode() int {
 // candidate set in sync with the registry without a second list to maintain.
 func allCandidateTools(reg *tools.Registry) []string {
 	return reg.List()
+}
+
+// syncTools scans the current GoClaw tool registry and lazily registers any
+// tool not already wired into the underlying mcp-go server. Returns the count
+// of newly-registered tools (0 if everything was already up to date).
+//
+// Background — Bug E (Phase 4 fork.15c-acp): NewServer only saw the 15 builtin
+// tools because DB-driven MCP bridge servers (e.g. ops-mcp's
+// mcp_ops__litellm_psql_query, mcp_ops__shell_exec_read) connect lazily AFTER
+// shim startup, via mcpbridge.Manager.connectServer → registry.RegisterToolGroup.
+// Without lazy-sync, those tools never appeared in the shim's catalog and the
+// claude-agent-acp wrapper reported them as unavailable even though the agent
+// grant resolver had added them to the per-session allowlist.
+//
+// Called at the top of handleMCP so each incoming JSON-RPC request observes the
+// current registry state. mcp-go's MCPServer.AddTool is safe for concurrent
+// runtime use, but we still guard with regMu so we don't double-add the same
+// tool across overlapping requests.
+func (s *Server) syncTools() int {
+	if s.inner == nil || s.registry == nil {
+		return 0
+	}
+	s.regMu.Lock()
+	defer s.regMu.Unlock()
+	var added int
+	for _, name := range s.registry.List() {
+		if s.registeredTools[name] {
+			continue
+		}
+		t, ok := s.registry.Get(name)
+		if !ok {
+			continue
+		}
+		mcpTool := mcp.ConvertToMCPTool(t)
+		s.inner.AddTool(mcpTool, s.makeSessionAwareHandler(s.registry, s.msgBus, name))
+		s.registeredTools[name] = true
+		added++
+	}
+	return added
 }
 

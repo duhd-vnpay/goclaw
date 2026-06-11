@@ -263,6 +263,36 @@ func (h *capturingHandler) hasMessage(msg string) bool {
 	return false
 }
 
+// TestServer_LazySyncToolsRegisteredAfterStartup verifies Bug E fix: tools
+// registered into the GoClaw registry AFTER NewServer ran (e.g. DB-driven MCP
+// bridge tools like mcp_ops__*) still appear in tools/list when the shim
+// receives a request. Without lazy-sync the tool would be silently dropped
+// from the catalogue even though the per-session allowlist marks it allowed.
+func TestServer_LazySyncToolsRegisteredAfterStartup(t *testing.T) {
+	reg := newTestRegistry(t, "write_file")
+	s := newTestServer(t, reg)
+
+	// Simulate a DB-MCP bridge tool registering AFTER shim startup.
+	reg.Register(newFakeTool("mcp_ops__litellm_psql_query"))
+
+	s.RegisterSession(SessionEntry{
+		SID:       "sid-lazy",
+		Allowlist: []string{"mcp_ops__litellm_psql_query"},
+	})
+
+	w := postMCP(t, s, "sid-lazy", rpcRequest(t, 1, "tools/list", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+
+	var lr listToolsResult
+	decodeResult(t, w.Body.Bytes(), &lr)
+
+	if len(lr.Tools) != 1 || lr.Tools[0].Name != "mcp_ops__litellm_psql_query" {
+		t.Errorf("expected lazy-synced mcp_ops__litellm_psql_query in tools/list, got %+v", lr.Tools)
+	}
+}
+
 func TestServer_RegisterUnregisterSession(t *testing.T) {
 	// Swap the default slog logger for the duration of this test.
 	cap := &capturingHandler{}

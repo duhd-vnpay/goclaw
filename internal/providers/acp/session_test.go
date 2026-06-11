@@ -243,6 +243,71 @@ func TestACPProcess_NewSession_Error(t *testing.T) {
 	<-done
 }
 
+// TestACPProcess_NewSessionImpl_NilShimMatchesLegacy guards the Phase 4
+// Task 6 refactor: newSessionImpl(ctx, nil, nil) must behave identically
+// to the pre-refactor NewSession — same request shape (empty McpServers,
+// resolved cwd), same response handling. We assert by inspecting the
+// outbound request bytes.
+func TestACPProcess_NewSessionImpl_NilShimMatchesLegacy(t *testing.T) {
+	proc, serverW, serverR := buildACPProcess(nil, nil)
+	defer serverW.Close()
+	defer serverR.Close()
+
+	captured := make(chan jsonrpcMessage, 1)
+	go func() {
+		buf := make([]byte, 32*1024)
+		n, err := serverR.Read(buf)
+		if err != nil || n == 0 {
+			return
+		}
+		var req jsonrpcMessage
+		if err := json.Unmarshal(buf[:n], &req); err != nil {
+			return
+		}
+		captured <- req
+		resp := jsonrpcMessage{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  json.RawMessage(`{"sessionId":"sess-impl"}`),
+		}
+		data, _ := json.Marshal(resp)
+		serverW.Write(append(data, '\n'))
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	sid, err := proc.newSessionImpl(ctx, nil, nil)
+	if err != nil {
+		t.Fatalf("newSessionImpl error: %v", err)
+	}
+	if sid != "sess-impl" {
+		t.Errorf("expected sessionID='sess-impl', got %q", sid)
+	}
+
+	select {
+	case req := <-captured:
+		if req.Method != "session/new" {
+			t.Errorf("expected method=session/new, got %q", req.Method)
+		}
+		var body NewSessionRequest
+		if err := json.Unmarshal(req.Params, &body); err != nil {
+			t.Fatalf("unmarshal params: %v", err)
+		}
+		// Phase 3 legacy shape: McpServers populated as empty slice
+		// (NOT nil) so the wire JSON is `"mcpServers":[]` — matches the
+		// pre-refactor NewSession exactly.
+		if body.McpServers == nil {
+			t.Error("expected McpServers to be non-nil empty slice (legacy parity)")
+		}
+		if len(body.McpServers) != 0 {
+			t.Errorf("expected empty McpServers, got %v", body.McpServers)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for captured request")
+	}
+}
+
 // --- Prompt tests ---
 
 func TestACPProcess_Prompt_Success(t *testing.T) {

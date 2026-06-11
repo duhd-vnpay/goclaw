@@ -12,6 +12,23 @@ import (
 	"time"
 )
 
+// ShimHandle is the subset of *mcp_shim.Server the ACP layer needs to wire
+// the in-process MCP shim into session lifecycle. Kept as an interface so
+// the acp package does not import mcp_shim directly (mcp_shim already
+// depends on internal/tools and internal/mcp; an acp → mcp_shim import
+// risks cycling once mcp_shim grows back-references). The wiring layer
+// (acp_provider.go, in a later task) injects the concrete *mcp_shim.Server.
+//
+// RegisterSession accepts any rather than mcp_shim.SessionEntry to keep
+// this surface cycle-free; production wiring asserts the concrete type at
+// the call site (see Task 7 in docs/superpowers/plans/2026-06-10-phase4-acp-mcp-bridge.md).
+type ShimHandle interface {
+	URL() string
+	SessionURL(sid string) string
+	RegisterSession(entry any)
+	UnregisterSession(sid string)
+}
+
 // ACPProcess represents a running ACP agent subprocess.
 // One process is shared across all sessions — each goclaw conversation
 // creates its own ACP session (identified by session ID) on this process.
@@ -113,10 +130,16 @@ type ProcessPool struct {
 	agentArgs   []string
 	workDir     string
 	idleTTL     time.Duration
-	mu          sync.RWMutex // protects toolHandler
+	mu          sync.RWMutex // protects toolHandler + shim
 	toolHandler RequestHandler
-	done        chan struct{}
-	closeOnce   sync.Once
+	// shim is the in-process MCP shim that ACP sub-sessions advertise to
+	// claude-agent-acp via NewSessionRequest.McpServers. Nil → no shim
+	// wiring (Phase 3 behavior); session/new still works, just without
+	// per-session MCP tool exposure. Set via SetShim before any
+	// NewSessionWithShim / LoadSessionWithShim call.
+	shim      ShimHandle
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // NewProcessPool creates a pool that spawns ACP agents as subprocesses.
@@ -145,6 +168,45 @@ func (pp *ProcessPool) getToolHandler() RequestHandler {
 	pp.mu.RLock()
 	defer pp.mu.RUnlock()
 	return pp.toolHandler
+}
+
+// SetShim wires the in-process MCP shim into the pool. Safe to call before
+// any GetOrSpawn or NewSessionWithShim. A nil handle disables shim wiring
+// (subsequent NewSessionWithShim falls back to Phase 3 empty-mcpServers
+// behavior).
+func (pp *ProcessPool) SetShim(h ShimHandle) {
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+	pp.shim = h
+}
+
+// getShim returns the current shim handle (thread-safe). May return nil.
+func (pp *ProcessPool) getShim() ShimHandle {
+	pp.mu.RLock()
+	defer pp.mu.RUnlock()
+	return pp.shim
+}
+
+// NewSessionWithShim creates an ACP session, passing the pool's wired shim
+// handle through to the session/new RPC. The optional register callback is
+// invoked with the resolved session ID so the caller can register the
+// SessionEntry in the shim under the correct sid (Task 7 will populate
+// McpServers using shim.SessionURL). For now this is a thin wrapper that
+// preserves Phase 3 behavior — McpServers stays empty — and lays the
+// wiring surface for the populate step.
+//
+// Callers that don't need shim wiring should keep using proc.NewSession.
+func (pp *ProcessPool) NewSessionWithShim(ctx context.Context, proc *ACPProcess, register func(sid string)) (string, error) {
+	return proc.newSessionImpl(ctx, pp.getShim(), register)
+}
+
+// LoadSessionWithShim is the shim-aware counterpart to ACPProcess.LoadSession,
+// mirroring NewSessionWithShim for the session/load path. Used after a
+// process respawn to re-attach an existing session ID with shim wiring
+// preserved. McpServers population is deferred to Task 7 — for now this
+// preserves Phase 3 behavior (empty McpServers) regardless of shim presence.
+func (pp *ProcessPool) LoadSessionWithShim(ctx context.Context, proc *ACPProcess, sessionID string, register func(sid string)) (string, error) {
+	return proc.loadSessionImpl(ctx, sessionID, pp.getShim(), register)
 }
 
 // GetOrSpawn returns an existing process for the pool key or spawns a new one.

@@ -26,8 +26,26 @@ func (p *ACPProcess) Initialize(ctx context.Context) error {
 	return nil
 }
 
-// NewSession creates a new ACP session and returns its session ID.
+// NewSession creates a new ACP session and returns its session ID. This is
+// the legacy entry point preserved for callers that do not need the in-
+// process MCP shim wired into the session (Phase 3 behavior). New callers
+// requiring shim wiring should use ProcessPool.NewSessionWithShim, which
+// reaches newSessionImpl with a non-nil shim handle + per-session register.
 func (p *ACPProcess) NewSession(ctx context.Context) (string, error) {
+	return p.newSessionImpl(ctx, nil, nil)
+}
+
+// newSessionImpl is the real implementation behind NewSession and
+// ProcessPool.NewSessionWithShim. Both shim and register are accepted but
+// not yet consumed — Task 7 in the Phase 4 ACP↔Tool Registry Bridge plan
+// will populate NewSessionRequest.McpServers from shim.SessionURL and
+// invoke register(sid) so the caller can attach the SessionEntry under
+// the resolved session ID. For now the body is identical to the
+// pre-refactor NewSession so all existing callers preserve their behavior.
+func (p *ACPProcess) newSessionImpl(ctx context.Context, shim ShimHandle, register func(sid string)) (string, error) {
+	_ = shim     // reserved for Task 7
+	_ = register // reserved for Task 7
+
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
@@ -51,7 +69,22 @@ func (p *ACPProcess) NewSession(ctx context.Context) (string, error) {
 // LoadSession restores a previous ACP session by ID (used after process restart).
 // Returns the session ID to use going forward (may equal the requested ID).
 // Only call if AgentCaps().LoadSession is true.
+//
+// Legacy entry point — see ProcessPool.LoadSessionWithShim for the
+// shim-aware variant (Task 7 will populate LoadSessionRequest.McpServers
+// to mirror NewSession parity per the Phase 4 Revision 1 supplement).
 func (p *ACPProcess) LoadSession(ctx context.Context, sessionID string) (string, error) {
+	return p.loadSessionImpl(ctx, sessionID, nil, nil)
+}
+
+// loadSessionImpl is the real implementation behind LoadSession and
+// ProcessPool.LoadSessionWithShim. Symmetry with newSessionImpl keeps
+// Task 7's populate step a single pattern applied in two places. shim and
+// register are reserved for Task 7 and currently unused.
+func (p *ACPProcess) loadSessionImpl(ctx context.Context, sessionID string, shim ShimHandle, register func(sid string)) (string, error) {
+	_ = shim     // reserved for Task 7
+	_ = register // reserved for Task 7
+
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 

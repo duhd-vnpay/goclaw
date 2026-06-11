@@ -92,6 +92,23 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 	if req.ChannelType != "" {
 		ctx = tools.WithToolChannelType(ctx, req.ChannelType)
 	}
+	// Inject channel/chatID/peerKind/sessionKey into context so ACP provider's
+	// ctxReader.ReadRouting(ctx) can populate SessionEntry.Cron at shim
+	// register time. Without these, write_file(deliver=true) inside an ACP
+	// session has no channel target → ForwardMediaToOutbound drops the file.
+	// Bug E2.4 (2026-06-11): MD report delivered as text only, attachment lost.
+	if req.Channel != "" {
+		ctx = tools.WithToolChannel(ctx, req.Channel)
+	}
+	if req.ChatID != "" {
+		ctx = tools.WithToolChatID(ctx, req.ChatID)
+	}
+	if req.PeerKind != "" {
+		ctx = tools.WithToolPeerKind(ctx, req.PeerKind)
+	}
+	if req.SessionKey != "" {
+		ctx = tools.WithToolSessionKey(ctx, req.SessionKey)
+	}
 	// Inject per-agent overrides from DB so tools honor per-agent settings.
 	if l.restrictToWs != nil {
 		ctx = tools.WithRestrictToWorkspace(ctx, *l.restrictToWs)

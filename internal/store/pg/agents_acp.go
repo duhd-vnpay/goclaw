@@ -65,3 +65,23 @@ func (s *PGAgentStore) GetAgentIDByKey(ctx context.Context, agentKey string) (uu
 	}
 	return id, nil
 }
+
+// GetAgentTenantByKey resolves an agent_key to (id, tenant_id) in one
+// round-trip. Used by the ACP shim's per-session MCP catalog builder which
+// needs tenant scope in ctx before calling mcpbridge.Manager.LoadForAgent
+// (the underlying mcp_servers.ListAccessible enforces tenant_id presence).
+// Cross-tenant: unscoped lookup; tenant_id comes from the agent row itself.
+func (s *PGAgentStore) GetAgentTenantByKey(ctx context.Context, agentKey string) (uuid.UUID, uuid.UUID, error) {
+	var id, tid uuid.UUID
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id FROM agents WHERE agent_key = $1 AND deleted_at IS NULL`,
+		agentKey,
+	).Scan(&id, &tid)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return uuid.Nil, uuid.Nil, sql.ErrNoRows
+		}
+		return uuid.Nil, uuid.Nil, err
+	}
+	return id, tid, nil
+}

@@ -755,22 +755,30 @@ func wireACPMCPSessionBuilder(deps ACPDeps, toolsReg *tools.Registry, mcpPool *m
 		return
 	}
 
-	// Agent-key → UUID resolver. PGAgentStore implements GetAgentIDByKey, but
-	// the cmd package only sees stores.Agents as the broad store.AgentStore
-	// interface. We type-assert through the same narrow ACPToolsLookup the
-	// resolver wiring uses.
-	agentLookup, ok := pgStores.Agents.(mcp_shim.ACPToolsLookup)
+	// Agent-key → (UUID, tenant_id) resolver. PGAgentStore implements both
+	// GetAgentIDByKey (narrow shim path) and GetAgentTenantByKey (richer path
+	// the session builder needs — mcp_servers.ListAccessible enforces tenant
+	// scope via store.TenantIDFromContext). Type-assert against a local rich
+	// interface so we don't widen mcp_shim.ACPToolsLookup unnecessarily.
+	type agentTenantLookup interface {
+		GetAgentTenantByKey(ctx context.Context, agentKey string) (uuid.UUID, uuid.UUID, error)
+	}
+	tenantLookup, ok := pgStores.Agents.(agentTenantLookup)
 	if !ok {
 		slog.Warn("acp.shim.session_builder_skipped",
-			"reason", "agents store does not implement ACPToolsLookup")
+			"reason", "agents store does not implement GetAgentTenantByKey")
 		return
 	}
 
 	builder := mcp_shim.MCPSessionBuilder(func(ctx context.Context, agentKey string) (*tools.Registry, error) {
-		aid, err := agentLookup.GetAgentIDByKey(ctx, agentKey)
+		aid, tid, err := tenantLookup.GetAgentTenantByKey(ctx, agentKey)
 		if err != nil {
 			return nil, err
 		}
+		// Inject tenant_id so the downstream MCP store enforces multi-tenant
+		// isolation correctly (ListAccessible returns tenant_id required if
+		// this is missing — that was Bug E2.1 in fork.15f-acp).
+		ctx = store.WithTenantID(ctx, tid)
 		// Clone the global registry so per-session MCP bridge tool registration
 		// does NOT pollute the shared toolsReg (preserves the cross-agent leak
 		// guarantee documented at internal/agent/resolver.go:317-321).

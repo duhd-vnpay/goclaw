@@ -59,7 +59,7 @@ func (s *Server) makeSessionAwareHandler(reg *tools.Registry, msgBus *bus.Messag
 
 		allow, ok := ctx.Value(allowlistCtxKey{}).(map[string]bool)
 		if !ok || !allow[toolName] {
-			audit("err")
+			audit("blocked")
 			return mcpgo.NewToolResultError("tool not granted for this ACP session: " + toolName), nil
 		}
 
@@ -68,11 +68,7 @@ func (s *Server) makeSessionAwareHandler(reg *tools.Registry, msgBus *bus.Messag
 		// MCP tool result (not a transport error) so the LLM sees the denial
 		// and can adapt rather than the ACP transport tearing down.
 		if sess != nil && sess.rateBucket != nil && !sess.rateBucket.take(time.Now()) {
-			slog.Warn("acp.shim.tool_call_rate_limited",
-				"sid", sid,
-				"tool", toolName,
-			)
-			audit("rate_limited")
+			audit("blocked")
 			return mcpgo.NewToolResultError("rate_limit_exceeded: max 100 tool calls per 5 minutes per session"), nil
 		}
 
@@ -91,7 +87,7 @@ func (s *Server) makeSessionAwareHandler(reg *tools.Registry, msgBus *bus.Messag
 		)
 
 		if result.IsError {
-			audit("err")
+			audit("error")
 			return mcpgo.NewToolResultError(result.ForLLM), nil
 		}
 

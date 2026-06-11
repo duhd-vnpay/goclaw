@@ -266,6 +266,24 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	r = r.WithContext(ctx)
 
+	// fork.15e-acp: Bug E2 debug — log every request reaching the shim so we
+	// can see whether Claude Code SDK is even calling tools/list. Log full body
+	// truncated to 512 bytes for tools/call tool-name inspection. Remove after
+	// root cause is confirmed.
+	bodyPreview := string(body)
+	if len(bodyPreview) > 512 {
+		bodyPreview = bodyPreview[:512] + "...(truncated)"
+	}
+	slog.Info("acp.shim.request",
+		"sid", sid,
+		"http_method", r.Method,
+		"jsonrpc_method", method,
+		"content_type", r.Header.Get("Content-Type"),
+		"accept", r.Header.Get("Accept"),
+		"len", len(body),
+		"body_preview", bodyPreview,
+	)
+
 	if method == "tools/list" {
 		rec := &capturingWriter{header: http.Header{}}
 		s.mcp.ServeHTTP(rec, r)
@@ -359,6 +377,8 @@ func (s *Server) writeFilteredToolsList(w http.ResponseWriter, rec *capturingWri
 	}
 
 	filtered := make([]json.RawMessage, 0, len(list.Tools))
+	allowedNames := make([]string, 0, len(filtered))
+	allTotalNames := make([]string, 0, len(list.Tools))
 	for _, t := range list.Tools {
 		var entry struct {
 			Name string `json:"name"`
@@ -366,10 +386,24 @@ func (s *Server) writeFilteredToolsList(w http.ResponseWriter, rec *capturingWri
 		if err := json.Unmarshal(t, &entry); err != nil {
 			continue
 		}
+		allTotalNames = append(allTotalNames, entry.Name)
 		if allow[entry.Name] {
 			filtered = append(filtered, t)
+			allowedNames = append(allowedNames, entry.Name)
 		}
 	}
+	allowKeys := make([]string, 0, len(allow))
+	for k := range allow {
+		allowKeys = append(allowKeys, k)
+	}
+	slog.Info("acp.shim.tools_list_filtered",
+		"total_in_catalog", len(list.Tools),
+		"allowlist_size", len(allow),
+		"emitted", len(filtered),
+		"allowlist", allowKeys,
+		"emitted_names", allowedNames,
+		"catalog_names", allTotalNames,
+	)
 
 	filteredRaw, err := json.Marshal(filtered)
 	if err != nil {

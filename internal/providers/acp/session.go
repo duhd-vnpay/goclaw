@@ -62,7 +62,7 @@ func (p *ACPProcess) newSessionImpl(ctx context.Context, shim ShimHandle, regist
 		cwd, _ = filepath.Abs(".")
 	}
 
-	mcpServers := []string{}
+	mcpServers := []any{}
 	useShim := shim != nil && p.agentCaps.MCPCapabilities != nil && p.agentCaps.MCPCapabilities.HTTP
 	if shim != nil && !useShim {
 		slog.Warn("acp.shim.cap_unsupported",
@@ -75,7 +75,12 @@ func (p *ACPProcess) newSessionImpl(ctx context.Context, shim ShimHandle, regist
 	var reservedSID string
 	if useShim {
 		reservedSID = newSessionID()
-		mcpServers = append(mcpServers, shim.SessionURL(reservedSID))
+		mcpServers = append(mcpServers, McpServerHTTP{
+			Type:    "http",
+			Name:    "goclaw-shim",
+			URL:     shim.SessionURL(reservedSID),
+			Headers: []HTTPHeader{},
+		})
 		if register != nil {
 			register(reservedSID)
 		}
@@ -120,7 +125,7 @@ func (p *ACPProcess) loadSessionImpl(ctx context.Context, sessionID string, shim
 		cwd, _ = filepath.Abs(".")
 	}
 
-	mcpServers := []string{}
+	mcpServers := []any{}
 	useShim := shim != nil && p.agentCaps.MCPCapabilities != nil && p.agentCaps.MCPCapabilities.HTTP
 	if shim != nil && !useShim {
 		slog.Warn("acp.shim.cap_unsupported",
@@ -130,7 +135,12 @@ func (p *ACPProcess) loadSessionImpl(ctx context.Context, sessionID string, shim
 	if useShim {
 		// Re-use the existing sid for the URL so the shim's session map key
 		// matches what claude-agent-acp will reconnect with.
-		mcpServers = append(mcpServers, shim.SessionURL(sessionID))
+		mcpServers = append(mcpServers, McpServerHTTP{
+			Type:    "http",
+			Name:    "goclaw-shim",
+			URL:     shim.SessionURL(sessionID),
+			Headers: []HTTPHeader{},
+		})
 		if register != nil {
 			register(sessionID)
 		}

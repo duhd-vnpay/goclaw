@@ -61,9 +61,33 @@ type MCPCaps struct {
 
 // --- Session Methods ---
 
+// McpServerHTTP is the HTTP-transport McpServer variant the ACP wrapper
+// validates against schema.json/$defs/McpServerHttp. Required fields per
+// schema: type (const "http"), name, url, headers. The `headers` array must
+// be present (can be empty) — omitting it triggers `-32602 Invalid params`.
+//
+// Sent inside NewSessionRequest.McpServers / LoadSessionRequest.McpServers
+// when shim is wired (Phase 4). For Phase 3 / no-shim path the slice stays
+// nil/empty which marshals to `[]` — also valid.
+type McpServerHTTP struct {
+	Type    string       `json:"type"` // const "http"
+	Name    string       `json:"name"`
+	URL     string       `json:"url"`
+	Headers []HTTPHeader `json:"headers"`
+}
+
+// HTTPHeader matches schema.json/$defs/HttpHeader. Name + value both required.
+type HTTPHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
 type NewSessionRequest struct {
-	Cwd        string   `json:"cwd"`
-	McpServers []string `json:"mcpServers"`
+	Cwd        string `json:"cwd"`
+	// McpServers carries the McpServer discriminated union from the schema.
+	// We marshal one McpServerHTTP per shim URL today; any future stdio/sse
+	// variants get the same []any treatment.
+	McpServers []any `json:"mcpServers"`
 }
 
 type NewSessionResponse struct {
@@ -71,9 +95,9 @@ type NewSessionResponse struct {
 }
 
 type LoadSessionRequest struct {
-	SessionID  string   `json:"sessionId"`
-	Cwd        string   `json:"cwd,omitempty"`
-	McpServers []string `json:"mcpServers"`
+	SessionID  string `json:"sessionId"`
+	Cwd        string `json:"cwd,omitempty"`
+	McpServers []any  `json:"mcpServers"`
 }
 
 type LoadSessionResponse struct {

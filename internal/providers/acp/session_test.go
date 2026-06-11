@@ -325,6 +325,18 @@ func (f *fakeShim) SessionURL(sid string) string { return "http://shim.local/mcp
 func (f *fakeShim) RegisterSession(entry any)    { f.registered = append(f.registered, "any") }
 func (f *fakeShim) UnregisterSession(sid string) {}
 
+// mcpEntryURL extracts the `url` field from a marshaled McpServer entry.
+// After JSON round-trip into []any the element is a map[string]any, so
+// tests can't index it as a struct — this helper hides the cast.
+func mcpEntryURL(entry any) string {
+	m, ok := entry.(map[string]any)
+	if !ok {
+		return ""
+	}
+	url, _ := m["url"].(string)
+	return url
+}
+
 // TestNewSessionImpl_PopulatesMcpServers_WhenHTTPAdvertised verifies the
 // happy path: HTTP MCP capability advertised AND shim non-nil → reserve a
 // SID, call register, advertise the shim URL in McpServers.
@@ -352,7 +364,7 @@ func TestNewSessionImpl_PopulatesMcpServers_WhenHTTPAdvertised(t *testing.T) {
 		var actualSID string
 		if len(body.McpServers) > 0 {
 			// Pull the proposed sid out of the URL for the response.
-			url := body.McpServers[0]
+			url := mcpEntryURL(body.McpServers[0])
 			if i := strings.Index(url, "session="); i >= 0 {
 				actualSID = url[i+len("session="):]
 			}
@@ -399,8 +411,8 @@ func TestNewSessionImpl_PopulatesMcpServers_WhenHTTPAdvertised(t *testing.T) {
 				len(body.McpServers), body.McpServers)
 		}
 		want := shim.SessionURL(sid)
-		if body.McpServers[0] != want {
-			t.Errorf("McpServers[0] = %q, want %q", body.McpServers[0], want)
+		if got := mcpEntryURL(body.McpServers[0]); got != want {
+			t.Errorf("McpServers[0].url = %q, want %q", got, want)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for captured request")
@@ -499,8 +511,8 @@ func TestLoadSessionImpl_PopulatesMcpServers_WhenHTTPAdvertised(t *testing.T) {
 			t.Fatalf("expected 1 mcpServers entry, got %d", len(body.McpServers))
 		}
 		want := shim.SessionURL(priorSID)
-		if body.McpServers[0] != want {
-			t.Errorf("McpServers[0] = %q, want %q", body.McpServers[0], want)
+		if got := mcpEntryURL(body.McpServers[0]); got != want {
+			t.Errorf("McpServers[0].url = %q, want %q", got, want)
 		}
 		if body.SessionID != priorSID {
 			t.Errorf("LoadSessionRequest.SessionID = %q, want %q", body.SessionID, priorSID)

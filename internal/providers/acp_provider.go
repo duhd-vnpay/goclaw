@@ -46,6 +46,20 @@ type ACPContextReader interface {
 	ReadRouting(ctx context.Context) ACPRoutingContext
 }
 
+// ACPConfigReader reads a single tenant-scoped system_configs value used by
+// the shim feature-flag (Task 9 rollback kill switch). The cmd layer plugs
+// in an adapter that wraps store.SystemConfigStore + binds the owning
+// tenant on ctx — keeping providers/ free of the internal/store import
+// (store → providers cycle).
+//
+// Returns the raw string value; empty string + nil error is treated as a
+// missing row (fail OPEN: default = shim enabled). Any other error is
+// likewise treated as "missing" by the caller after a slog.Warn so a
+// transient DB hiccup never silently disables a feature meant to be on.
+type ACPConfigReader interface {
+	GetSystemConfig(ctx context.Context, key string) (string, error)
+}
+
 // acpSessionEntry tracks a live ACP session for one goclaw conversation.
 type acpSessionEntry struct {
 	id       string          // ACP session ID returned by session/new or session/load
@@ -70,6 +84,11 @@ type ACPProvider struct {
 	shim       acp.ShimHandle
 	resolver   ACPToolResolver
 	ctxReader  ACPContextReader
+	// cfgReader reads system_configs for the kill-switch feature flag
+	// (acp.shim.enabled). Nil → shim stays on (default-OPEN). Per-session
+	// DB read; no cache — config row mutates effective on next session
+	// creation without a restart.
+	cfgReader  ACPConfigReader
 	// tenantID resolution for the resolver. Provided by the caller when
 	// constructing the provider — at registration time we know the owning
 	// tenant; agent id is resolved per-request from the session ctx.
@@ -149,6 +168,17 @@ func WithACPContextReader(r ACPContextReader) ACPOption {
 	}
 }
 
+// WithACPConfigReader plugs in the system_configs reader used to honor the
+// acp.shim.enabled kill switch (Task 9). Without it the shim stays
+// enabled (default-OPEN); a missing or malformed config row is also
+// treated as enabled so a broken/empty seed never silently disables the
+// shim.
+func WithACPConfigReader(r ACPConfigReader) ACPOption {
+	return func(p *ACPProvider) {
+		p.cfgReader = r
+	}
+}
+
 // NewACPProvider creates a provider that orchestrates ACP agents as subprocesses.
 func NewACPProvider(binary string, args []string, workDir string, idleTTL time.Duration, denyPatterns []*regexp.Regexp, opts ...ACPOption) *ACPProvider {
 	// Pool key identifies the shared process: binary + args combination
@@ -217,6 +247,44 @@ func (p *ACPProvider) sessionReaper() {
 	}
 }
 
+// shimEnabledKey is the system_configs key for the Task 9 rollback flag.
+// Set value='false' to fall back to the legacy ACP path (no MCP tools
+// advertised) on the next session creation; no restart required.
+const shimEnabledKey = "acp.shim.enabled"
+
+// shimEnabled returns true when the shim should be wired into the next
+// ACP session creation. Defaults to true (fail OPEN) when:
+//   - no config reader is wired, or
+//   - the system_configs row is missing, or
+//   - the row value fails to parse as a bool (a warning is logged).
+//
+// Only an explicit "false" (case-insensitive) routes the session through
+// the legacy proc.NewSession / proc.LoadSession path with no shim wiring.
+// Read per-session-creation against system_configs — the operator flips
+// the row via UPDATE and the next session picks up the change. No cache.
+func (p *ACPProvider) shimEnabled(ctx context.Context) bool {
+	if p.cfgReader == nil {
+		return true
+	}
+	raw, err := p.cfgReader.GetSystemConfig(ctx, shimEnabledKey)
+	if err != nil || raw == "" {
+		// Missing row or transient read error → default ON. We deliberately
+		// do NOT log on every miss — the seed row may simply not be
+		// applied yet on a fresh DB; the shim is the intended default.
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true", "1", "yes", "on":
+		return true
+	case "false", "0", "no", "off":
+		return false
+	default:
+		slog.Warn("acp.shim.flag_parse_failed",
+			"key", shimEnabledKey, "value", raw, "default", "enabled")
+		return true
+	}
+}
+
 // resolveSession returns the ACP session ID for a goclaw session key.
 // It creates a new session if none exists, or reloads it after a process respawn.
 // A per-key mutex prevents concurrent creation races for the same session.
@@ -225,6 +293,13 @@ func (p *ACPProvider) resolveSession(ctx context.Context, proc *acp.ACPProcess, 
 	mu := actual.(*sync.Mutex)
 	mu.Lock()
 	defer mu.Unlock()
+
+	// Task 9: read the kill-switch once per session-creation path. When
+	// shim is wired but the flag is OFF, route the session through the
+	// legacy proc.NewSession / proc.LoadSession (no MCP tools advertised,
+	// no SessionEntry registered). When the flag is ON (default) the
+	// normal shim wiring runs.
+	useShim := p.shim != nil && p.shimEnabled(ctx)
 
 	if val, ok := p.acpSessions.Load(goclawKey); ok {
 		entry := val.(*acpSessionEntry)
@@ -237,8 +312,18 @@ func (p *ACPProvider) resolveSession(ctx context.Context, proc *acp.ACPProcess, 
 		slog.Info("acp: process respawned, attempting session restore",
 			"goclaw_session", goclawKey, "old_sid", entry.id)
 		if proc.AgentCaps().LoadSession {
-			registerFn := p.makeShimRegisterFn(ctx, goclawKey)
-			sid, err := p.pool.LoadSessionWithShim(ctx, proc, entry.id, registerFn)
+			var sid string
+			var err error
+			if useShim {
+				registerFn := p.makeShimRegisterFn(ctx, goclawKey)
+				sid, err = p.pool.LoadSessionWithShim(ctx, proc, entry.id, registerFn)
+			} else {
+				if p.shim != nil {
+					slog.Info("acp.shim.disabled_by_flag",
+						"goclaw_session", goclawKey, "old_sid", entry.id, "path", "load")
+				}
+				sid, err = proc.LoadSession(ctx, entry.id)
+			}
 			if err == nil {
 				p.acpSessions.Store(goclawKey, &acpSessionEntry{id: sid, proc: proc, lastUsed: time.Now()})
 				return sid, nil
@@ -249,8 +334,18 @@ func (p *ACPProvider) resolveSession(ctx context.Context, proc *acp.ACPProcess, 
 	}
 
 	slog.Info("acp: creating new session", "goclaw_session", goclawKey, "pool_key", p.poolKey)
-	registerFn := p.makeShimRegisterFn(ctx, goclawKey)
-	sid, err := p.pool.NewSessionWithShim(ctx, proc, registerFn)
+	var sid string
+	var err error
+	if useShim {
+		registerFn := p.makeShimRegisterFn(ctx, goclawKey)
+		sid, err = p.pool.NewSessionWithShim(ctx, proc, registerFn)
+	} else {
+		if p.shim != nil {
+			slog.Info("acp.shim.disabled_by_flag",
+				"goclaw_session", goclawKey, "path", "new")
+		}
+		sid, err = proc.NewSession(ctx)
+	}
 	if err != nil {
 		return "", err
 	}

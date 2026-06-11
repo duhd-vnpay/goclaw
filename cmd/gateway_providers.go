@@ -31,6 +31,9 @@ type ACPDeps struct {
 	Shim      acp.ShimHandle
 	Resolver  *mcp_shim.Resolver
 	CtxReader providers.ACPContextReader
+	// CfgReader honors the acp.shim.enabled kill-switch (Task 9). Nil → flag
+	// effectively absent → shim stays on (default-OPEN).
+	CfgReader providers.ACPConfigReader
 }
 
 // toolsCtxReader bridges providers.ACPContextReader to the tools.Tool*FromCtx
@@ -46,6 +49,30 @@ func (toolsCtxReader) ReadRouting(ctx context.Context) providers.ACPRoutingConte
 		PeerKind:   tools.ToolPeerKindFromCtx(ctx),
 		SessionKey: tools.ToolSessionKeyFromCtx(ctx),
 	}
+}
+
+// systemConfigReader adapts store.SystemConfigStore to
+// providers.ACPConfigReader, binding the tenant on ctx before delegating.
+// Defined in cmd/ so internal/providers stays free of the internal/store
+// import (store → providers cycle).
+//
+// tenantID is the tenant the ACPProvider is registered for. For a global
+// ACP provider (config-file form, no per-tenant binding) the caller plugs
+// in store.MasterTenantID so the system_configs Get hits the master row
+// the parent-repo seed (122-acp-shim-feature-flag.sql) populates.
+type systemConfigReader struct {
+	src      store.SystemConfigStore
+	tenantID uuid.UUID
+}
+
+func (r systemConfigReader) GetSystemConfig(ctx context.Context, key string) (string, error) {
+	if r.src == nil {
+		return "", nil
+	}
+	if store.TenantIDFromContext(ctx) == uuid.Nil {
+		ctx = store.WithTenantID(ctx, r.tenantID)
+	}
+	return r.src.Get(ctx, key)
 }
 
 // mcpAccessAdapter bridges store.MCPServerStore.ListAccessible to the
@@ -547,6 +574,12 @@ func registerACPFromConfig(registry *providers.Registry, cfg config.ACPConfig, a
 	if acpDeps.CtxReader != nil {
 		opts = append(opts, providers.WithACPContextReader(acpDeps.CtxReader))
 	}
+	if acpDeps.CfgReader != nil {
+		// Config-file ACP runs in the master tenant scope (no per-tenant
+		// row in providers DB) — the master-bound CfgReader from
+		// setupACPShim is exactly what we want here.
+		opts = append(opts, providers.WithACPConfigReader(acpDeps.CfgReader))
+	}
 	registry.Register(providers.NewACPProvider(
 		cfg.Binary, cfg.Args, workDir, idleTTL, tools.DefaultDenyPatterns(), opts...,
 	))
@@ -604,6 +637,15 @@ func registerACPFromDB(registry *providers.Registry, p store.LLMProviderData, ac
 	if acpDeps.CtxReader != nil {
 		opts = append(opts, providers.WithACPContextReader(acpDeps.CtxReader))
 	}
+	// Per-tenant CfgReader so acp.shim.enabled honors a tenant-specific
+	// override row when present (falls back to master at the SQL layer
+	// only if the operator chooses to seed both — current PG impl is
+	// strict tenant-scoped, so most deployments use the master row).
+	if base, ok := acpDeps.CfgReader.(systemConfigReader); ok && base.src != nil {
+		opts = append(opts, providers.WithACPConfigReader(systemConfigReader{src: base.src, tenantID: p.TenantID}))
+	} else if acpDeps.CfgReader != nil {
+		opts = append(opts, providers.WithACPConfigReader(acpDeps.CfgReader))
+	}
 	registry.RegisterForTenant(p.TenantID, providers.NewACPProvider(
 		binary, settings.Args, workDir, idleTTL, tools.DefaultDenyPatterns(), opts...,
 	))
@@ -659,9 +701,22 @@ func setupACPShim(toolsReg *tools.Registry, msgBus *bus.MessageBus, pgStores *st
 	}
 	resolver := mcp_shim.NewResolver(grantSource)
 
+	// CfgReader is left zero here and re-bound per-provider in
+	// registerACPFromConfig / registerACPFromDB so the tenant scope on the
+	// system_configs Get matches the owning tenant. Without per-provider
+	// binding a config-file ACP provider would read the wrong tenant.
+	var cfgReader providers.ACPConfigReader
+	if pgStores != nil && pgStores.SystemConfigs != nil {
+		// Master-tenant binding is the safe fallback when the caller
+		// (e.g. registerACPFromConfig) does not override. registerACPFromDB
+		// builds its own per-tenant reader below.
+		cfgReader = systemConfigReader{src: pgStores.SystemConfigs, tenantID: store.MasterTenantID}
+	}
+
 	return ACPDeps{
 		Shim:      handle,
 		Resolver:  resolver,
 		CtxReader: toolsCtxReader{},
+		CfgReader: cfgReader,
 	}
 }

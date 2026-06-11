@@ -2,6 +2,7 @@ package mcp_shim
 
 import (
 	"encoding/json"
+	"sync"
 	"time"
 )
 
@@ -81,6 +82,48 @@ func (e *SessionEntry) AllowlistSet() map[string]bool {
 	return out
 }
 
-// rateBucket is a forward-reference stub. Task 8 will replace this with
-// the real rate limiter implementation in server.go.
-type rateBucket struct{}
+// rateBucket is a simple token-bucket limiter used to cap the volume of
+// `tools/call` invocations the shim accepts from a single ACP session.
+// Tokens are refilled in one shot whenever refillEvery has elapsed since
+// the last refill — that is cheaper than continuous refill and is good
+// enough for the burst-control profile we want (100 calls per 5 minutes
+// per session). Concurrent take() calls are serialized by mu.
+type rateBucket struct {
+	mu          sync.Mutex
+	tokens      int
+	capacity    int
+	refillEvery time.Duration
+	lastRefill  time.Time
+}
+
+// newRateBucket constructs a full bucket with the given capacity and
+// refill interval. The bucket starts at capacity tokens with lastRefill
+// set to time.Now() so the first window starts fresh.
+func newRateBucket(capacity int, refillEvery time.Duration) *rateBucket {
+	return &rateBucket{
+		tokens:      capacity,
+		capacity:    capacity,
+		refillEvery: refillEvery,
+		lastRefill:  time.Now(),
+	}
+}
+
+// take attempts to consume one token. If at least refillEvery has elapsed
+// since lastRefill, the bucket is refilled to capacity before the take is
+// evaluated. Returns true on success, false when the bucket is empty.
+func (b *rateBucket) take(now time.Time) bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.refillEvery > 0 && now.Sub(b.lastRefill) >= b.refillEvery {
+		b.tokens = b.capacity
+		b.lastRefill = now
+	}
+	if b.tokens <= 0 {
+		return false
+	}
+	b.tokens--
+	return true
+}

@@ -2,6 +2,8 @@ package mcp_shim
 
 import (
 	"context"
+	"log/slog"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -34,9 +36,44 @@ import (
 // invoking the registry.
 func (s *Server) makeSessionAwareHandler(reg *tools.Registry, msgBus *bus.MessageBus, toolName string) mcpserver.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		start := time.Now()
+
+		// Pull the *SessionEntry attached by handleMCP. May be nil in tests
+		// that build a request without going through the HTTP path; treat
+		// nil entry as "no rate limit, no sid" so the audit log degrades
+		// gracefully instead of panicking.
+		sess, _ := ctx.Value(sessionCtxKey{}).(*SessionEntry)
+		sid := ""
+		if sess != nil {
+			sid = sess.SID
+		}
+
+		audit := func(status string) {
+			slog.Info("acp.shim.tool_call",
+				"sid", sid,
+				"tool", toolName,
+				"dur_ms", time.Since(start).Milliseconds(),
+				"status", status,
+			)
+		}
+
 		allow, ok := ctx.Value(allowlistCtxKey{}).(map[string]bool)
 		if !ok || !allow[toolName] {
+			audit("err")
 			return mcpgo.NewToolResultError("tool not granted for this ACP session: " + toolName), nil
+		}
+
+		// Layer 4: per-session token-bucket rate limit. Empty bucket → reject
+		// without dispatching to the registry. The error is returned as an
+		// MCP tool result (not a transport error) so the LLM sees the denial
+		// and can adapt rather than the ACP transport tearing down.
+		if sess != nil && sess.rateBucket != nil && !sess.rateBucket.take(time.Now()) {
+			slog.Warn("acp.shim.tool_call_rate_limited",
+				"sid", sid,
+				"tool", toolName,
+			)
+			audit("rate_limited")
+			return mcpgo.NewToolResultError("rate_limit_exceeded: max 100 tool calls per 5 minutes per session"), nil
 		}
 
 		args := req.GetArguments()
@@ -54,6 +91,7 @@ func (s *Server) makeSessionAwareHandler(reg *tools.Registry, msgBus *bus.Messag
 		)
 
 		if result.IsError {
+			audit("err")
 			return mcpgo.NewToolResultError(result.ForLLM), nil
 		}
 
@@ -62,6 +100,7 @@ func (s *Server) makeSessionAwareHandler(reg *tools.Registry, msgBus *bus.Messag
 		// drift between the two MCP server entry points.
 		mcp.ForwardMediaToOutbound(ctx, msgBus, toolName, result)
 
+		audit("ok")
 		return mcpgo.NewToolResultText(result.ForLLM), nil
 	}
 }

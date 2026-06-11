@@ -74,6 +74,19 @@ type Server struct {
 // so callers cannot tamper with the value.
 type allowlistCtxKey struct{}
 
+// sessionCtxKey threads the *SessionEntry (containing the per-session
+// rateBucket and SID) from handleMCP into the session-aware tool handler.
+// Kept unexported for the same reason as allowlistCtxKey.
+type sessionCtxKey struct{}
+
+// Per-session rate-limit defaults: 100 tool calls per 5 minutes. Constants
+// rather than ServerConfig knobs because the limit is a security defense
+// rather than a tunable.
+const (
+	defaultRateCapacity    = 100
+	defaultRateRefillEvery = 5 * time.Minute
+)
+
 // NewServer binds the listener and starts the HTTP server. The underlying
 // mark3labs MCP server is constructed once with every tool the registry
 // currently knows about; per-session filtering is done in the handler.
@@ -156,6 +169,9 @@ func (s *Server) RegisterSession(e SessionEntry) {
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now()
 	}
+	if e.rateBucket == nil {
+		e.rateBucket = newRateBucket(defaultRateCapacity, defaultRateRefillEvery)
+	}
 	s.sessions.Store(e.SID, &e)
 	slog.Info("acp.shim.session_registered",
 		"sid", e.SID,
@@ -211,6 +227,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	//      sessionKey) for builtin tools like write_file deliver=true.
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, allowlistCtxKey{}, sess.AllowlistSet())
+	ctx = context.WithValue(ctx, sessionCtxKey{}, sess)
 	if sess.Cron.ChannelID != "" {
 		ctx = tools.WithToolChannel(ctx, sess.Cron.ChannelID)
 	}

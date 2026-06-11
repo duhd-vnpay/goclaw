@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,28 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
+
+// shimWireName returns the name the ACP shim advertises over MCP for an
+// internal registry tool. Bridge tools registered as `mcp_<server>__<tool>`
+// are renamed to `<server>_<tool>` (single underscores throughout) so the
+// final Claude Code wrapped form `mcp__goclaw-shim__<wire>` doesn't carry
+// a confusing second `mcp_` prefix or unrelated `__` separators that the
+// SDK tool-name parser may misroute (Bug E2.2, fork.15h-acp, 2026-06-11).
+// The internal name is preserved everywhere the registry is consulted —
+// only the wire identity surfaced via tools/list and tools/call changes.
+//
+// Examples:
+//
+//	mcp_ops__litellm_psql_query → ops_litellm_psql_query
+//	mcp_ops__shell_exec_read    → ops_shell_exec_read
+//	write_file                  → write_file
+func shimWireName(internal string) string {
+	if !strings.HasPrefix(internal, "mcp_") {
+		return internal
+	}
+	rest := strings.TrimPrefix(internal, "mcp_")
+	return strings.ReplaceAll(rest, "__", "_")
+}
 
 // ServerConfig configures the shim listener.
 type ServerConfig struct {
@@ -313,7 +336,13 @@ func (s *Server) buildSessionServer(e SessionEntry) int {
 				continue
 			}
 		}
-		mcpTool := mcp.ConvertToMCPTool(t)
+		// Bug E2.2 fix (fork.15h-acp): advertise under the shim wire name so
+		// Claude Code SDK's `mcp__<server>__<tool>` wrapper doesn't end up
+		// with double `mcp_` prefix that the SDK parser drops from the LLM
+		// catalog. The handler closure keeps the full registry name for
+		// dispatch — only the wire identity changes.
+		wire := shimWireName(name)
+		mcpTool := mcp.ConvertToMCPToolNamed(t, wire)
 		inner.AddTool(mcpTool, s.makeSessionAwareHandler(sessReg, s.msgBus, name))
 		registered++
 	}
@@ -544,6 +573,18 @@ func (s *Server) writeFilteredToolsList(w http.ResponseWriter, rec *capturingWri
 		return
 	}
 
+	// Bug E2.2 fix (fork.15h-acp): the underlying mcp-go catalog is keyed on
+	// the SHIM WIRE name (post-shimWireName), but the per-session allowlist
+	// is the INTERNAL registry-name set built by the resolver. Project the
+	// allowlist into wire-name space so this filter matches what's actually
+	// emitted in the tools/list response. Identity entries (write_file)
+	// collide harmlessly because shimWireName is idempotent for non-`mcp_`
+	// names.
+	wireAllow := make(map[string]bool, len(allow))
+	for internal := range allow {
+		wireAllow[shimWireName(internal)] = true
+	}
+
 	filtered := make([]json.RawMessage, 0, len(list.Tools))
 	allowedNames := make([]string, 0, len(filtered))
 	allTotalNames := make([]string, 0, len(list.Tools))
@@ -555,7 +596,7 @@ func (s *Server) writeFilteredToolsList(w http.ResponseWriter, rec *capturingWri
 			continue
 		}
 		allTotalNames = append(allTotalNames, entry.Name)
-		if allow[entry.Name] {
+		if wireAllow[entry.Name] {
 			filtered = append(filtered, t)
 			allowedNames = append(allowedNames, entry.Name)
 		}
@@ -665,7 +706,10 @@ func (s *Server) syncTools() int {
 		if !ok {
 			continue
 		}
-		mcpTool := mcp.ConvertToMCPTool(t)
+		// Wire under shim name (see shimWireName comment); handler retains
+		// full registry name for dispatch. Bug E2.2 fix, fork.15h-acp.
+		wire := shimWireName(name)
+		mcpTool := mcp.ConvertToMCPToolNamed(t, wire)
 		s.inner.AddTool(mcpTool, s.makeSessionAwareHandler(s.registry, s.msgBus, name))
 		s.registeredTools[name] = true
 		added++

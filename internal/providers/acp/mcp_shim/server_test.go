@@ -268,6 +268,13 @@ func (h *capturingHandler) hasMessage(msg string) bool {
 // bridge tools like mcp_ops__*) still appear in tools/list when the shim
 // receives a request. Without lazy-sync the tool would be silently dropped
 // from the catalogue even though the per-session allowlist marks it allowed.
+//
+// Fork.15h-acp (Bug E2.2): the shim advertises the SHIM WIRE name
+// (`ops_litellm_psql_query`) rather than the internal `mcp_ops__...` registry
+// name so the Claude Code SDK's `mcp__<server>__<tool>` wrapper doesn't carry
+// a confusing second `mcp_` prefix or unrelated `__` separators. The internal
+// registry name is still what the allowlist + handler closure use for
+// dispatch; only the on-wire identity changes.
 func TestServer_LazySyncToolsRegisteredAfterStartup(t *testing.T) {
 	reg := newTestRegistry(t, "write_file")
 	s := newTestServer(t, reg)
@@ -288,8 +295,8 @@ func TestServer_LazySyncToolsRegisteredAfterStartup(t *testing.T) {
 	var lr listToolsResult
 	decodeResult(t, w.Body.Bytes(), &lr)
 
-	if len(lr.Tools) != 1 || lr.Tools[0].Name != "mcp_ops__litellm_psql_query" {
-		t.Errorf("expected lazy-synced mcp_ops__litellm_psql_query in tools/list, got %+v", lr.Tools)
+	if len(lr.Tools) != 1 || lr.Tools[0].Name != "ops_litellm_psql_query" {
+		t.Errorf("expected lazy-synced ops_litellm_psql_query (wire name) in tools/list, got %+v", lr.Tools)
 	}
 }
 

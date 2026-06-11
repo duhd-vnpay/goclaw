@@ -85,12 +85,22 @@ func NewBridgeServer(reg *tools.Registry, version string, msgBus *bus.MessageBus
 // Exported so the ACP mcp_shim can reuse the same conversion when wrapping
 // the registry into a session-multiplexed MCP server.
 func ConvertToMCPTool(t tools.Tool) mcpgo.Tool {
+	return ConvertToMCPToolNamed(t, t.Name())
+}
+
+// ConvertToMCPToolNamed is the wire-name-override form of ConvertToMCPTool —
+// the returned mcp-go Tool advertises `wireName` rather than t.Name().
+// Used by the ACP shim (fork.15h-acp, Bug E2.2) to publish DB-driven bridge
+// tools under names that don't double-prefix with `mcp_` once wrapped by
+// Claude Code SDK as `mcp__<server>__<tool>`. The handler closure retains
+// the internal t.Name() for dispatch — only the wire identity differs.
+func ConvertToMCPToolNamed(t tools.Tool, wireName string) mcpgo.Tool {
 	schema, err := json.Marshal(t.Parameters())
 	if err != nil {
 		// Fallback: empty object schema
 		schema = []byte(`{"type":"object"}`)
 	}
-	return mcpgo.NewToolWithRawSchema(t.Name(), t.Description(), schema)
+	return mcpgo.NewToolWithRawSchema(wireName, t.Description(), schema)
 }
 
 // makeToolHandler creates a ToolHandlerFunc that delegates to the GoClaw tool registry.

@@ -12,12 +12,65 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/oauth"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
+	"github.com/nextlevelbuilder/goclaw/internal/providers/acp"
+	"github.com/nextlevelbuilder/goclaw/internal/providers/acp/mcp_shim"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
+
+// ACPDeps bundles the optional in-process MCP shim handle + resolver passed
+// down to ACP provider construction (Phase 4). When zero-valued the ACP
+// provider falls back to Phase 3 behavior — empty mcpServers, no shim-side
+// session state. Plumbed through registerProviders and registerProvidersFromDB
+// so the same struct shape works for config + DB providers.
+type ACPDeps struct {
+	Shim      acp.ShimHandle
+	Resolver  *mcp_shim.Resolver
+	CtxReader providers.ACPContextReader
+}
+
+// toolsCtxReader bridges providers.ACPContextReader to the tools.Tool*FromCtx
+// accessors. Lives in cmd/ so internal/providers stays free of the
+// internal/tools import (which would create a cycle).
+type toolsCtxReader struct{}
+
+func (toolsCtxReader) ReadRouting(ctx context.Context) providers.ACPRoutingContext {
+	return providers.ACPRoutingContext{
+		AgentKey:   tools.ToolAgentKeyFromCtx(ctx),
+		ChannelID:  tools.ToolChannelFromCtx(ctx),
+		ChatID:     tools.ToolChatIDFromCtx(ctx),
+		PeerKind:   tools.ToolPeerKindFromCtx(ctx),
+		SessionKey: tools.ToolSessionKeyFromCtx(ctx),
+	}
+}
+
+// mcpAccessAdapter bridges store.MCPServerStore.ListAccessible to the
+// mcp_shim.MCPAccessLookup interface. Defined in cmd/ so the shim package
+// stays free of the internal/store import (cycle: store → providers →
+// providers/acp/mcp_shim → store).
+type mcpAccessAdapter struct {
+	src store.MCPServerStore
+}
+
+func (a mcpAccessAdapter) ListAccessibleForAgent(ctx context.Context, agentID uuid.UUID) ([]mcp_shim.MCPAccessInfoView, error) {
+	infos, err := a.src.ListAccessible(ctx, agentID, "")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]mcp_shim.MCPAccessInfoView, 0, len(infos))
+	for _, i := range infos {
+		out = append(out, mcp_shim.MCPAccessInfoView{
+			ServerName: i.Server.Name,
+			ToolAllow:  i.ToolAllow,
+			ToolDeny:   i.ToolDeny,
+		})
+	}
+	return out, nil
+}
 
 // loopbackAddr normalizes a gateway address for local connections.
 // CLI processes on the same machine can't connect to 0.0.0.0 on some OSes.
@@ -28,7 +81,7 @@ func loopbackAddr(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
-func registerProviders(registry *providers.Registry, cfg *config.Config, modelReg providers.ModelRegistry) {
+func registerProviders(registry *providers.Registry, cfg *config.Config, modelReg providers.ModelRegistry, acpDeps ACPDeps) {
 	if cfg.Providers.Anthropic.APIKey != "" {
 		registry.Register(providers.NewAnthropicProvider(cfg.Providers.Anthropic.APIKey,
 			providers.WithAnthropicBaseURL(cfg.Providers.Anthropic.APIBase),
@@ -219,9 +272,16 @@ func registerProviders(registry *providers.Registry, cfg *config.Config, modelRe
 		slog.Info("registered provider", "name", "claude-cli")
 	}
 
-	// ACP provider (config-based) — orchestrates any ACP-compatible agent binary
-	if cfg.Providers.ACP.Binary != "" {
-		registerACPFromConfig(registry, cfg.Providers.ACP)
+	// ACP provider (config-based) — orchestrates any ACP-compatible agent binary.
+	// Only register here if the shim deps are already wired; otherwise the
+	// caller will invoke registerACPFromConfig directly after shim startup
+	// so per-session McpServers can be populated (Phase 4).
+	if cfg.Providers.ACP.Binary != "" && (acpDeps.Shim == nil) {
+		// Shim not yet available at this call site — defer to post-shim wiring
+		// (gateway.go calls registerACPFromConfig again with full deps).
+		slog.Info("acp: deferring config registration until shim is ready")
+	} else if cfg.Providers.ACP.Binary != "" {
+		registerACPFromConfig(registry, cfg.Providers.ACP, acpDeps)
 	}
 }
 
@@ -291,7 +351,7 @@ func jsonToStringMap(data json.RawMessage) map[string]string {
 // gatewayAddr is used to inject GoClaw MCP bridge for Claude CLI providers.
 // mcpStore is optional; when provided, per-agent MCP servers are injected into CLI config.
 // cfg provides fallback api_base values from config/env when DB providers have none set.
-func registerProvidersFromDB(registry *providers.Registry, provStore store.ProviderStore, secretStore store.ConfigSecretsStore, gatewayAddr, gatewayToken string, mcpStore store.MCPServerStore, cfg *config.Config, modelReg providers.ModelRegistry) {
+func registerProvidersFromDB(registry *providers.Registry, provStore store.ProviderStore, secretStore store.ConfigSecretsStore, gatewayAddr, gatewayToken string, mcpStore store.MCPServerStore, cfg *config.Config, modelReg providers.ModelRegistry, acpDeps ACPDeps) {
 	dbProviders, err := provStore.ListAllProviders(context.Background())
 	if err != nil {
 		slog.Warn("failed to load providers from DB", "error", err)
@@ -330,7 +390,7 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 		}
 		// ACP provider — no API key needed (agents manage their own auth).
 		if p.ProviderType == store.ProviderACP {
-			registerACPFromDB(registry, p)
+			registerACPFromDB(registry, p, acpDeps)
 			continue
 		}
 		// Local Ollama requires no API key — handle before the key guard (same pattern as ClaudeCLI).
@@ -456,7 +516,7 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 }
 
 // registerACPFromConfig registers an ACP provider from config file settings.
-func registerACPFromConfig(registry *providers.Registry, cfg config.ACPConfig) {
+func registerACPFromConfig(registry *providers.Registry, cfg config.ACPConfig, acpDeps ACPDeps) {
 	if _, err := exec.LookPath(cfg.Binary); err != nil {
 		slog.Warn("acp: binary not found, skipping", "binary", cfg.Binary, "error", err)
 		return
@@ -478,14 +538,23 @@ func registerACPFromConfig(registry *providers.Registry, cfg config.ACPConfig) {
 	if cfg.PermMode != "" {
 		opts = append(opts, providers.WithACPPermMode(cfg.PermMode))
 	}
+	if acpDeps.Shim != nil {
+		opts = append(opts, providers.WithACPShim(acpDeps.Shim))
+	}
+	if acpDeps.Resolver != nil {
+		opts = append(opts, providers.WithACPResolver(acpDeps.Resolver))
+	}
+	if acpDeps.CtxReader != nil {
+		opts = append(opts, providers.WithACPContextReader(acpDeps.CtxReader))
+	}
 	registry.Register(providers.NewACPProvider(
 		cfg.Binary, cfg.Args, workDir, idleTTL, tools.DefaultDenyPatterns(), opts...,
 	))
-	slog.Info("registered provider", "name", "acp", "binary", cfg.Binary)
+	slog.Info("registered provider", "name", "acp", "binary", cfg.Binary, "shim", acpDeps.Shim != nil)
 }
 
 // registerACPFromDB registers an ACP provider from a DB provider row.
-func registerACPFromDB(registry *providers.Registry, p store.LLMProviderData) {
+func registerACPFromDB(registry *providers.Registry, p store.LLMProviderData, acpDeps ACPDeps) {
 	binary := p.APIBase // repurpose api_base as binary path
 	if binary == "" {
 		slog.Warn("acp: no binary specified in DB provider", "name", p.Name)
@@ -521,15 +590,78 @@ func registerACPFromDB(registry *providers.Registry, p store.LLMProviderData) {
 	if workDir == "" {
 		workDir = defaultACPWorkDir()
 	}
-	registry.RegisterForTenant(p.TenantID, providers.NewACPProvider(
-		binary, settings.Args, workDir, idleTTL, tools.DefaultDenyPatterns(),
+	opts := []providers.ACPOption{
 		providers.WithACPName(p.Name),
 		providers.WithACPModel(p.Name),
+		providers.WithACPTenantID(p.TenantID.String()),
+	}
+	if acpDeps.Shim != nil {
+		opts = append(opts, providers.WithACPShim(acpDeps.Shim))
+	}
+	if acpDeps.Resolver != nil {
+		opts = append(opts, providers.WithACPResolver(acpDeps.Resolver))
+	}
+	if acpDeps.CtxReader != nil {
+		opts = append(opts, providers.WithACPContextReader(acpDeps.CtxReader))
+	}
+	registry.RegisterForTenant(p.TenantID, providers.NewACPProvider(
+		binary, settings.Args, workDir, idleTTL, tools.DefaultDenyPatterns(), opts...,
 	))
-	slog.Info("registered provider from DB", "name", p.Name, "type", "acp")
+	slog.Info("registered provider from DB", "name", p.Name, "type", "acp", "shim", acpDeps.Shim != nil)
 }
 
 // defaultACPWorkDir returns the default workspace directory for ACP agents.
 func defaultACPWorkDir() string {
 	return filepath.Join(config.ResolvedDataDirFromEnv(), "acp-workspaces")
+}
+
+// setupACPShim constructs the in-process MCP shim + grants resolver used by
+// ACP providers to advertise per-session HTTP MCP servers to
+// claude-agent-acp. Returns a zero-valued ACPDeps when the shim cannot be
+// built (listen failure, missing dependencies) — callers degrade gracefully
+// to Phase 3 behavior.
+//
+// The shim binds to 127.0.0.1:0 (ephemeral port, localhost-only). Per-session
+// allowlists are computed at session/new time from agents.acp_tools ∩
+// BridgeToolNames ∪ mcp_agent_grants.tool_allow.
+func setupACPShim(toolsReg *tools.Registry, msgBus *bus.MessageBus, pgStores *store.Stores) ACPDeps {
+	if toolsReg == nil {
+		slog.Info("acp.shim.skipped", "reason", "tools registry not available")
+		return ACPDeps{}
+	}
+	shimSrv, err := mcp_shim.NewServer(mcp_shim.ServerConfig{
+		ListenAddr: "127.0.0.1:0",
+		Registry:   toolsReg,
+		MsgBus:     msgBus,
+		Version:    Version,
+	})
+	if err != nil {
+		slog.Warn("acp.shim.startup_failed", "error", err)
+		return ACPDeps{}
+	}
+	handle := mcp_shim.NewHandle(shimSrv)
+	slog.Info("acp.shim.startup_ok", "url", handle.URL())
+
+	// PG-backed grants store: requires both Agents (acp_tools lookup) and MCP
+	// (agent_grants list). If either is missing the resolver still runs but
+	// returns an empty grant list — sessions get empty allowlists, no crash.
+	var grantSource mcp_shim.GrantsStore
+	if pgStores != nil {
+		var agentLookup mcp_shim.ACPToolsLookup
+		if pgAgents, ok := pgStores.Agents.(mcp_shim.ACPToolsLookup); ok {
+			agentLookup = pgAgents
+		}
+		var mcpLookup mcp_shim.MCPAccessLookup
+		if pgStores.MCP != nil {
+			mcpLookup = mcpAccessAdapter{src: pgStores.MCP}
+		}
+		grantSource = mcp_shim.NewPGGrantsStore(agentLookup, mcpLookup)
+	}
+	resolver := mcp_shim.NewResolver(grantSource)
+
+	return ACPDeps{
+		Shim:      handle,
+		Resolver:  resolver,
+		CtxReader: toolsCtxReader{},
+	}
 }

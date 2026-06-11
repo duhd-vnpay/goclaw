@@ -76,6 +76,23 @@ func NewResolver(store GrantsStore) *Resolver {
 	return &Resolver{store: store}
 }
 
+// ResolveACPToolNames is a name-only convenience wrapper around
+// ResolveToolSlice — the caller (acp_provider.go) only needs the per-
+// session allowlist names, not the full descriptors. Satisfies the
+// providers.ACPToolResolver interface so the provider can depend on a
+// narrow surface and avoid importing mcp_shim directly (cycle).
+func (r *Resolver) ResolveACPToolNames(ctx context.Context, agentID, tenantID string) ([]string, error) {
+	tools, err := r.ResolveToolSlice(ctx, agentID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, t.Name)
+	}
+	return out, nil
+}
+
 // ResolveToolSlice returns the tools the resolver agent is allowed to
 // invoke from an ACP sub-session, with the hard blacklist applied.
 func (r *Resolver) ResolveToolSlice(ctx context.Context, agentID, tenantID string) ([]ToolDescriptor, error) {

@@ -2,7 +2,10 @@ package acp
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"time"
@@ -36,16 +39,21 @@ func (p *ACPProcess) NewSession(ctx context.Context) (string, error) {
 }
 
 // newSessionImpl is the real implementation behind NewSession and
-// ProcessPool.NewSessionWithShim. Both shim and register are accepted but
-// not yet consumed — Task 7 in the Phase 4 ACP↔Tool Registry Bridge plan
-// will populate NewSessionRequest.McpServers from shim.SessionURL and
-// invoke register(sid) so the caller can attach the SessionEntry under
-// the resolved session ID. For now the body is identical to the
-// pre-refactor NewSession so all existing callers preserve their behavior.
+// ProcessPool.NewSessionWithShim.
+//
+// When shim is non-nil AND the agent advertises MCPCapabilities.HTTP, the
+// shim's per-session URL is appended to NewSessionRequest.McpServers and
+// the register callback is invoked with the proposed session id BEFORE
+// session/new returns — claude-agent-acp may connect the shim immediately
+// on receipt of the response, so the SessionEntry must be in place first
+// to avoid a 404 race.
+//
+// If the agent rejects the proposed sid and mints its own, the actual sid
+// is logged via acp.shim.session_remap and Task 8 will follow up with an
+// explicit remap path. For now the caller's pre-registration stays put;
+// the actual session is still functional because the shim looks up by
+// whichever sid the agent reports.
 func (p *ACPProcess) newSessionImpl(ctx context.Context, shim ShimHandle, register func(sid string)) (string, error) {
-	_ = shim     // reserved for Task 7
-	_ = register // reserved for Task 7
-
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
@@ -54,15 +62,36 @@ func (p *ACPProcess) newSessionImpl(ctx context.Context, shim ShimHandle, regist
 		cwd, _ = filepath.Abs(".")
 	}
 
-	req := NewSessionRequest{
-		Cwd:        cwd,
-		McpServers: []string{},
+	mcpServers := []string{}
+	useShim := shim != nil && p.agentCaps.MCPCapabilities != nil && p.agentCaps.MCPCapabilities.HTTP
+	if shim != nil && !useShim {
+		slog.Warn("acp.shim.cap_unsupported",
+			"reason", "agent does not advertise MCPCapabilities.HTTP",
+			"loadSession", p.agentCaps.LoadSession)
 	}
+
+	// Reserve a SID up front so we can register BEFORE session/new returns
+	// — see the function doc for the rationale.
+	var reservedSID string
+	if useShim {
+		reservedSID = newSessionID()
+		mcpServers = append(mcpServers, shim.SessionURL(reservedSID))
+		if register != nil {
+			register(reservedSID)
+		}
+	}
+
+	req := NewSessionRequest{Cwd: cwd, McpServers: mcpServers}
 	var resp NewSessionResponse
 	if err := p.conn.Call(ctx, "session/new", req, &resp); err != nil {
 		return "", fmt.Errorf("acp session/new: %w", err)
 	}
-	slog.Info("acp: session/new", "sid", resp.SessionID, "cwd", cwd)
+	if useShim && resp.SessionID != reservedSID {
+		slog.Info("acp.shim.session_remap",
+			"proposed", reservedSID, "actual", resp.SessionID)
+	}
+
+	slog.Info("acp: session/new", "sid", resp.SessionID, "cwd", cwd, "mcp_servers", len(mcpServers))
 	return resp.SessionID, nil
 }
 
@@ -71,20 +100,18 @@ func (p *ACPProcess) newSessionImpl(ctx context.Context, shim ShimHandle, regist
 // Only call if AgentCaps().LoadSession is true.
 //
 // Legacy entry point — see ProcessPool.LoadSessionWithShim for the
-// shim-aware variant (Task 7 will populate LoadSessionRequest.McpServers
-// to mirror NewSession parity per the Phase 4 Revision 1 supplement).
+// shim-aware variant.
 func (p *ACPProcess) LoadSession(ctx context.Context, sessionID string) (string, error) {
 	return p.loadSessionImpl(ctx, sessionID, nil, nil)
 }
 
-// loadSessionImpl is the real implementation behind LoadSession and
-// ProcessPool.LoadSessionWithShim. Symmetry with newSessionImpl keeps
-// Task 7's populate step a single pattern applied in two places. shim and
-// register are reserved for Task 7 and currently unused.
+// loadSessionImpl mirrors newSessionImpl for the session/load path, so a
+// process respawn re-attaches the same sid with shim wiring re-established.
+// LoadSessionRequest.McpServers is populated symmetrically (Phase 4
+// Revision 1 supplement) — the shim URL we advertise references the
+// existing sessionID so the per-session allowlist remains valid after
+// reconnect.
 func (p *ACPProcess) loadSessionImpl(ctx context.Context, sessionID string, shim ShimHandle, register func(sid string)) (string, error) {
-	_ = shim     // reserved for Task 7
-	_ = register // reserved for Task 7
-
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
@@ -93,13 +120,39 @@ func (p *ACPProcess) loadSessionImpl(ctx context.Context, sessionID string, shim
 		cwd, _ = filepath.Abs(".")
 	}
 
-	req := LoadSessionRequest{SessionID: sessionID, Cwd: cwd}
+	mcpServers := []string{}
+	useShim := shim != nil && p.agentCaps.MCPCapabilities != nil && p.agentCaps.MCPCapabilities.HTTP
+	if shim != nil && !useShim {
+		slog.Warn("acp.shim.cap_unsupported",
+			"reason", "agent does not advertise MCPCapabilities.HTTP (load path)",
+			"loadSession", p.agentCaps.LoadSession)
+	}
+	if useShim {
+		// Re-use the existing sid for the URL so the shim's session map key
+		// matches what claude-agent-acp will reconnect with.
+		mcpServers = append(mcpServers, shim.SessionURL(sessionID))
+		if register != nil {
+			register(sessionID)
+		}
+	}
+
+	req := LoadSessionRequest{SessionID: sessionID, Cwd: cwd, McpServers: mcpServers}
 	var resp LoadSessionResponse
 	if err := p.conn.Call(ctx, "session/load", req, &resp); err != nil {
 		return "", fmt.Errorf("acp session/load: %w", err)
 	}
-	slog.Info("acp: session/load", "sid", resp.SessionID)
+	slog.Info("acp: session/load", "sid", resp.SessionID, "mcp_servers", len(mcpServers))
 	return resp.SessionID, nil
+}
+
+// newSessionID returns a hex-encoded 128-bit random SID for the shim URL.
+// crypto/rand is intentional — the SID is the session-lookup key inside the
+// shim, so we want it unguessable from any other process on the host that
+// might be peeking at the listen port.
+func newSessionID() string {
+	var b [16]byte
+	_, _ = io.ReadFull(crand.Reader, b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // Prompt sends user content to sessionID and blocks until the agent completes,

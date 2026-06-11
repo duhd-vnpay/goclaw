@@ -42,6 +42,7 @@ import (
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
+	"github.com/nextlevelbuilder/goclaw/internal/providers/acp/mcp_shim"
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
@@ -150,7 +151,10 @@ func runGateway() {
 
 	// Create provider registry
 	providerRegistry := providers.NewRegistry(store.TenantIDFromContext)
-	registerProviders(providerRegistry, cfg, modelReg)
+	// ACP shim is constructed post-setup (needs toolsReg + stores). Pass an
+	// empty ACPDeps here — ACP config providers are deferred to the post-shim
+	// registration step below; non-ACP providers register normally.
+	registerProviders(providerRegistry, cfg, modelReg, ACPDeps{})
 
 	// Resolve workspace (must be absolute for system prompt + file tool path resolution)
 	workspace := config.ExpandHome(cfg.Agents.Defaults.Workspace)
@@ -201,10 +205,30 @@ func runGateway() {
 	redisClient := initRedisClient(cfg)
 	defer shutdownRedis(redisClient)
 
+	// Phase 4: construct in-process MCP shim + grants resolver BEFORE ACP
+	// provider registration so each ACP session/new can advertise the
+	// per-session HTTP MCP URL. When the shim cannot be built (e.g. listen
+	// failure) we log and fall back to Phase 3 behavior — ACP still works
+	// without per-session tool exposure.
+	acpDeps := setupACPShim(toolsReg, msgBus, pgStores)
+	if h, ok := acpDeps.Shim.(*mcp_shim.Handle); ok && h != nil {
+		defer func() {
+			if h.Underlying() != nil {
+				_ = h.Underlying().Close()
+			}
+		}()
+	}
+
 	// Register providers from DB (overrides config providers).
 	if pgStores.Providers != nil {
 		dbGatewayAddr := loopbackAddr(cfg.Gateway.Host, cfg.Gateway.Port)
-		registerProvidersFromDB(providerRegistry, pgStores.Providers, pgStores.ConfigSecrets, dbGatewayAddr, cfg.Gateway.Token, pgStores.MCP, cfg, modelReg)
+		registerProvidersFromDB(providerRegistry, pgStores.Providers, pgStores.ConfigSecrets, dbGatewayAddr, cfg.Gateway.Token, pgStores.MCP, cfg, modelReg, acpDeps)
+	}
+	// Now that shim is wired, register any ACP provider declared in the
+	// config file (deferred from the earlier registerProviders call so that
+	// per-session McpServers can be populated).
+	if cfg.Providers.ACP.Binary != "" {
+		registerACPFromConfig(providerRegistry, cfg.Providers.ACP, acpDeps)
 	}
 	slog.Info("model registry initialized", "anthropic_models", len(modelReg.Catalog("anthropic")), "openai_models", len(modelReg.Catalog("openai")))
 
@@ -351,7 +375,7 @@ func runGateway() {
 	var mcpPool *mcpbridge.Pool
 	var mediaStore *media.Store
 	var postTurn tools.PostTurnProcessor
-	contextFileInterceptor, mcpPool, mediaStore, postTurn = wireExtras(pgStores, agentRouter, providerRegistry, modelReg, msgBus, pgStores.Sessions, toolsReg, toolPE, skillsLoader, hasMemory, traceCollector, workspace, cfg.Gateway.InjectionAction, cfg, sandboxMgr, redisClient, domainBus, usageCapSvc)
+	contextFileInterceptor, mcpPool, mediaStore, postTurn = wireExtras(pgStores, agentRouter, providerRegistry, modelReg, msgBus, pgStores.Sessions, toolsReg, toolPE, skillsLoader, hasMemory, traceCollector, workspace, cfg.Gateway.InjectionAction, cfg, sandboxMgr, redisClient, domainBus, usageCapSvc, acpDeps)
 	if mcpPool != nil {
 		defer mcpPool.Stop()
 	}

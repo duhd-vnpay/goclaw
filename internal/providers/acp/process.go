@@ -29,6 +29,22 @@ type ShimHandle interface {
 	UnregisterSession(sid string)
 }
 
+// ShimSessionEntry is the cycle-free payload the ACP provider passes to
+// ShimHandle.RegisterSession. The concrete shim adapter (mcp_shim.Handle)
+// type-asserts on this struct shape and maps it onto mcp_shim.SessionEntry
+// before calling the real Server. Keeping the shape here in the acp
+// package (which mcp_shim does not import) lets both sides agree on a
+// schema without an import cycle.
+type ShimSessionEntry struct {
+	SID           string
+	Allowlist     []string
+	AgentID       string
+	ChannelID     string
+	DeliverTarget string
+	PeerKind      string
+	SessionKey    string
+}
+
 // ACPProcess represents a running ACP agent subprocess.
 // One process is shared across all sessions — each goclaw conversation
 // creates its own ACP session (identified by session ID) on this process.

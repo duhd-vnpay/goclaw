@@ -308,6 +308,208 @@ func TestACPProcess_NewSessionImpl_NilShimMatchesLegacy(t *testing.T) {
 	}
 }
 
+// --- Phase 4 Task 7: McpServers populate + capability gate ---
+
+// fakeShim is a minimal ShimHandle stand-in. SessionURL returns a
+// recognizable shape so tests can assert that the URL actually got
+// appended to NewSessionRequest.McpServers, and RegisterSession records
+// each call (we only care that the proposed sid reaches the registrar
+// — full SessionEntry shape lives in the mcp_shim adapter).
+type fakeShim struct {
+	registered []string
+	url        string
+}
+
+func (f *fakeShim) URL() string                  { return "http://shim.local/mcp" }
+func (f *fakeShim) SessionURL(sid string) string { return "http://shim.local/mcp?session=" + sid }
+func (f *fakeShim) RegisterSession(entry any)    { f.registered = append(f.registered, "any") }
+func (f *fakeShim) UnregisterSession(sid string) {}
+
+// TestNewSessionImpl_PopulatesMcpServers_WhenHTTPAdvertised verifies the
+// happy path: HTTP MCP capability advertised AND shim non-nil → reserve a
+// SID, call register, advertise the shim URL in McpServers.
+func TestNewSessionImpl_PopulatesMcpServers_WhenHTTPAdvertised(t *testing.T) {
+	proc, serverW, serverR := buildACPProcess(nil, nil)
+	defer serverW.Close()
+	defer serverR.Close()
+	proc.agentCaps = AgentCaps{MCPCapabilities: &MCPCaps{HTTP: true}}
+
+	captured := make(chan jsonrpcMessage, 1)
+	go func() {
+		buf := make([]byte, 32*1024)
+		n, err := serverR.Read(buf)
+		if err != nil || n == 0 {
+			return
+		}
+		var req jsonrpcMessage
+		if err := json.Unmarshal(buf[:n], &req); err != nil {
+			return
+		}
+		captured <- req
+		// Echo the proposed sid back so the test can also assert no remap log.
+		var body NewSessionRequest
+		_ = json.Unmarshal(req.Params, &body)
+		var actualSID string
+		if len(body.McpServers) > 0 {
+			// Pull the proposed sid out of the URL for the response.
+			url := body.McpServers[0]
+			if i := strings.Index(url, "session="); i >= 0 {
+				actualSID = url[i+len("session="):]
+			}
+		}
+		resp := jsonrpcMessage{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  json.RawMessage(`{"sessionId":"` + actualSID + `"}`),
+		}
+		data, _ := json.Marshal(resp)
+		serverW.Write(append(data, '\n'))
+	}()
+
+	shim := &fakeShim{}
+	var registered []string
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	sid, err := proc.newSessionImpl(ctx, shim, func(s string) {
+		registered = append(registered, s)
+	})
+	if err != nil {
+		t.Fatalf("newSessionImpl: %v", err)
+	}
+	if sid == "" {
+		t.Fatal("expected non-empty session id")
+	}
+	if len(registered) != 1 {
+		t.Fatalf("expected exactly 1 register() invocation, got %d", len(registered))
+	}
+	if registered[0] != sid {
+		t.Errorf("register() got sid %q, session/new returned %q (parity expected)",
+			registered[0], sid)
+	}
+
+	select {
+	case req := <-captured:
+		var body NewSessionRequest
+		if err := json.Unmarshal(req.Params, &body); err != nil {
+			t.Fatalf("unmarshal params: %v", err)
+		}
+		if len(body.McpServers) != 1 {
+			t.Fatalf("expected exactly 1 mcpServers entry, got %d (%v)",
+				len(body.McpServers), body.McpServers)
+		}
+		want := shim.SessionURL(sid)
+		if body.McpServers[0] != want {
+			t.Errorf("McpServers[0] = %q, want %q", body.McpServers[0], want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for captured request")
+	}
+}
+
+// TestNewSessionImpl_GracefullyDegrades_WhenHTTPNotAdvertised verifies the
+// capability gate: shim non-nil but agent did NOT advertise MCPCapabilities.HTTP
+// → register is not called, McpServers stays empty (Phase 3 parity).
+func TestNewSessionImpl_GracefullyDegrades_WhenHTTPNotAdvertised(t *testing.T) {
+	proc, serverW, serverR := buildACPProcess(nil, nil)
+	defer serverW.Close()
+	defer serverR.Close()
+	// Capability flag NOT set — agentCaps.MCPCapabilities == nil.
+	proc.agentCaps = AgentCaps{LoadSession: true}
+
+	done := replyTo(serverR, serverW, `{"sessionId":"sess-no-shim"}`)
+
+	shim := &fakeShim{}
+	var registerCalls int
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	sid, err := proc.newSessionImpl(ctx, shim, func(s string) {
+		registerCalls++
+	})
+	if err != nil {
+		t.Fatalf("newSessionImpl: %v", err)
+	}
+	if sid != "sess-no-shim" {
+		t.Errorf("expected echo of agent-minted sid, got %q", sid)
+	}
+	if registerCalls != 0 {
+		t.Errorf("expected register() NOT to fire on cap-gated path, fired %d times", registerCalls)
+	}
+	<-done
+}
+
+// TestLoadSessionImpl_PopulatesMcpServers_WhenHTTPAdvertised mirrors
+// NewSession populate for the session/load path (Revision 1 supplement).
+// The shim URL uses the prior sid so the per-session allowlist survives
+// process respawn.
+func TestLoadSessionImpl_PopulatesMcpServers_WhenHTTPAdvertised(t *testing.T) {
+	proc, serverW, serverR := buildACPProcess(nil, nil)
+	defer serverW.Close()
+	defer serverR.Close()
+	proc.agentCaps = AgentCaps{LoadSession: true, MCPCapabilities: &MCPCaps{HTTP: true}}
+
+	captured := make(chan jsonrpcMessage, 1)
+	go func() {
+		buf := make([]byte, 32*1024)
+		n, err := serverR.Read(buf)
+		if err != nil || n == 0 {
+			return
+		}
+		var req jsonrpcMessage
+		if err := json.Unmarshal(buf[:n], &req); err != nil {
+			return
+		}
+		captured <- req
+		resp := jsonrpcMessage{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  json.RawMessage(`{"sessionId":"sess-restored"}`),
+		}
+		data, _ := json.Marshal(resp)
+		serverW.Write(append(data, '\n'))
+	}()
+
+	shim := &fakeShim{}
+	var registered []string
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	priorSID := "sess-restored"
+	sid, err := proc.loadSessionImpl(ctx, priorSID, shim, func(s string) {
+		registered = append(registered, s)
+	})
+	if err != nil {
+		t.Fatalf("loadSessionImpl: %v", err)
+	}
+	if sid != priorSID {
+		t.Errorf("expected sid=%q, got %q", priorSID, sid)
+	}
+	if len(registered) != 1 || registered[0] != priorSID {
+		t.Errorf("expected register(%q), got %v", priorSID, registered)
+	}
+
+	select {
+	case req := <-captured:
+		var body LoadSessionRequest
+		if err := json.Unmarshal(req.Params, &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(body.McpServers) != 1 {
+			t.Fatalf("expected 1 mcpServers entry, got %d", len(body.McpServers))
+		}
+		want := shim.SessionURL(priorSID)
+		if body.McpServers[0] != want {
+			t.Errorf("McpServers[0] = %q, want %q", body.McpServers[0], want)
+		}
+		if body.SessionID != priorSID {
+			t.Errorf("LoadSessionRequest.SessionID = %q, want %q", body.SessionID, priorSID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for captured request")
+	}
+}
+
 // --- Prompt tests ---
 
 func TestACPProcess_Prompt_Success(t *testing.T) {

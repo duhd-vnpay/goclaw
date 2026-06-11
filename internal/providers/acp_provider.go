@@ -13,9 +13,42 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/providers/acp"
 )
 
+// ACPToolResolver computes the per-session allowlist (tool names) that the
+// shim should expose to the ACP sub-session. The concrete implementation
+// (mcp_shim.Resolver) lives in providers/acp/mcp_shim — defining the
+// surface here as an interface keeps acp_provider.go cycle-free
+// (mcp_shim → internal/mcp → internal/store → internal/providers).
+//
+// The returned slice carries only the names; the shim's SessionEntry
+// stores them as-is and the session-aware tool handler enforces the
+// allowlist at /mcp request time.
+type ACPToolResolver interface {
+	ResolveACPToolNames(ctx context.Context, agentID, tenantID string) ([]string, error)
+}
+
+// ACPRoutingContext is the snapshot of tool-routing values the shim needs
+// to inject when builtin tools (write_file deliver=true, message, etc.) run
+// inside an ACP sub-session. Provided by ACPContextReader.
+type ACPRoutingContext struct {
+	AgentKey   string
+	ChannelID  string
+	ChatID     string
+	PeerKind   string
+	SessionKey string
+}
+
+// ACPContextReader extracts the cron/routing context from the parent ctx so
+// the shim's SessionEntry can carry it into per-tool dispatch. The cmd
+// layer plugs in a concrete reader that calls tools.Tool*FromCtx; defining
+// the surface as an interface keeps acp_provider.go from importing
+// internal/tools (which would create providers → tools → store → providers).
+type ACPContextReader interface {
+	ReadRouting(ctx context.Context) ACPRoutingContext
+}
+
 // acpSessionEntry tracks a live ACP session for one goclaw conversation.
 type acpSessionEntry struct {
-	id       string       // ACP session ID returned by session/new or session/load
+	id       string          // ACP session ID returned by session/new or session/load
 	proc     *acp.ACPProcess // process that owns this session (for respawn detection)
 	lastUsed time.Time
 }
@@ -29,6 +62,18 @@ type ACPProvider struct {
 	defaultModel string
 	permMode     string
 	poolKey      string // key for the shared process in the pool (binary + args)
+
+	// Phase 4: optional shim wiring. When both shim and resolver are set the
+	// provider populates per-session SessionEntries (allowlist + cron ctx)
+	// before each session/new — without them ACP falls back to Phase 3
+	// behavior (empty mcpServers, no shim-side state).
+	shim       acp.ShimHandle
+	resolver   ACPToolResolver
+	ctxReader  ACPContextReader
+	// tenantID resolution for the resolver. Provided by the caller when
+	// constructing the provider — at registration time we know the owning
+	// tenant; agent id is resolved per-request from the session ctx.
+	tenantID string
 
 	acpSessions sync.Map // goclawSessionKey → *acpSessionEntry
 	sessionMu   sync.Map // goclawSessionKey → *sync.Mutex (prevents concurrent session creation)
@@ -67,6 +112,43 @@ func WithACPPermMode(mode string) ACPOption {
 	}
 }
 
+// WithACPShim wires the in-process MCP shim handle so each ACP session
+// gets a per-session HTTP MCP server URL advertised via
+// NewSessionRequest.McpServers. Pair with WithACPResolver — without a
+// resolver the provider has no way to compute the per-session allowlist.
+func WithACPShim(shim acp.ShimHandle) ACPOption {
+	return func(p *ACPProvider) {
+		p.shim = shim
+	}
+}
+
+// WithACPResolver wires the tool slice resolver used to compute the
+// per-session allowlist before SessionEntry registration.
+func WithACPResolver(r ACPToolResolver) ACPOption {
+	return func(p *ACPProvider) {
+		p.resolver = r
+	}
+}
+
+// WithACPTenantID provides the tenant id the resolver should scope reads
+// to. Used for the agent_grants / acp_tools lookup.
+func WithACPTenantID(tid string) ACPOption {
+	return func(p *ACPProvider) {
+		p.tenantID = tid
+	}
+}
+
+// WithACPContextReader plugs in a routing-context extractor (cmd layer
+// satisfies it by reading tools.Tool*FromCtx). Without this the shim
+// SessionEntry is populated with empty cron context — write_file
+// deliver=true and similar routing-dependent tools won't be able to
+// reach the originating channel.
+func WithACPContextReader(r ACPContextReader) ACPOption {
+	return func(p *ACPProvider) {
+		p.ctxReader = r
+	}
+}
+
 // NewACPProvider creates a provider that orchestrates ACP agents as subprocesses.
 func NewACPProvider(binary string, args []string, workDir string, idleTTL time.Duration, denyPatterns []*regexp.Regexp, opts ...ACPOption) *ACPProvider {
 	// Pool key identifies the shared process: binary + args combination
@@ -96,6 +178,9 @@ func NewACPProvider(binary string, args []string, workDir string, idleTTL time.D
 
 	p.pool = acp.NewProcessPool(binary, args, workDir, idleTTL)
 	p.pool.SetToolHandler(p.bridge.Handle)
+	if p.shim != nil {
+		p.pool.SetShim(p.shim)
+	}
 
 	go p.sessionReaper()
 	return p
@@ -103,6 +188,8 @@ func NewACPProvider(binary string, args []string, workDir string, idleTTL time.D
 
 // sessionReaper removes ACP sessions idle for more than 30 minutes.
 // Sends session/cancel to release resources on the agent side before purging locally.
+// Also unregisters the shim SessionEntry so the per-session URL 404s on any
+// late connect attempt from claude-agent-acp.
 func (p *ACPProvider) sessionReaper() {
 	const sessionIdleTTL = 30 * time.Minute
 	ticker := time.NewTicker(5 * time.Minute)
@@ -116,6 +203,9 @@ func (p *ACPProvider) sessionReaper() {
 					slog.Info("acp: expiring idle session", "goclaw_session", key, "sid", entry.id)
 					if entry.proc != nil {
 						_ = entry.proc.Cancel(entry.id)
+					}
+					if p.shim != nil {
+						p.shim.UnregisterSession(entry.id)
 					}
 					p.acpSessions.Delete(key)
 				}
@@ -147,7 +237,8 @@ func (p *ACPProvider) resolveSession(ctx context.Context, proc *acp.ACPProcess, 
 		slog.Info("acp: process respawned, attempting session restore",
 			"goclaw_session", goclawKey, "old_sid", entry.id)
 		if proc.AgentCaps().LoadSession {
-			sid, err := proc.LoadSession(ctx, entry.id)
+			registerFn := p.makeShimRegisterFn(ctx, goclawKey)
+			sid, err := p.pool.LoadSessionWithShim(ctx, proc, entry.id, registerFn)
 			if err == nil {
 				p.acpSessions.Store(goclawKey, &acpSessionEntry{id: sid, proc: proc, lastUsed: time.Now()})
 				return sid, nil
@@ -158,12 +249,61 @@ func (p *ACPProvider) resolveSession(ctx context.Context, proc *acp.ACPProcess, 
 	}
 
 	slog.Info("acp: creating new session", "goclaw_session", goclawKey, "pool_key", p.poolKey)
-	sid, err := proc.NewSession(ctx)
+	registerFn := p.makeShimRegisterFn(ctx, goclawKey)
+	sid, err := p.pool.NewSessionWithShim(ctx, proc, registerFn)
 	if err != nil {
 		return "", err
 	}
 	p.acpSessions.Store(goclawKey, &acpSessionEntry{id: sid, proc: proc, lastUsed: time.Now()})
 	return sid, nil
+}
+
+// makeShimRegisterFn returns the register callback newSessionImpl /
+// loadSessionImpl invoke with the reserved session id BEFORE session/new
+// returns. When shim or resolver is not wired this returns nil — the
+// session-level RPC then runs with empty McpServers (Phase 3 behavior).
+//
+// The closure resolves the allowlist via the resolver, captures the
+// cron/routing context off ctx (channel, chatID, peerKind, sessionKey),
+// and stores a SessionEntry in the shim's session registry. The shim
+// looks up by sid at HTTP request time so the entry must exist before
+// claude-agent-acp opens the streamable-http connection.
+func (p *ACPProvider) makeShimRegisterFn(ctx context.Context, goclawKey string) func(sid string) {
+	if p.shim == nil || p.resolver == nil {
+		return nil
+	}
+	// Capture routing context off the parent ctx via the cmd-supplied
+	// reader (it knows the tools.Tool*FromCtx keys; we can't import tools
+	// here without creating providers → tools → store → providers cycle).
+	var rc ACPRoutingContext
+	if p.ctxReader != nil {
+		rc = p.ctxReader.ReadRouting(ctx)
+	}
+
+	return func(sid string) {
+		// Resolve the per-session allowlist. The resolver applies hard
+		// blacklist + BridgeToolNames intersect on top of the grants store,
+		// so the returned slice is safe to use as-is.
+		allowlist, err := p.resolver.ResolveACPToolNames(ctx, rc.AgentKey, p.tenantID)
+		if err != nil {
+			slog.Warn("acp.shim.resolve_failed",
+				"goclaw_session", goclawKey, "sid", sid, "agent_key", rc.AgentKey, "error", err)
+			// Fall through with empty allowlist — claude-agent-acp will see
+			// /mcp respond but tools/list returns nothing for the session.
+			allowlist = nil
+		}
+
+		entry := acp.ShimSessionEntry{
+			SID:           sid,
+			Allowlist:     allowlist,
+			AgentID:       rc.AgentKey,
+			ChannelID:     rc.ChannelID,
+			DeliverTarget: rc.ChatID,
+			PeerKind:      rc.PeerKind,
+			SessionKey:    rc.SessionKey,
+		}
+		p.shim.RegisterSession(entry)
+	}
 }
 
 func (p *ACPProvider) Name() string         { return p.name }
@@ -318,11 +458,15 @@ func (p *ACPProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk f
 // purgeSession removes a session entry from both tracking maps.
 // Sends session/cancel to release resources on the agent side before purging locally.
 // Used to immediately discard one-shot (temp-) sessions after completion.
+// Also unregisters the shim SessionEntry to free per-session state.
 func (p *ACPProvider) purgeSession(key string) {
 	if val, ok := p.acpSessions.Load(key); ok {
 		entry := val.(*acpSessionEntry)
 		if entry.proc != nil {
 			_ = entry.proc.Cancel(entry.id)
+		}
+		if p.shim != nil {
+			p.shim.UnregisterSession(entry.id)
 		}
 	}
 	p.acpSessions.Delete(key)

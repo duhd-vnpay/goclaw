@@ -28,6 +28,13 @@ type GrantedTool struct {
 // mcp_agent_grants.tool_allow with the source schemas.
 //
 // PG implementation deferred to Task 7+ wiring.
+//
+// SECURITY NOTE — Task 7 wiring must enforce the BridgeToolNames intersect
+// even though the shim's server.go registers every tool via reg.List().
+// Without that intersect, registry tools outside BridgeToolNames (e.g.
+// agent_files_*) could surface if a session's Allowlist includes them.
+// The hardBlacklist below covers recursion/admin vectors but is not a
+// substitute for the BridgeToolNames intersect.
 type GrantsStore interface {
 	ListGrantedTools(ctx context.Context, agentID, tenantID string) ([]GrantedTool, error)
 }

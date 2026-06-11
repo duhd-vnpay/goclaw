@@ -74,11 +74,6 @@ type Server struct {
 // so callers cannot tamper with the value.
 type allowlistCtxKey struct{}
 
-// cronCtxKey threads the SessionEntry.Cron tuple into the handler so future
-// builtin dispatch paths (write_file deliver=true) can read it without
-// re-looking up the session.
-type cronCtxKey struct{}
-
 // NewServer binds the listener and starts the HTTP server. The underlying
 // mark3labs MCP server is constructed once with every tool the registry
 // currently knows about; per-session filtering is done in the handler.
@@ -216,7 +211,6 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	//      sessionKey) for builtin tools like write_file deliver=true.
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, allowlistCtxKey{}, sess.AllowlistSet())
-	ctx = context.WithValue(ctx, cronCtxKey{}, sess.Cron)
 	if sess.Cron.ChannelID != "" {
 		ctx = tools.WithToolChannel(ctx, sess.Cron.ChannelID)
 	}
@@ -257,6 +251,10 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 // name, returning the body bytes so the caller can re-attach them to the
 // request. POST bodies for this transport are small (kilobytes), so reading
 // in memory is acceptable.
+//
+// Limitation: assumes a single JSON-RPC request, not a batch (array of
+// requests). claude-agent-acp uses single-call requests so this is fine
+// today; revisit if MCP clients in this codebase start batching.
 func peekMethod(r *http.Request) (string, []byte, error) {
 	if r.Body == nil {
 		return "", nil, nil

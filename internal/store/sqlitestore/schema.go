@@ -16,7 +16,7 @@ var schemaSQL string
 
 // SchemaVersion is the current SQLite schema version.
 // Bump this when adding new migration steps below.
-const SchemaVersion = 42
+const SchemaVersion = 43
 
 // migrations maps version → SQL to apply when upgrading FROM that version.
 // schema.sql always represents the LATEST full schema (for fresh DBs).
@@ -793,6 +793,11 @@ CREATE INDEX IF NOT EXISTS idx_browser_cookies_expires_at
 	40: `ALTER TABLE secure_cli_user_credentials ADD COLUMN host_scope TEXT;`,
 	// Version 41 → 42: credential adapter framework — adapter_name on binaries.
 	41: `ALTER TABLE secure_cli_binaries ADD COLUMN adapter_name TEXT;`,
+	// Version 42 → 43: Phase 4 ACP↔Tool Registry Bridge — per-agent ACP shim
+	// builtin tool allowlist. Mirrors PG migration 000092. SQLite has no native
+	// JSONB; stored as TEXT JSON (convention used elsewhere in this schema —
+	// see tools_config, reasoning_config, etc.).
+	42: `ALTER TABLE agents ADD COLUMN acp_tools TEXT NOT NULL DEFAULT '[]';`,
 }
 
 // addHooksTables is the SQLite incremental migration for schema v19 → v20.

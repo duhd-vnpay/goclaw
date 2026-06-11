@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -558,6 +559,9 @@ func registerACPFromConfig(registry *providers.Registry, cfg config.ACPConfig, a
 	if workDir == "" {
 		workDir = defaultACPWorkDir()
 	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		slog.Warn("acp: failed to create work dir, spawn will fail", "dir", workDir, "error", err)
+	}
 	var opts []providers.ACPOption
 	if cfg.Model != "" {
 		opts = append(opts, providers.WithACPModel(cfg.Model))
@@ -622,6 +626,9 @@ func registerACPFromDB(registry *providers.Registry, p store.LLMProviderData, ac
 	workDir := settings.WorkDir
 	if workDir == "" {
 		workDir = defaultACPWorkDir()
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		slog.Warn("acp: failed to create work dir, spawn will fail", "name", p.Name, "dir", workDir, "error", err)
 	}
 	opts := []providers.ACPOption{
 		providers.WithACPName(p.Name),

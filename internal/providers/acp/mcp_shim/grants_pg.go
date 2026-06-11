@@ -11,14 +11,17 @@ import (
 )
 
 // ACPToolsLookup is the narrow surface the GrantsStore needs to read the
-// per-agent builtin tool allowlist (agents.acp_tools JSONB, migration 092).
-// PGAgentStore satisfies it via GetAgentACPTools.
+// per-agent builtin tool allowlist (agents.acp_tools JSONB, migration 092)
+// and translate the user-facing agent_key the resolver receives off the
+// cron routing context into the internal UUID the downstream queries need.
+// PGAgentStore satisfies both.
 //
 // Kept as a separate interface so the mcp_shim package does not pull the
 // full AgentStore CRUD surface — and so SQLite / desktop builds (which do
 // not run the ACP shim) are not forced to implement it.
 type ACPToolsLookup interface {
 	GetAgentACPTools(ctx context.Context, agentID uuid.UUID) ([]string, error)
+	GetAgentIDByKey(ctx context.Context, agentKey string) (uuid.UUID, error)
 }
 
 // MCPAccessInfoView is the minimal projection grants_pg needs from
@@ -69,9 +72,19 @@ func NewPGGrantsStore(agents ACPToolsLookup, mcp MCPAccessLookup) *PGGrantsStore
 // raw per-agent lookup). Callers wanting tenant scoping should attach it via
 // store.WithTenantID(ctx, ...) before calling.
 func (s *PGGrantsStore) ListGrantedTools(ctx context.Context, agentID, tenantID string) ([]GrantedTool, error) {
+	// agentID may be either a UUID (test fixtures) or the agent_key the cron
+	// routing context carries (the production callsite in acp_provider.go).
+	// Try UUID parse first; if that fails, treat the string as agent_key and
+	// resolve to UUID via the agents lookup.
 	aid, err := uuid.Parse(agentID)
 	if err != nil {
-		return nil, fmt.Errorf("mcp_shim grants: invalid agent_id: %w", err)
+		if s.agents == nil {
+			return nil, fmt.Errorf("mcp_shim grants: invalid agent_id %q and no agents lookup wired", agentID)
+		}
+		aid, err = s.agents.GetAgentIDByKey(ctx, agentID)
+		if err != nil {
+			return nil, fmt.Errorf("mcp_shim grants: resolve agent_key %q: %w", agentID, err)
+		}
 	}
 
 	var out []GrantedTool

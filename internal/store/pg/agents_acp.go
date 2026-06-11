@@ -44,3 +44,24 @@ func (s *PGAgentStore) GetAgentACPTools(ctx context.Context, agentID uuid.UUID) 
 	}
 	return out, nil
 }
+
+// GetAgentIDByKey resolves an agent_key (the user-facing string the cron
+// routing context carries) to the internal UUID downstream queries need.
+// The mcp_shim grants store uses this when its caller passes agent_key
+// instead of UUID. Cross-tenant: unscoped, matching the GetAgentACPTools
+// query above — the shim resolver applies the BridgeToolNames intersect
+// and hard blacklist on top, so the security gate is downstream, not here.
+func (s *PGAgentStore) GetAgentIDByKey(ctx context.Context, agentKey string) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM agents WHERE agent_key = $1 AND deleted_at IS NULL`,
+		agentKey,
+	).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return uuid.Nil, sql.ErrNoRows
+		}
+		return uuid.Nil, err
+	}
+	return id, nil
+}

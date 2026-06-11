@@ -68,7 +68,7 @@ func NewBridgeServer(reg *tools.Registry, version string, msgBus *bus.MessageBus
 			continue
 		}
 
-		mcpTool := convertToMCPTool(t)
+		mcpTool := ConvertToMCPTool(t)
 		handler := makeToolHandler(reg, name, msgBus)
 		srv.AddTool(mcpTool, handler)
 		registered++
@@ -81,8 +81,10 @@ func NewBridgeServer(reg *tools.Registry, version string, msgBus *bus.MessageBus
 	)
 }
 
-// convertToMCPTool converts a GoClaw tools.Tool into an mcp-go Tool.
-func convertToMCPTool(t tools.Tool) mcpgo.Tool {
+// ConvertToMCPTool converts a GoClaw tools.Tool into an mcp-go Tool.
+// Exported so the ACP mcp_shim can reuse the same conversion when wrapping
+// the registry into a session-multiplexed MCP server.
+func ConvertToMCPTool(t tools.Tool) mcpgo.Tool {
 	schema, err := json.Marshal(t.Parameters())
 	if err != nil {
 		// Fallback: empty object schema
@@ -115,14 +117,16 @@ func makeToolHandler(reg *tools.Registry, toolName string, msgBus *bus.MessageBu
 		// Forward media files to the outbound bus so they reach the user as attachments.
 		// This is necessary because Claude CLI processes tool results internally —
 		// GoClaw's agent loop never sees result.Media from bridge tool calls.
-		forwardMediaToOutbound(ctx, msgBus, toolName, result)
+		ForwardMediaToOutbound(ctx, msgBus, toolName, result)
 
 		return mcpgo.NewToolResultText(result.ForLLM), nil
 	}
 }
 
-// forwardMediaToOutbound publishes media files from a tool result to the outbound bus.
-func forwardMediaToOutbound(ctx context.Context, msgBus *bus.MessageBus, toolName string, result *tools.Result) {
+// ForwardMediaToOutbound publishes media files from a tool result to the outbound bus.
+// Exported so the ACP mcp_shim can reuse the same media-forwarding path for
+// per-session tool calls (notably write_file deliver=true → channel attachment).
+func ForwardMediaToOutbound(ctx context.Context, msgBus *bus.MessageBus, toolName string, result *tools.Result) {
 	if msgBus == nil || len(result.Media) == 0 {
 		return
 	}

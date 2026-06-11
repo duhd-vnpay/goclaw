@@ -26,7 +26,7 @@ const DefaultToolTimeout = 60 * time.Second
 //
 // Schema mirrors mcp-go's Tool.InputSchema shape — a JSON-Schema object
 // describing the tool's argument shape. It is forwarded as-is to the
-// underlying mark3labs StreamableHTTPServer via convertToMCPTool in
+// underlying mark3labs StreamableHTTPServer via mcp.ConvertToMCPTool in
 // bridge_server.go.
 type ToolDescriptor struct {
 	Name        string          `json:"name"`        // wire name, e.g. "mcp_ops__litellm_psql_query"

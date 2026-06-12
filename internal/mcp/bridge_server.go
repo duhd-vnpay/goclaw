@@ -143,8 +143,12 @@ func ForwardMediaToOutbound(ctx context.Context, msgBus *bus.MessageBus, toolNam
 	channel := tools.ToolChannelFromCtx(ctx)
 	chatID := tools.ToolChatIDFromCtx(ctx)
 	if channel == "" || chatID == "" {
-		slog.Debug("mcp.bridge: skipping media forward, missing channel context",
-			"tool", toolName, "channel", channel, "chat_id", chatID)
+		// fork.15j-acp: promoted to Info. Missing routing ctx is the silent-drop
+		// failure mode for write_file(deliver=true) media attachments — surface it
+		// so cron deliver bugs (E2.4 pattern) are visible without DEBUG.
+		slog.Info("mcp.bridge.media_forward_skipped",
+			"tool", toolName, "channel", channel, "chat_id", chatID,
+			"reason", "missing_routing_ctx")
 		return
 	}
 
@@ -171,8 +175,11 @@ func ForwardMediaToOutbound(ctx context.Context, msgBus *bus.MessageBus, toolNam
 		Media:    attachments,
 		Metadata: meta,
 	})
-	slog.Debug("mcp.bridge: forwarded media to outbound bus",
-		"tool", toolName, "channel", channel, "files", len(attachments))
+	// fork.15j-acp: promoted to Info — symmetric với media_forward_skipped để
+	// confirm deliver path actually fires khi cron debug.
+	slog.Info("mcp.bridge.media_forwarded",
+		"tool", toolName, "channel", channel, "chat_id", chatID,
+		"files", len(attachments))
 }
 
 // mimeFromExt returns a MIME type for a file extension.

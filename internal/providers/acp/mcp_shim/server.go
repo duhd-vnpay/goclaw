@@ -442,23 +442,23 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	r = r.WithContext(ctx)
 
-	// fork.15e-acp: Bug E2 debug — log every request reaching the shim so we
-	// can see whether Claude Code SDK is even calling tools/list. Log full body
-	// truncated to 512 bytes for tools/call tool-name inspection. Remove after
-	// root cause is confirmed.
-	bodyPreview := string(body)
-	if len(bodyPreview) > 512 {
-		bodyPreview = bodyPreview[:512] + "...(truncated)"
+	// fork.15j-acp: demoted to Debug — Phase 4 stable, body_preview noise.
+	// Re-enable via slog DEBUG when debugging tools/list or tools/call routing.
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		bodyPreview := string(body)
+		if len(bodyPreview) > 512 {
+			bodyPreview = bodyPreview[:512] + "...(truncated)"
+		}
+		slog.Debug("acp.shim.request",
+			"sid", sid,
+			"http_method", r.Method,
+			"jsonrpc_method", method,
+			"content_type", r.Header.Get("Content-Type"),
+			"accept", r.Header.Get("Accept"),
+			"len", len(body),
+			"body_preview", bodyPreview,
+		)
 	}
-	slog.Info("acp.shim.request",
-		"sid", sid,
-		"http_method", r.Method,
-		"jsonrpc_method", method,
-		"content_type", r.Header.Get("Content-Type"),
-		"accept", r.Header.Get("Accept"),
-		"len", len(body),
-		"body_preview", bodyPreview,
-	)
 
 	// Bug E2 fix: prefer per-session MCP server (built at RegisterSession with
 	// the agent's full DB-driven catalog) over the process-wide s.mcp. The

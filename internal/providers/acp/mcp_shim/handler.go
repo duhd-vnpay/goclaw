@@ -18,16 +18,21 @@ import (
 )
 
 // workspaceBase is the host-side root that team workspaces live under. It
-// defaults to /app/data (matching GOCLAW_DATA_DIR on the production container)
-// and is set once at package init from the GOCLAW_DATA_DIR environment
-// variable. Phase 5.1 shim relocate joins it with "teams/<teamID>/<relPath>"
-// when a tool in needsTeamRelocate's whitelist is called inside a team
-// session (sess.Cron.TeamID != "").
+// defaults to /app/workspace (matching GOCLAW_WORKSPACE on the production
+// container) and is set once at package init from the GOCLAW_WORKSPACE
+// environment variable. Phase 5.1 shim relocate joins it with
+// "teams/<teamID>/<relPath>" when a tool in needsTeamRelocate's whitelist is
+// called inside a team session (sess.Cron.TeamID != "").
+//
+// NB: we use GOCLAW_WORKSPACE (not GOCLAW_DATA_DIR) so the relocated path
+// stays inside the write_file workspace sandbox — write_file's path-escape
+// check rejects any path outside its workspace root. The canonical team
+// workspace storage layout on disk is {GOCLAW_WORKSPACE}/teams/{teamID}/.
 var workspaceBase = func() string {
-	if v := os.Getenv("GOCLAW_DATA_DIR"); v != "" {
+	if v := os.Getenv("GOCLAW_WORKSPACE"); v != "" {
 		return v
 	}
-	return "/app/data"
+	return "/app/workspace"
 }()
 
 // needsTeamRelocate reports whether a tool creates a file under the workspace

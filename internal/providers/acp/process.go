@@ -48,6 +48,7 @@ type ShimSessionEntry struct {
 	DeliverTarget string
 	PeerKind      string
 	SessionKey    string
+	TeamID        string // Phase 5.1: team workspace root; empty for non-team sessions
 }
 
 // ACPProcess represents a running ACP agent subprocess.

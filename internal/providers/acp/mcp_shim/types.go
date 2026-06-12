@@ -52,6 +52,7 @@ type CronContext struct {
 	DeliverTarget string `json:"deliverTarget"`
 	PeerKind      string `json:"peerKind"`   // "private" | "group" — needed for outbound bus metadata
 	SessionKey    string `json:"sessionKey"` // session_key for cron sessions (used by tool routing context)
+	TeamID        string `json:"teamId"`     // Phase 5.1: team workspace root; empty for non-team sessions
 }
 
 // SessionEntry is the per-ACP-session state held by the shim's sync.Map.

@@ -35,6 +35,7 @@ type ACPRoutingContext struct {
 	ChatID     string
 	PeerKind   string
 	SessionKey string
+	TeamID     string // Phase 5.1: team workspace root; empty for non-team sessions
 }
 
 // ACPContextReader extracts the cron/routing context from the parent ctx so
@@ -396,6 +397,7 @@ func (p *ACPProvider) makeShimRegisterFn(ctx context.Context, goclawKey string) 
 			DeliverTarget: rc.ChatID,
 			PeerKind:      rc.PeerKind,
 			SessionKey:    rc.SessionKey,
+			TeamID:        acp.ParseTeamIDFromSessionKey(rc.SessionKey),
 		}
 		p.shim.RegisterSession(entry)
 	}

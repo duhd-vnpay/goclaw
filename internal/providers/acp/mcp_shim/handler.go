@@ -3,6 +3,10 @@ package mcp_shim
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -12,6 +16,86 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
+
+// workspaceBase is the host-side root that team workspaces live under. It
+// defaults to /app/data (matching GOCLAW_DATA_DIR on the production container)
+// and is set once at package init from the GOCLAW_DATA_DIR environment
+// variable. Phase 5.1 shim relocate joins it with "teams/<teamID>/<relPath>"
+// when a tool in needsTeamRelocate's whitelist is called inside a team
+// session (sess.Cron.TeamID != "").
+var workspaceBase = func() string {
+	if v := os.Getenv("GOCLAW_DATA_DIR"); v != "" {
+		return v
+	}
+	return "/app/data"
+}()
+
+// needsTeamRelocate reports whether a tool creates a file under the workspace
+// and therefore needs its 'path' argument rewritten under the team workspace
+// root for team-dispatched ACP sessions. The whitelist is intentionally narrow
+// — add new file-creating tools explicitly. Read-side tools (read_file,
+// list_files) are NOT included; they already receive the team-scoped workspace
+// via tools.ToolWorkspaceFromCtx.
+func needsTeamRelocate(toolName string) bool {
+	switch toolName {
+	case "write_file", "create_image", "tts":
+		return true
+	}
+	return false
+}
+
+// applyTeamRelocate rewrites args["path"] to land under
+// <base>/teams/<teamID>/<path> when the session is team-scoped and the tool is
+// in needsTeamRelocate. It is a no-op when teamID is empty, the tool is not
+// whitelisted, the path is absolute, the path is empty, or the path attempts
+// a ".." escape after cleaning. Mutates args in place.
+//
+// The pure function shape (no SessionEntry dep, base passed in) keeps it
+// trivially testable from a table-driven test.
+func applyTeamRelocate(base, teamID, toolName string, args map[string]any) {
+	if teamID == "" || !needsTeamRelocate(toolName) {
+		return
+	}
+	rawPath, ok := getStringArg(args, "path")
+	if !ok || rawPath == "" {
+		return
+	}
+	// POSIX semantics — runtime container is Linux; the ACP wrapper sends
+	// forward-slash paths. Using path.IsAbs (not filepath.IsAbs) keeps the
+	// detection consistent across dev platforms (the Windows filepath.IsAbs
+	// rejects POSIX absolute paths, which would re-rewrite '/tmp/x').
+	if path.IsAbs(rawPath) {
+		return
+	}
+	cleaned := filepath.Clean(rawPath)
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		slog.Warn("acp.shim.path_relocate_rejected",
+			"tool", toolName, "team_id", teamID,
+			"reason", "path_escape", "raw", rawPath)
+		return
+	}
+	teamRoot := filepath.Join(base, "teams", teamID)
+	newPath := filepath.Join(teamRoot, cleaned)
+	args["path"] = newPath
+	slog.Info("acp.shim.path_relocated",
+		"tool", toolName, "team_id", teamID,
+		"from", rawPath, "to", newPath)
+}
+
+// getStringArg returns args[key] coerced to string and a presence flag.
+// Returns ("", false) when args is nil, the key is absent, or the value is
+// not a string. Used by applyTeamRelocate to read the 'path' field safely.
+func getStringArg(args map[string]any, key string) (string, bool) {
+	if args == nil {
+		return "", false
+	}
+	v, ok := args[key]
+	if !ok {
+		return "", false
+	}
+	s, ok := v.(string)
+	return s, ok
+}
 
 // makeSessionAwareHandler returns a mcpserver.ToolHandlerFunc that:
 //
@@ -73,6 +157,13 @@ func (s *Server) makeSessionAwareHandler(reg *tools.Registry, msgBus *bus.Messag
 		}
 
 		args := req.GetArguments()
+
+		// Phase 5.1: relocate file-creation tools under the team workspace
+		// root when this session is team-dispatched (sess.Cron.TeamID != "").
+		// No-op for cron / direct sessions — preserves backward compat.
+		if sess != nil {
+			applyTeamRelocate(workspaceBase, sess.Cron.TeamID, toolName, args)
+		}
 
 		// Reuse the same routing context as mcp.NewBridgeServer's handler —
 		// handleMCP already populated channel/chatID/peerKind/sessionKey from

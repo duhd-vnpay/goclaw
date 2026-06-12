@@ -83,6 +83,7 @@ func fromACP(e acp.ShimSessionEntry) SessionEntry {
 			DeliverTarget: e.DeliverTarget,
 			PeerKind:      e.PeerKind,
 			SessionKey:    e.SessionKey,
+			TeamID:        e.TeamID,
 		},
 	}
 }

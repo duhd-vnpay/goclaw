@@ -1,3 +1,13 @@
+<!-- vnpay-fork:start — local block, re-apply nếu conflict khi merge upstream -->
+# VNPAY Fork Context
+
+@../../CLAUDE.md
+
+- Fork: https://git.vnpay.vn/duhd/agentic-coding — submodule tại `sdlc-go/goclaw`, upstream https://github.com/nextlevelbuilder/goclaw
+- Production: VNPAYCloud K8s cluster `sdlc-go-k8s-v2`, namespace `sdlc-go-prod`, https://goclaw.x.vnshop.cloud
+- Language: Always communicate in Vietnamese (tiếng Việt) — overrides mục Language bên dưới.
+<!-- vnpay-fork:end -->
+
 # GoClaw Gateway
 
 PostgreSQL multi-tenant AI agent gateway with WebSocket RPC + HTTP API.

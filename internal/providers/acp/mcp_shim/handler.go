@@ -39,8 +39,9 @@ var workspaceBase = func() string {
 // and therefore needs its 'path' argument rewritten under the team workspace
 // root for team-dispatched ACP sessions. The whitelist is intentionally narrow
 // — add new file-creating tools explicitly. Read-side tools (read_file,
-// list_files) are NOT included; they already receive the team-scoped workspace
-// via tools.ToolWorkspaceFromCtx.
+// list_files) are NOT included; they receive the team-scoped workspace via
+// tools.ToolWorkspaceFromCtx / tools.ToolTeamWorkspaceFromCtx set in
+// Server.handleMCP (see server.go: "Phase 5.1 tw4 symmetric workspace ctx").
 func needsTeamRelocate(toolName string) bool {
 	switch toolName {
 	case "write_file", "create_image", "tts":

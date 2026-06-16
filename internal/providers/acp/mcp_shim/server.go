@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -427,6 +428,19 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 	if sess.Cron.SessionKey != "" {
 		ctx = tools.WithToolSessionKey(ctx, sess.Cron.SessionKey)
+	}
+	// Phase 5.1 tw4: symmetric workspace ctx for read-side tools. The write-side
+	// relocate (applyTeamRelocate in handler.go) rewrites file-creating tools'
+	// path arg under "{workspaceBase}/teams/<teamID>/" — but read tools
+	// (read_file, list_files) consult tools.ToolWorkspaceFromCtx instead of
+	// reading the path arg, so without setting it here they default to the
+	// solo-agent workspace and can't see files written by peers in the same
+	// team. Mirrors loop_context.go:213-225 (non-ACP path), keeping ACP and
+	// non-ACP team-dispatch sessions semantically identical.
+	if sess.Cron.TeamID != "" {
+		teamWS := filepath.Join(workspaceBase, "teams", sess.Cron.TeamID)
+		ctx = tools.WithToolWorkspace(ctx, teamWS)
+		ctx = tools.WithToolTeamWorkspace(ctx, teamWS)
 	}
 
 	// Detect tools/list so we can filter the response. We read the body once

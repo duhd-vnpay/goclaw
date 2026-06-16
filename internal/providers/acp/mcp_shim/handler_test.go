@@ -53,6 +53,36 @@ func TestApplyTeamRelocate(t *testing.T) {
 			path:     "../escape.md",
 			wantPath: "../escape.md",
 		},
+		// Idempotency cases (incident 2026-06-16) — path that already carries
+		// the team segment must not get doubly nested under teamRoot.
+		{
+			name:     "idempotent — leading teams/<teamID>/ stripped",
+			teamID:   "TEAM-A",
+			tool:     "write_file",
+			path:     "teams/TEAM-A/2026-06-16/world-news/draft.md",
+			wantPath: filepath.Join(base, "teams", "TEAM-A", "2026-06-16/world-news/draft.md"),
+		},
+		{
+			name:     "idempotent — leading <teamID>/ stripped",
+			teamID:   "TEAM-A",
+			tool:     "write_file",
+			path:     "TEAM-A/2026-06-16/draft.md",
+			wantPath: filepath.Join(base, "teams", "TEAM-A", "2026-06-16/draft.md"),
+		},
+		{
+			name:     "idempotent — only ONE level stripped (no recursion)",
+			teamID:   "TEAM-A",
+			tool:     "write_file",
+			path:     "teams/TEAM-A/teams/TEAM-A/2026-06-16/draft.md",
+			wantPath: filepath.Join(base, "teams", "TEAM-A", "teams/TEAM-A/2026-06-16/draft.md"),
+		},
+		{
+			name:     "other team prefix — preserved (not stripped)",
+			teamID:   "TEAM-A",
+			tool:     "write_file",
+			path:     "teams/TEAM-B/foo.md",
+			wantPath: filepath.Join(base, "teams", "TEAM-A", "teams/TEAM-B/foo.md"),
+		},
 	}
 
 	for _, tc := range cases {

@@ -55,6 +55,15 @@ func needsTeamRelocate(toolName string) bool {
 // whitelisted, the path is absolute, the path is empty, or the path attempts
 // a ".." escape after cleaning. Mutates args in place.
 //
+// Idempotency: when the cleaned relative path already starts with
+// "teams/<teamID>/" or "<teamID>/", that prefix is stripped before joining so a
+// path the LLM redundantly prefixed with the team segment does NOT get
+// re-prepended into "<teamID>/<teamID>/..." or "teams/<teamID>/teams/<teamID>/..."
+// (incident 2026-06-16: Pam's newsletter landed under doubly-nested
+// `/app/workspace/teams/<teamID>/<teamID>/2026-06-16/world-news/` because
+// Monica's task description carried the team prefix and the relocate
+// re-prepended it).
+//
 // The pure function shape (no SessionEntry dep, base passed in) keeps it
 // trivially testable from a table-driven test.
 func applyTeamRelocate(base, teamID, toolName string, args map[string]any) {
@@ -79,12 +88,34 @@ func applyTeamRelocate(base, teamID, toolName string, args map[string]any) {
 			"reason", "path_escape", "raw", rawPath)
 		return
 	}
+	cleaned = stripTeamPrefix(cleaned, teamID)
 	teamRoot := filepath.Join(base, "teams", teamID)
 	newPath := filepath.Join(teamRoot, cleaned)
 	args["path"] = newPath
 	slog.Info("acp.shim.path_relocated",
 		"tool", toolName, "team_id", teamID,
 		"from", rawPath, "to", newPath)
+}
+
+// stripTeamPrefix removes a leading "teams/<teamID>/" or "<teamID>/" segment
+// from cleaned so applyTeamRelocate is idempotent — repeated application (or an
+// LLM that already includes the team segment in its path arg) produces the same
+// single-level path under teamRoot. Splits on filepath.Separator so the same
+// logic matches whether filepath.Clean produced POSIX slashes (Linux runtime
+// container) or Windows backslashes (dev test). Only the agent's OWN teamID is
+// stripped — a path mentioning another team (e.g. "teams/T2/foo" while we're
+// T1) stays as written so the existing path-traversal guards in write_file see
+// the unusual layout.
+func stripTeamPrefix(cleaned, teamID string) string {
+	sep := string(filepath.Separator)
+	parts := strings.Split(cleaned, sep)
+	if len(parts) >= 2 && parts[0] == "teams" && parts[1] == teamID {
+		return strings.Join(parts[2:], sep)
+	}
+	if len(parts) >= 1 && parts[0] == teamID {
+		return strings.Join(parts[1:], sep)
+	}
+	return cleaned
 }
 
 // getStringArg returns args[key] coerced to string and a presence flag.

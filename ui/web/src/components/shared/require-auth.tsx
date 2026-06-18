@@ -2,6 +2,15 @@ import { Navigate, useLocation } from "react-router";
 import { useAuthStore } from "@/stores/use-auth-store";
 import { ROUTES } from "@/lib/constants";
 
+// Backstop against stale localStorage tokens (e.g. legacy "cookie" sentinel).
+// A real JWT is three base64url segments separated by `.`; reject anything else
+// so we don't loop a `Authorization: Bearer <garbage>` request → 401 → no-op.
+function isValidJwt(token: string): boolean {
+  if (!token) return false;
+  const parts = token.split(".");
+  return parts.length === 3 && parts.every((p) => p.length > 0);
+}
+
 export function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token);
   const userId = useAuthStore((s) => s.userId);
@@ -25,9 +34,19 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   // Not authenticated
   // In OIDC mode, the JWT token alone is the credential — userId is populated async from /me.
   // In token mode, both token (or senderID) and userId are required.
-  const notAuthenticated = oidcEnabled ? !token : (!token && !senderID) || !userId;
+  // Reject non-JWT tokens in OIDC mode so stale localStorage sentinels (e.g. "cookie")
+  // don't pass the truthy check and stick the user in a 401 loop.
+  const notAuthenticated = oidcEnabled
+    ? !isValidJwt(token)
+    : (!token && !senderID) || !userId;
   if (notAuthenticated) {
     if (oidcEnabled) {
+      // Wipe any stale non-JWT token (legacy "cookie" sentinel) before redirecting,
+      // so we don't replay it on the next render. Keep OIDC flags so the redirect
+      // path still applies.
+      if (token && !isValidJwt(token)) {
+        useAuthStore.getState().setCredentials("", "");
+      }
       // Redirect to Keycloak, setting /auth/callback as the post-login destination
       // so AuthCallbackPage can extract the token from the URL fragment.
       const callbackUrl = encodeURIComponent(

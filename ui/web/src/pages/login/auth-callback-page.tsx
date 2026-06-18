@@ -28,22 +28,11 @@ export function AuthCallbackPage() {
       // Navigate to overview after a brief delay for state to settle
       setTimeout(() => navigate(ROUTES.OVERVIEW, { replace: true }), 100);
     } else {
-      // No token in fragment -- might be a direct /v1/auth/callback response
-      // Check if the backend set a cookie (non-SPA flow)
-      fetch("/v1/auth/me", { credentials: "include" })
-        .then((res) => {
-          if (res.ok) return res.json();
-          throw new Error("not authenticated");
-        })
-        .then(() => {
-          // Backend cookie auth -- store user info
-          handleCallbackToken("cookie"); // sentinel value
-          navigate(ROUTES.OVERVIEW, { replace: true });
-        })
-        .catch(() => {
-          // Failed -- redirect to login
-          navigate(ROUTES.LOGIN, { replace: true });
-        });
+      // No access_token in URL fragment — OIDC flow incomplete.
+      // We do NOT support backend cookie-only auth: the SPA sends Bearer JWT for
+      // every /v1/* call, so a session cookie alone would still 401. Redirect
+      // back to login; Keycloak SSO will replay a fresh JWT via the fragment.
+      navigate(ROUTES.LOGIN, { replace: true });
     }
   }, [navigate, handleCallbackToken]);
 

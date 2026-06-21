@@ -169,7 +169,6 @@ func makeCronJobHandler(sched *scheduler.Scheduler, msgBus *bus.MessageBus, cfg 
 		var modelOverride string
 		if job.Model != nil {
 			modelOverride = *job.Model
-
 		}
 
 		// Schedule through cron lane — scheduler handles agent resolution and concurrency

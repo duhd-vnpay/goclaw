@@ -4,11 +4,10 @@ import (
 	"sync"
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
-	"github.com/nextlevelbuilder/goclaw/internal/ardenn"
-	"github.com/nextlevelbuilder/goclaw/internal/ardenn/hands"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
@@ -32,6 +31,7 @@ type ConsumerDeps struct {
 	TaskRunSessions  sync.Map
 	SubagentMgr      *tools.SubagentManager
 	UsageCaps        *usagecaps.Service
+	ProviderReg      *providers.Registry
 	BgWg             sync.WaitGroup
 	GetAnnounceMu    func(string) *sync.Mutex
 
@@ -42,6 +42,4 @@ type ConsumerDeps struct {
 	ProjectStore store.ProjectStore
 
 	// Ardenn workflow engine (nil when disabled — zero overhead)
-	ArdennEngine     *ardenn.Engine
-	ArdennCompletion *hands.CompletionRegistry
 }

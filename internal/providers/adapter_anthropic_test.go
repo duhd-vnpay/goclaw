@@ -150,6 +150,48 @@ func TestAnthropicAdapterToRequest_Thinking(t *testing.T) {
 	}
 }
 
+func TestAnthropicAdapterToRequest_SkipsTemperatureForClaude46(t *testing.T) {
+	adapter, _ := NewAnthropicAdapter(ProviderConfig{APIKey: "sk-test"})
+
+	for _, model := range []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-opus-4-7-20260501"} {
+		t.Run(model, func(t *testing.T) {
+			req := ChatRequest{
+				Model:    model,
+				Messages: []Message{{Role: "user", Content: "hi"}},
+				Options:  map[string]any{OptTemperature: 0.7},
+			}
+			data, _, err := adapter.ToRequest(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatal(err)
+			}
+			if _, hasTemp := body["temperature"]; hasTemp {
+				t.Errorf("model %q: temperature should be omitted", model)
+			}
+		})
+	}
+
+	req := ChatRequest{
+		Model:    "claude-sonnet-4-5-20250929",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		Options:  map[string]any{OptTemperature: 0.7},
+	}
+	data, _, err := adapter.ToRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["temperature"] != 0.7 {
+		t.Errorf("sonnet 4.5 should keep temperature, got %v", body["temperature"])
+	}
+}
+
 func TestAnthropicAdapterFromResponse_ToolCalls(t *testing.T) {
 	adapter, _ := NewAnthropicAdapter(ProviderConfig{APIKey: "sk-test"})
 
@@ -282,3 +324,51 @@ func assertHeader(t *testing.T, h http.Header, key, want string) {
 		t.Errorf("header %q = %q, want %q", key, got, want)
 	}
 }
+
+func TestAnthropicAdapterToRequest_NativeToolIgnored(t *testing.T) {
+	adapter, _ := NewAnthropicAdapter(ProviderConfig{APIKey: "sk-test"})
+
+	req := ChatRequest{
+		Messages: []Message{{Role: "user", Content: "Draw a cat and search"}},
+		Tools: []ToolDefinition{
+			{
+				Type: "function",
+				Function: &ToolFunctionSchema{
+					Name:        "web_search",
+					Description: "Search the web",
+					Parameters:  map[string]any{"type": "object"},
+				},
+			},
+			{
+				Type:     "image_generation",
+				Function: nil,
+			},
+		},
+	}
+
+	data, _, err := adapter.ToRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatal(err)
+	}
+
+	tools, ok := body["tools"].([]any)
+	if !ok {
+		t.Fatal("expected tools array in request body")
+	}
+
+	// Should only serialize function tool, ignoring native tool
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool in Anthropic request, got %d", len(tools))
+	}
+
+	tool := tools[0].(map[string]any)
+	if tool["name"] != "web_search" {
+		t.Errorf("expected tool name 'web_search', got %v", tool["name"])
+	}
+}
+

@@ -12,11 +12,10 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/eventbus"
-	"github.com/nextlevelbuilder/goclaw/internal/harness"
 	"github.com/nextlevelbuilder/goclaw/internal/hooks"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
-	memory "github.com/nextlevelbuilder/goclaw/internal/memory"
+	"github.com/nextlevelbuilder/goclaw/internal/memory"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
@@ -140,11 +139,12 @@ type Loop struct {
 	userSetups        sync.Map            // userID → *userSetup (workspace + seeding state, per Loop instance)
 
 	// Per-user MCP tools: servers requiring user credentials get connected per-request.
-	mcpStore        store.MCPServerStore   // for credential lookup
-	mcpPool         *mcpbridge.Pool        // user-keyed connection pool
-	mcpUserCredSrvs []store.MCPAccessInfo  // servers needing per-user creds
-	mcpUserTools    sync.Map               // userID → []tools.Tool (cached per-user tools)
-	mcpGrantChecker mcpbridge.GrantChecker // runtime grant verification (nil = skip)
+	mcpStore              store.MCPServerStore         // for credential lookup
+	mcpPool               *mcpbridge.Pool              // user-keyed connection pool
+	mcpUserCredSrvs       []store.MCPAccessInfo        // servers needing per-user creds
+	mcpUserTools          sync.Map                     // userID → []tools.Tool (cached per-user tools)
+	mcpGrantChecker       mcpbridge.GrantChecker       // runtime grant verification (nil = skip)
+	mcpOAuthTokenProvider mcpbridge.OAuthTokenProvider // OAuth Bearer token injection (nil = disabled)
 
 	// Compaction config (memory flush settings)
 	compactionCfg *config.CompactionConfig
@@ -195,6 +195,12 @@ type Loop struct {
 	// Requested reasoning config parsed from agent other_config.
 	reasoningConfig store.AgentReasoningConfig
 
+	// Prompt mode from agent other_config (empty = full).
+	promptMode PromptMode
+
+	// Pinned skills from agent other_config (always inline, max 10).
+	pinnedSkills []string
+
 	// Self-evolve: predefined agents can update SOUL.md through chat
 	selfEvolve bool
 
@@ -238,25 +244,24 @@ type Loop struct {
 	budgetMonthlyCents int
 	tracingStore       store.TracingStore
 	usageCaps          *usagecaps.Service
+	usageEvents        store.UsageEventStore
 
 	// Memory store for extractive memory fallback (writes directly when LLM flush fails)
 	memStore store.MemoryStore
-
-	// Harness layer manager (nil = harness disabled) — LOCAL fork patch
-	harness *harness.Manager
 
 	// v3 orchestration mode (spawn/delegate/team) — controls tool visibility
 	orchMode        OrchestrationMode
 	delegateTargets []DelegateTargetEntry // delegation targets for prompt injection
 
-	// User identity resolver for credential lookups (nil = use raw UserID)
-	userResolver UserIdentityResolver
-
-	// Pinned skills: always inlined in system prompt regardless of prompt mode
-	pinnedSkills []string
-
-	// Evolution metrics store for tool metric recording (nil = disabled)
+	// v3 evolution metrics store (nil = disabled)
 	evolutionMetricsStore store.EvolutionMetricsStore
+
+	// Skill self-evolution metrics store (nil = disabled)
+	skillEvolutionStore store.SkillEvolutionStore
+	skillStore          store.SkillStore
+
+	// User identity resolver: maps channel contacts to merged tenant users for credential lookups.
+	userResolver UserIdentityResolver
 
 	// Per-session cache-touch timestamps for the cache-TTL pruning gate (Phase 06).
 	// Key: sessionKey (string), Value: time.Time of last prune mutation.
@@ -309,6 +314,9 @@ type LoopConfig struct {
 	Workspace        string
 	DataDir          string // global workspace root for team workspace resolution
 	WorkspaceSharing *store.WorkspaceSharingConfig
+
+	// v3 memory/retrieval flags removed — always true at runtime.
+	AutoInjector memory.AutoInjector // v3 L0 memory auto-inject (nil = disabled)
 
 	// Per-agent DB overrides (nil = use global defaults)
 	RestrictToWs *bool
@@ -392,6 +400,12 @@ type LoopConfig struct {
 	// Requested reasoning config parsed from agent other_config.
 	ReasoningConfig store.AgentReasoningConfig
 
+	// Prompt mode from agent other_config ("full", "task", "minimal", "none")
+	PromptMode PromptMode
+
+	// Pinned skills from agent other_config (always inline, max 10)
+	PinnedSkills []string
+
 	// Self-evolve: predefined agents can update SOUL.md (style/tone) through chat
 	SelfEvolve bool
 
@@ -429,34 +443,31 @@ type LoopConfig struct {
 	BudgetMonthlyCents int
 	TracingStore       store.TracingStore
 	UsageCaps          *usagecaps.Service
+	UsageEvents        store.UsageEventStore
 
 	// Memory store for extractive memory fallback (writes directly when LLM flush fails)
 	MemoryStore store.MemoryStore
 
 	// Per-user MCP tools (servers requiring per-user credentials)
-	MCPStore        store.MCPServerStore   // for credential lookup
-	MCPPool         *mcpbridge.Pool        // user-keyed connection pool
-	MCPUserCredSrvs []store.MCPAccessInfo  // servers needing per-user creds
-	MCPGrantChecker mcpbridge.GrantChecker // runtime grant verification (nil = skip)
-
-	// Harness layer manager (nil = harness disabled) — LOCAL fork patch
-	Harness *harness.Manager
+	MCPStore              store.MCPServerStore      // for credential lookup
+	MCPPool               *mcpbridge.Pool           // user-keyed connection pool
+	MCPUserCredSrvs       []store.MCPAccessInfo     // servers needing per-user creds
+	MCPGrantChecker       mcpbridge.GrantChecker    // runtime grant verification (nil = skip)
+	MCPOAuthTokenProvider mcpbridge.OAuthTokenProvider // OAuth Bearer token injection (nil = disabled)
 
 	// V3 orchestration mode (resolved by resolver, controls tool visibility)
 	OrchMode        OrchestrationMode
 	DelegateTargets []DelegateTargetEntry // delegation targets for prompt injection
 
-	// V3 auto-inject: episodic memory injection into system prompt (nil = disabled)
-	AutoInjector memory.AutoInjector
-
-	// User identity resolver for credential lookups (nil = use raw UserID)
-	UserResolver UserIdentityResolver
-
-	// Pinned skills: always inlined in system prompt regardless of prompt mode
-	PinnedSkills []string
-
-	// Evolution metrics store for tool metric recording (nil = disabled)
+	// V3 evolution metrics store for recording tool/retrieval/feedback metrics
 	EvolutionMetricsStore store.EvolutionMetricsStore
+
+	// Skill self-evolution metrics store for use_skill/slash activation metrics
+	SkillEvolutionStore store.SkillEvolutionStore
+	SkillStore          store.SkillStore
+
+	// User identity resolver for credential lookups (maps channel contacts → tenant users)
+	UserResolver UserIdentityResolver
 }
 
 const defaultMaxTokens = config.DefaultMaxTokens
@@ -503,6 +514,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 
 	return &Loop{
 		id:                     cfg.ID,
+		displayName:            cfg.DisplayName,
 		agentUUID:              cfg.AgentUUID,
 		tenantID:               cfg.TenantID,
 		agentOtherConfig:       append([]byte(nil), cfg.AgentOtherConfig...), // defensive copy
@@ -517,6 +529,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		workspace:              cfg.Workspace,
 		dataDir:                cfg.DataDir,
 		workspaceSharing:       cfg.WorkspaceSharing,
+		autoInjector:           cfg.AutoInjector,
 		restrictToWs:           cfg.RestrictToWs,
 		subagentsCfg:           cfg.SubagentsCfg,
 		memoryCfg:              cfg.MemoryCfg,
@@ -560,6 +573,8 @@ func NewLoop(cfg LoopConfig) *Loop {
 		systemConfigs:          cfg.SystemConfigs,
 		disabledTools:          cfg.DisabledTools,
 		reasoningConfig:        cfg.ReasoningConfig,
+		promptMode:             cfg.PromptMode,
+		pinnedSkills:           cfg.PinnedSkills,
 		selfEvolve:             cfg.SelfEvolve,
 		allowImageGeneration:   cfg.AllowImageGeneration,
 		ttsAutoMode:            cfg.TTSAutoMode,
@@ -575,17 +590,19 @@ func NewLoop(cfg LoopConfig) *Loop {
 		budgetMonthlyCents:     cfg.BudgetMonthlyCents,
 		tracingStore:           cfg.TracingStore,
 		usageCaps:              cfg.UsageCaps,
+		usageEvents:            cfg.UsageEvents,
 		memStore:               cfg.MemoryStore,
 		mcpStore:               cfg.MCPStore,
 		mcpPool:                cfg.MCPPool,
 		mcpUserCredSrvs:        cfg.MCPUserCredSrvs,
 		mcpGrantChecker:        cfg.MCPGrantChecker,
-		harness:                cfg.Harness,
-		autoInjector:           cfg.AutoInjector,
-		userResolver:           cfg.UserResolver,
-		pinnedSkills:           cfg.PinnedSkills,
+		mcpOAuthTokenProvider:  cfg.MCPOAuthTokenProvider,
 		orchMode:               cfg.OrchMode,
+		delegateTargets:        cfg.DelegateTargets,
 		evolutionMetricsStore:  cfg.EvolutionMetricsStore,
+		skillEvolutionStore:    cfg.SkillEvolutionStore,
+		skillStore:             cfg.SkillStore,
+		userResolver:           cfg.UserResolver,
 	}
 }
 
@@ -650,10 +667,6 @@ type RunRequest struct {
 	// TeamWorkspace overrides the member agent's workspace with the team's workspace
 	// so file operations (read/write/image/audio) use the shared team directory.
 	TeamWorkspace string
-
-	// Project-scoped MCP env overrides (resolved at message arrival)
-	ProjectID        string                       // resolved project UUID (empty = no project)
-	ProjectOverrides map[string]map[string]string  // {serverName: {envKey: envVal}}
 }
 
 // RunResult is the output of a completed agent run.
@@ -674,6 +687,7 @@ type RunResult struct {
 type MediaResult struct {
 	Path        string `json:"path"`                   // local file path
 	ContentType string `json:"content_type,omitempty"` // MIME type
+	Caption     string `json:"caption,omitempty"`      // optional outbound caption
 	Size        int64  `json:"size,omitempty"`         // file size in bytes
 	AsVoice     bool   `json:"as_voice,omitempty"`     // send as voice message (Telegram OGG)
 	// Prompt is the generation prompt for AI-generated media (e.g. create_image).
@@ -681,7 +695,7 @@ type MediaResult struct {
 	Prompt string `json:"prompt,omitempty"`
 }
 
-// runState encapsulates all mutable state for a single runLoop execution.
+// runState encapsulates all mutable state for a single agent run.
 // Grouping these fields enables extracting loop sub-operations into methods
 // on *runState without passing 20+ individual variables.
 type runState struct {

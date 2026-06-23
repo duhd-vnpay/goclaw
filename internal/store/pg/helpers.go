@@ -173,12 +173,7 @@ func scopeClause(ctx context.Context, startParam int) (clause string, args []any
 // when a project ID is set in context. For tables with a project_id column
 // (memory_documents, memory_chunks). Returns empty clause when no project set.
 func memoryProjectClause(ctx context.Context, startParam int) (clause string, args []any, nextParam int) {
-	pid := store.MemoryProjectID(ctx)
-	if pid == uuid.Nil {
-		return "", nil, startParam
-	}
 	clause = fmt.Sprintf(" AND project_id = $%d", startParam)
-	args = []any{pid}
 	return clause, args, startParam + 1
 }
 

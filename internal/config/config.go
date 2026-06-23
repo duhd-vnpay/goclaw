@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nextlevelbuilder/goclaw/internal/cron"
-	"github.com/nextlevelbuilder/goclaw/internal/harness"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 )
 
@@ -58,7 +58,6 @@ type Config struct {
 	Telemetry TelemetryConfig `json:"telemetry"`
 	Tailscale TailscaleConfig `json:"tailscale"`
 	Bindings  []AgentBinding  `json:"bindings,omitempty"`
-	Harness   harness.Config  `json:"harness"`
 	Keycloak  KeycloakConfig  `json:"keycloak"`
 	Hooks     HooksConfig     `json:"hooks"`
 	Packages  PackagesConfig  `json:"packages"` // runtime package mgmt (GitHub updater)
@@ -75,9 +74,8 @@ type Config struct {
 // empty string → default 1h.
 //
 // ScratchDir is the tmp workspace used by the update executor for download
-// + extract + staging before atomic swap. Defaults to "{BinDir}/../tmp" when
-// empty; operators MAY set explicitly to avoid symlink-resolution issues
-// (red-team H6).
+// + extract + staging before atomic swap. Empty or unusable values fall back to
+// "{runtimeDir}/tmp"; operators MAY set an explicit writable path.
 type PackagesConfig struct {
 	GitHubToken     string `json:"github_token,omitempty"`      // Phase 2 stub
 	UpdatesCheckTTL string `json:"updates_check_ttl,omitempty"` // e.g. "1h"
@@ -194,7 +192,7 @@ type DatabaseConfig struct {
 type SkillsConfig struct {
 	StorageDir      string                  `json:"storage_dir,omitempty"`        // directory for skill content (default: dataDir/skills-store/)
 	MaxUploadSizeMB int                     `json:"max_upload_size_mb,omitempty"` // per-file ZIP upload limit
-	SlashCommands   SkillSlashCommandConfig `json:"slash_commands,omitempty"`
+	SlashCommands   SkillSlashCommandConfig `json:"slash_commands"`
 }
 
 // SkillSlashCommandConfig controls explicit slash-command skill activation.
@@ -326,6 +324,7 @@ type CompactionConfig struct {
 	ReserveTokensFloor int                `json:"reserveTokensFloor,omitempty"` // min reserve tokens (default 20000)
 	MaxHistoryShare    float64            `json:"maxHistoryShare,omitempty"`    // max share of context for history (default 0.85)
 	KeepLastMessages   int                `json:"keepLastMessages,omitempty"`   // messages to keep after compaction (default 4)
+	TimeoutSeconds     int                `json:"timeoutSeconds,omitempty"`     // summarization timeout in seconds (default 120)
 	MemoryFlush        *MemoryFlushConfig `json:"memoryFlush,omitempty"`        // pre-compaction flush
 }
 
@@ -626,6 +625,36 @@ func (c *Config) ReplaceFrom(src *Config) {
 	c.Tailscale = src.Tailscale
 	c.Bindings = src.Bindings
 	c.Keycloak = src.Keycloak
+}
+
+// Clone returns a deep copy of the config while holding the read lock.
+func (c *Config) Clone() *Config {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	data, err := json.Marshal(c)
+	if err != nil {
+		return &Config{}
+	}
+	cp := Default()
+	if err := json.Unmarshal(data, cp); err != nil {
+		return &Config{}
+	}
+	return cp
+}
+
+// ShellDenyGroupsSnapshot returns a copy of the current global shell deny-group
+// overrides. Callers can safely resolve patterns without racing config reloads.
+func (c *Config) ShellDenyGroupsSnapshot() map[string]bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if len(c.Tools.ShellDenyGroups) == 0 {
+		return nil
+	}
+	groups := make(map[string]bool, len(c.Tools.ShellDenyGroups))
+	maps.Copy(groups, c.Tools.ShellDenyGroups)
+	return groups
 }
 
 // IdentityConfig defines agent persona / display identity.

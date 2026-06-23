@@ -19,6 +19,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/cache"
+	"github.com/nextlevelbuilder/goclaw/internal/channelmemory"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/channels/bitrix24"
 	"github.com/nextlevelbuilder/goclaw/internal/channels/discord"
@@ -40,13 +41,13 @@ import (
 	httpapi "github.com/nextlevelbuilder/goclaw/internal/http"
 	kg "github.com/nextlevelbuilder/goclaw/internal/knowledgegraph"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
+	mcpoauth "github.com/nextlevelbuilder/goclaw/internal/mcp/oauth"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
-	"github.com/nextlevelbuilder/goclaw/internal/providers/acp/mcp_shim"
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
+	"github.com/nextlevelbuilder/goclaw/internal/security"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
-	"github.com/nextlevelbuilder/goclaw/internal/store/pg"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 	usagecaps "github.com/nextlevelbuilder/goclaw/internal/usage/caps"
 	"github.com/nextlevelbuilder/goclaw/internal/vault"
@@ -151,10 +152,7 @@ func runGateway() {
 
 	// Create provider registry
 	providerRegistry := providers.NewRegistry(store.TenantIDFromContext)
-	// ACP shim is constructed post-setup (needs toolsReg + stores). Pass an
-	// empty ACPDeps here — ACP config providers are deferred to the post-shim
-	// registration step below; non-ACP providers register normally.
-	registerProviders(providerRegistry, cfg, modelReg, ACPDeps{})
+	registerProviders(providerRegistry, cfg, modelReg)
 
 	// Resolve workspace (must be absolute for system prompt + file tool path resolution)
 	workspace := config.ExpandHome(cfg.Agents.Defaults.Workspace)
@@ -205,30 +203,10 @@ func runGateway() {
 	redisClient := initRedisClient(cfg)
 	defer shutdownRedis(redisClient)
 
-	// Phase 4: construct in-process MCP shim + grants resolver BEFORE ACP
-	// provider registration so each ACP session/new can advertise the
-	// per-session HTTP MCP URL. When the shim cannot be built (e.g. listen
-	// failure) we log and fall back to Phase 3 behavior — ACP still works
-	// without per-session tool exposure.
-	acpDeps := setupACPShim(toolsReg, msgBus, pgStores)
-	if h, ok := acpDeps.Shim.(*mcp_shim.Handle); ok && h != nil {
-		defer func() {
-			if h.Underlying() != nil {
-				_ = h.Underlying().Close()
-			}
-		}()
-	}
-
 	// Register providers from DB (overrides config providers).
 	if pgStores.Providers != nil {
 		dbGatewayAddr := loopbackAddr(cfg.Gateway.Host, cfg.Gateway.Port)
-		registerProvidersFromDB(providerRegistry, pgStores.Providers, pgStores.ConfigSecrets, dbGatewayAddr, cfg.Gateway.Token, pgStores.MCP, cfg, modelReg, acpDeps)
-	}
-	// Now that shim is wired, register any ACP provider declared in the
-	// config file (deferred from the earlier registerProviders call so that
-	// per-session McpServers can be populated).
-	if cfg.Providers.ACP.Binary != "" {
-		registerACPFromConfig(providerRegistry, cfg.Providers.ACP, acpDeps)
+		registerProvidersFromDB(providerRegistry, pgStores.Providers, pgStores.ConfigSecrets, dbGatewayAddr, cfg.Gateway.Token, pgStores.MCP, cfg, modelReg)
 	}
 	slog.Info("model registry initialized", "anthropic_models", len(modelReg.Catalog("anthropic")), "openai_models", len(modelReg.Catalog("openai")))
 
@@ -249,6 +227,18 @@ func runGateway() {
 			cfg.ApplySystemConfigs(sysConfigs)
 			slog.Info("system_configs applied to in-memory config", "keys", len(sysConfigs))
 		}
+	}
+
+	// Re-apply tool rate limiter using DB-overlaid config. setupToolRegistry
+	// initialised the limiter from the JSON5 default before ApplySystemConfigs
+	// ran, so DB-driven changes to tools.rate_limit_per_hour were lost. Replace
+	// the limiter object now that cfg reflects the DB value. Safe: server has
+	// not started, no in-flight tool calls.
+	if cfg.Tools.RateLimitPerHour > 0 {
+		toolsReg.SetRateLimiter(tools.NewToolRateLimiter(cfg.Tools.RateLimitPerHour))
+		slog.Info("tool rate limiting reapplied from system_configs", "per_hour", cfg.Tools.RateLimitPerHour)
+	} else {
+		toolsReg.SetRateLimiter(nil)
 	}
 	setupMemoryEmbeddings(pgStores, providerRegistry)
 	usageCapSvc := usagecaps.NewService(pgStores.UsageCaps, pgStores.Providers)
@@ -283,6 +273,12 @@ func runGateway() {
 		} else {
 			slog.Warn("consolidation pipeline skipped: no provider available")
 		}
+	}
+
+	if memorySvc := makeChannelMemoryService(pgStores, domainBus, providerRegistry, usageCapSvc); memorySvc != nil {
+		cleanupChannelMemory := (&channelmemory.Worker{Service: memorySvc}).Start(context.Background())
+		defer cleanupChannelMemory()
+		slog.Info("channel memory extraction worker registered")
 	}
 
 	// V3: Wire vault enrichment worker (async summary + embedding + auto-linking).
@@ -372,40 +368,19 @@ func runGateway() {
 		server.SetAgentStore(pgStores.Agents)
 	}
 
+	// Build OAuth token refresher before wireExtras so the resolver can inject tokens.
+	var mcpOAuthRefresher mcpbridge.OAuthTokenProvider
+	if pgStores != nil && pgStores.MCPOAuthTokens != nil {
+		mcpOAuthRefresher = mcpoauth.NewRefresher(pgStores.MCPOAuthTokens, security.NewSafeClient(15*time.Second))
+	}
+
 	var mcpPool *mcpbridge.Pool
 	var mediaStore *media.Store
 	var postTurn tools.PostTurnProcessor
-	contextFileInterceptor, mcpPool, mediaStore, postTurn = wireExtras(pgStores, agentRouter, providerRegistry, modelReg, msgBus, pgStores.Sessions, toolsReg, toolPE, skillsLoader, hasMemory, traceCollector, workspace, cfg.Gateway.InjectionAction, cfg, sandboxMgr, redisClient, domainBus, usageCapSvc, acpDeps)
+	contextFileInterceptor, mcpPool, mediaStore, postTurn = wireExtras(pgStores, agentRouter, providerRegistry, modelReg, msgBus, pgStores.Sessions, toolsReg, toolPE, skillsLoader, hasMemory, traceCollector, workspace, cfg.Gateway.InjectionAction, cfg, sandboxMgr, redisClient, domainBus, usageCapSvc, mcpOAuthRefresher)
 	if mcpPool != nil {
 		defer mcpPool.Stop()
 	}
-
-	// Bug E2 fix (fork.15f-acp, 2026-06-11): late-bind the per-session MCP
-	// catalog builder onto the shim. mcpPool + pgStores.MCP only exist after
-	// wireExtras returns, so setupACPShim couldn't construct the builder
-	// inline. The shim degrades to global catalog when SetMCPSessionBuilder
-	// stays unwired, so this is purely additive.
-	wireACPMCPSessionBuilder(acpDeps, toolsReg, mcpPool, pgStores)
-
-	// Initialize user profile resolver for system prompt identity injection.
-	// Keep concrete type for Ardenn adapter (ardennProfileResolverAdapter wraps it).
-	var pgProfileResolver *pg.PGProfileResolver
-	if pgStores.DB != nil {
-		pgProfileResolver = pg.NewPGProfileResolver(pgStores.DB)
-		pkgProfileResolver = pgProfileResolver
-	}
-
-	// Initialize project store for project-as-a-channel.
-	if pgStores.Projects != nil {
-		pkgProjectStore = pgStores.Projects
-	}
-
-	// Initialize Ardenn workflow engine (nil-safe: skips when stores unavailable)
-	ardennEngine, ardennCompletion := initArdenn(pgStores, msgBus, pgProfileResolver)
-	pkgArdennEngine = ardennEngine
-	pkgArdennCompletion = ardennCompletion
-	registerArdennTool(ardennEngine, pgStores, toolsReg)
-	RegisterArdennMethods(server.Router(), ardennEngine, pgStores)
 
 	// Populate shared deps struct used by extracted helper methods.
 	deps := &gatewayDeps{
@@ -432,10 +407,11 @@ func runGateway() {
 		mcpToolLister = mcpMgr
 	}
 	httpapi.InitGatewayToken(cfg.Gateway.Token)
+	mcpbridge.SetAllowedHosts(cfg.Gateway.MCPAllowedHosts) // operator allowlist: trusted MCP hosts exempt from private-IP SSRF block
 	httpapi.InitGatewayNoAuthFallbackAllowed(config.GatewayNoAuthFallbackAllowed(cfg.Gateway))
 	exportTokenStore := httpapi.InitExportTokenStore()
 	defer exportTokenStore.Stop()
-	agentsH, skillsH, tracesH, mcpH, channelInstancesH, providersH, builtinToolsH, pendingMessagesH, teamEventsH, secureCLIH, secureCLIGrantH, mcpUserCredsH := wireHTTP(pgStores, cfg.Agents.Defaults.Workspace, dataDir, bundledSkillsDir, msgBus, toolsReg, providerRegistry, modelReg, permPE.IsOwner, gatewayAddr, mcpToolLister, usageCapSvc, cfg.Skills)
+	agentsH, skillsH, tracesH, mcpH, channelInstancesH, providersH, builtinToolsH, pendingMessagesH, teamEventsH, secureCLIH, secureCLIGrantH, mcpUserCredsH := wireHTTP(pgStores, cfg.Agents.Defaults.Workspace, dataDir, bundledSkillsDir, msgBus, domainBus, toolsReg, providerRegistry, modelReg, permPE.IsOwner, gatewayAddr, mcpToolLister, usageCapSvc, cfg, cfg.Skills)
 
 	// Wire dependencies for system prompt preview parity.
 	if agentsH != nil {
@@ -453,6 +429,37 @@ func runGateway() {
 		wakeH.SetPostTurnProcessor(postTurn)
 	}
 
+	// MCP OAuth handler — per-server OAuth 2.1 client flows.
+	var mcpOAuthH *httpapi.MCPOAuthHandler
+	if pgStores != nil && pgStores.MCP != nil && pgStores.MCPOAuthTokens != nil {
+		safeHTTPClient := security.NewSafeClient(15 * time.Second)
+		var oauthRefresher *mcpoauth.Refresher
+		if r, ok := mcpOAuthRefresher.(*mcpoauth.Refresher); ok {
+			oauthRefresher = r
+		}
+		mcpOAuthH = httpapi.NewMCPOAuthHandler(httpapi.MCPOAuthHandlerDeps{
+			MCPStore:   pgStores.MCP,
+			OAuthStore: pgStores.MCPOAuthTokens,
+			Discoverer: mcpoauth.NewDiscoverer(safeHTTPClient),
+			FlowMgr:    mcpoauth.NewFlowManager(safeHTTPClient),
+			Refresher:  oauthRefresher,
+			EventBus:   msgBus,
+			PublicURL:   cfg.Gateway.PublicURL,
+			Port:        cfg.Gateway.Port,
+			TenantStore: pgStores.Tenants,
+		})
+		// Inject OAuth token provider into MCP tools handler so on-demand tool
+		// discovery can authenticate against OAuth-protected MCP servers.
+		if mcpH != nil && mcpOAuthRefresher != nil {
+			mcpH.SetOAuthProvider(mcpOAuthRefresher)
+		}
+		// Inject the OAuth token store so the update handler can purge stale tokens
+		// when a server's URL or OAuth config changes.
+		if mcpH != nil {
+			mcpH.SetOAuthStore(pgStores.MCPOAuthTokens)
+		}
+	}
+
 	// Wire all server.Set*Handler() calls via extracted helper.
 	deps.wireHTTPHandlersOnServer(
 		httpHandlers{
@@ -468,6 +475,7 @@ func runGateway() {
 			secureCLI:        secureCLIH,
 			secureCLIGrant:   secureCLIGrantH,
 			mcpUserCreds:     mcpUserCredsH,
+			mcpOAuth:         mcpOAuthH,
 		},
 		wakeH,
 		mcpPool,
@@ -492,7 +500,7 @@ func runGateway() {
 	// Register all RPC methods
 	server.SetLogTee(logTee)
 	server.SetRuntimeLogsHandler(httpapi.NewRuntimeLogsHandler(logTee))
-	pairingMethods, heartbeatMethods, chatMethods, cfgPermsMethods := registerAllMethods(server, agentRouter, pgStores.Sessions, pgStores.Cron, pgStores.Pairing, cfg, cfgPath, workspace, dataDir, msgBus, execApprovalMgr, pgStores.Agents, pgStores.Skills, pgStores.ConfigSecrets, pgStores.Teams, contextFileInterceptor, logTee, pgStores.Heartbeats, pgStores.ConfigPermissions, pgStores.SystemConfigs, pgStores.Tenants, pgStores.SkillTenantCfgs, audioMgr, usageCapSvc)
+	pairingMethods, heartbeatMethods, chatMethods, cfgPermsMethods := registerAllMethods(server, agentRouter, pgStores.Sessions, pgStores.RunTimeline, pgStores.Cron, pgStores.Pairing, cfg, cfgPath, workspace, dataDir, msgBus, execApprovalMgr, pgStores.Agents, pgStores.Skills, pgStores.ConfigSecrets, pgStores.Teams, contextFileInterceptor, logTee, pgStores.Heartbeats, pgStores.ConfigPermissions, pgStores.SystemConfigs, pgStores.Tenants, pgStores.SkillTenantCfgs, audioMgr, usageCapSvc)
 
 	// Phase 3: Agent hooks RPC methods (hooks.list/create/update/delete/toggle/test/history).
 	if hs, ok := pgStores.Hooks.(hooks.HookStore); ok && hs != nil {
@@ -572,13 +580,6 @@ func runGateway() {
 		}
 	}
 
-	// Build email-OTP pairing handler (optional — requires OrgUsers + PairingVerifications stores).
-	var pairingHandler *channels.PairingHandler
-	if pgStores.OrgUsers != nil && pgStores.PairingVerifications != nil {
-		pairingHandler = channels.NewPairingHandler(pgStores.OrgUsers, pgStores.PairingVerifications, pgStores.Pairing)
-		slog.Info("email-OTP pairing handler enabled")
-	}
-
 	// Load channel instances from DB.
 	var instanceLoader *channels.InstanceLoader
 	if pgStores.ChannelInstances != nil {
@@ -586,12 +587,7 @@ func runGateway() {
 		instanceLoader.SetProviderRegistry(providerRegistry)
 		instanceLoader.SetPendingCompactionConfig(cfg.Channels.PendingCompaction)
 		instanceLoader.SetUsageCapService(usageCapSvc)
-
-		var telegramExtraOpts []telegram.Option
-		if pairingHandler != nil {
-			telegramExtraOpts = append(telegramExtraOpts, telegram.WithPairingHandler(pairingHandler))
-		}
-		instanceLoader.RegisterFactory(channels.TypeTelegram, telegram.FactoryWithStoresAndAudio(pgStores.Agents, pgStores.ConfigPermissions, pgStores.Teams, pgStores.SubagentTasks, pgStores.PendingMessages, audioMgr, telegramExtraOpts...))
+		instanceLoader.RegisterFactory(channels.TypeTelegram, telegram.FactoryWithStoresAndAudio(pgStores.Agents, pgStores.ConfigPermissions, pgStores.Teams, pgStores.SubagentTasks, pgStores.PendingMessages, audioMgr))
 		instanceLoader.RegisterFactory(channels.TypeDiscord, discord.FactoryWithStoresAndAudio(pgStores.Agents, pgStores.ConfigPermissions, pgStores.PendingMessages, audioMgr))
 		instanceLoader.RegisterFactory(channels.TypeFeishu, feishu.FactoryWithPendingStoreAndAudio(pgStores.PendingMessages, audioMgr))
 		instanceLoader.RegisterFactory(channels.TypeZaloOA, zalo.Factory)
@@ -608,8 +604,10 @@ func runGateway() {
 		// lazy per-user credential provisioning (via mcp_server_name +
 		// mcp_base_url in their instance config) can reach the partner's
 		// MCPServerStore. The MCP server authenticates each onboard call
-		// via the caller-supplied Bitrix access_token (Path B) — no shared
-		// admin secret is required. Channels with none of those set operate
+		// via the caller-supplied Bitrix access_token (the "Bitrix24
+		// OAuth → existing mcp_user_credentials bridge" — Bitrix-specific
+		// glue, not a generic MCP architecture pattern) — no shared admin
+		// secret is required. Channels with none of those set operate
 		// identically to before — the MCPStore arg is nil-safe inside the
 		// factory.
 		instanceLoader.RegisterFactory(channels.TypeBitrix24, bitrix24.FactoryWithPortalStoreAndMCP(pgStores.BitrixPortals, pgStores.MCP, bitrixEncKey))
@@ -652,7 +650,7 @@ func runGateway() {
 	registerConfigChannels(cfg, channelMgr, msgBus, pgStores, instanceLoader, audioMgr)
 
 	// Register channels/instances/links/teams RPC methods
-	chInstancesM := wireChannelRPCMethods(server, pgStores, channelMgr, agentRouter, msgBus, workspace)
+	chInstancesM := wireChannelRPCMethods(server, pgStores, channelMgr, instanceLoader, agentRouter, msgBus, cfg, workspace)
 
 	// Bitrix24 orphan-bot cleaner. Fires from channel_instances delete handler
 	// when the channel is no longer loaded in the Manager (typical scenario:
@@ -744,14 +742,6 @@ func runGateway() {
 	// API key management RPC
 	if pgStores.APIKeys != nil {
 		methods.NewAPIKeysMethods(pgStores.APIKeys).Register(server.Router())
-	}
-
-	// Identity: departments + project members RPC
-	if pgStores.Departments != nil {
-		methods.NewDepartmentsMethods(pgStores.Departments).Register(server.Router())
-	}
-	if pgStores.ProjectMembers != nil {
-		methods.NewProjectMembersMethods(pgStores.ProjectMembers).Register(server.Router())
 	}
 
 	// Tenant management RPC + HTTP

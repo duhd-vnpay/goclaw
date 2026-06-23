@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	qrcode "github.com/skip2/go-qrcode"
+	wastore "go.mau.fi/whatsmeow/store"
 
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway"
@@ -28,11 +30,16 @@ type cancelEntry struct {
 type QRMethods struct {
 	instanceStore  store.ChannelInstanceStore
 	manager        *channels.Manager
+	loader         *channels.InstanceLoader
 	activeSessions sync.Map // instanceID (string) -> *cancelEntry
 }
 
-func NewQRMethods(instanceStore store.ChannelInstanceStore, manager *channels.Manager) *QRMethods {
-	return &QRMethods{instanceStore: instanceStore, manager: manager}
+func NewQRMethods(instanceStore store.ChannelInstanceStore, manager *channels.Manager, loader ...*channels.InstanceLoader) *QRMethods {
+	m := &QRMethods{instanceStore: instanceStore, manager: manager}
+	if len(loader) > 0 {
+		m.loader = loader[0]
+	}
+	return m
 }
 
 func (m *QRMethods) Register(router *gateway.MethodRouter) {
@@ -73,14 +80,23 @@ func (m *QRMethods) handleQRStart(ctx context.Context, client *gateway.Client, r
 	// ACK immediately — QR/done events arrive asynchronously.
 	client.SendResponse(goclawprotocol.NewOKResponse(req.ID, map[string]any{"status": "started"}))
 
-	go m.runQRSession(qrCtx, entry, client, params.InstanceID, inst.Name, params.ForceReauth)
+	go m.runQRSession(qrCtx, entry, client, instID, params.InstanceID, inst.Name, params.ForceReauth)
 }
 
 func (m *QRMethods) runQRSession(ctx context.Context, entry *cancelEntry,
-	client *gateway.Client, instanceIDStr, channelName string, forceReauth bool) {
+	client *gateway.Client, instanceID uuid.UUID, instanceIDStr, channelName string, forceReauth bool) {
 
 	defer entry.cancel()
 	defer m.activeSessions.CompareAndDelete(instanceIDStr, entry)
+
+	if m.loader != nil {
+		// Channel Start stores its context for long-lived WhatsApp work; keep tenant values
+		// from the request without tying the channel lifetime to this QR session timeout.
+		loadCtx := context.WithoutCancel(ctx)
+		if err := m.loader.LoadInstanceByID(loadCtx, instanceID); err != nil {
+			slog.Warn("whatsapp QR: targeted channel load failed", "instance", instanceIDStr, "channel", channelName, "error", err)
+		}
+	}
 
 	// Wait for channel to appear in manager — instance creation triggers an async
 	// reload, so the channel may not be registered yet when the wizard fires QR start.
@@ -113,6 +129,9 @@ func (m *QRMethods) runQRSession(ctx context.Context, entry *cancelEntry,
 
 	// Already authenticated and no force-reauth → signal connected.
 	if wa.IsAuthenticated() && !forceReauth {
+		if err := m.persistDeviceJID(ctx, instanceID, wa); err != nil {
+			slog.Warn("whatsapp QR: persist device JID failed", "instance", instanceIDStr, "error", err)
+		}
 		client.SendEvent(goclawprotocol.EventFrame{
 			Type:  goclawprotocol.FrameTypeEvent,
 			Event: goclawprotocol.EventWhatsAppQRDone,
@@ -154,7 +173,7 @@ func (m *QRMethods) runQRSession(ctx context.Context, entry *cancelEntry,
 			Payload: map[string]any{
 				"instance_id": instanceIDStr,
 				"success":     false,
-				"error":       err.Error(),
+				"error":       qrStartUserMessage(err),
 			},
 		})
 		return
@@ -162,6 +181,9 @@ func (m *QRMethods) runQRSession(ctx context.Context, entry *cancelEntry,
 
 	if qrChan == nil {
 		// Already authenticated (StartQRFlow returned nil).
+		if err := m.persistDeviceJID(ctx, instanceID, wa); err != nil {
+			slog.Warn("whatsapp QR: persist device JID failed", "instance", instanceIDStr, "error", err)
+		}
 		client.SendEvent(goclawprotocol.EventFrame{
 			Type:  goclawprotocol.FrameTypeEvent,
 			Event: goclawprotocol.EventWhatsAppQRDone,
@@ -215,6 +237,9 @@ func (m *QRMethods) runQRSession(ctx context.Context, entry *cancelEntry,
 				})
 
 			case "success":
+				if err := m.persistDeviceJID(ctx, instanceID, wa); err != nil {
+					slog.Warn("whatsapp QR: persist device JID failed", "instance", instanceIDStr, "error", err)
+				}
 				client.SendEvent(goclawprotocol.EventFrame{
 					Type:  goclawprotocol.FrameTypeEvent,
 					Event: goclawprotocol.EventWhatsAppQRDone,
@@ -240,4 +265,30 @@ func (m *QRMethods) runQRSession(ctx context.Context, entry *cancelEntry,
 			}
 		}
 	}
+}
+
+func qrStartUserMessage(err error) string {
+	if errors.Is(err, wastore.ErrDeviceDeleted) {
+		return "WhatsApp login data was unlinked or deleted before QR login could start. Wait a few seconds for the channel list to refresh, then start QR login again. If it still fails, delete this channel and create it again before scanning the QR code."
+	}
+	return err.Error()
+}
+
+func (m *QRMethods) persistDeviceJID(ctx context.Context, instanceID uuid.UUID, wa *Channel) error {
+	if m.instanceStore == nil || wa == nil {
+		return nil
+	}
+	jid := wa.currentDeviceJID()
+	if jid.IsEmpty() {
+		return nil
+	}
+	if err := m.instanceStore.Update(context.WithoutCancel(ctx), instanceID, map[string]any{
+		"credentials": map[string]any{
+			"device_jid": jid.String(),
+		},
+	}); err != nil {
+		return err
+	}
+	wa.setDeviceJID(jid)
+	return nil
 }

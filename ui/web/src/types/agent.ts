@@ -13,6 +13,7 @@ export interface ToolPolicyConfig {
     max_ms?: number;
   };
   toolCallPrefix?: string; // prefix to strip from model's tool call names
+  rate_limit_per_hour?: number; // per-agent tool calls/hour (0 = use global)
 }
 
 export interface SubagentsConfig {
@@ -28,6 +29,7 @@ export interface CompactionConfig {
   reserveTokensFloor?: number;
   maxHistoryShare?: number;
   keepLastMessages?: number;
+  timeoutSeconds?: number;
   memoryFlush?: {
     enabled?: boolean;
     softThresholdTokens?: number;
@@ -50,6 +52,24 @@ export interface ContextPruningConfig {
     enabled?: boolean;
     placeholder?: string;
   };
+}
+
+export interface DeliveryGeneratorConfig {
+  enabled?: boolean;
+  mode?: "sidecar_generated" | "llm_generated" | "fixed_template" | "off";
+  provider?: string;
+  model?: string;
+  timeout_ms?: number;
+  max_tokens?: number;
+  max_chars?: number;
+  min_delay_ms?: number;
+  templates?: string[];
+}
+
+export interface DeliveryBehaviorConfig {
+  enabled?: boolean;
+  intermediate_replies?: DeliveryGeneratorConfig;
+  quick_ack?: DeliveryGeneratorConfig;
 }
 
 export interface SandboxConfig {
@@ -194,6 +214,15 @@ export interface AgentData {
   other_config?: Record<string, unknown> | null;
   budget_monthly_cents?: number | null;
   tenant_id?: string;
+  grant_gateway_operator_access?: boolean;
+  gateway_operator_bootstrap?: GatewayOperatorBootstrapResult | null;
+}
+
+export interface GatewayOperatorBootstrapResult {
+  status: "granted" | "warning" | "skipped" | string;
+  binary_id?: string;
+  grant_id?: string;
+  warning?: string;
 }
 
 export interface AgentShareData {

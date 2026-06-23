@@ -36,10 +36,9 @@ type CronJob struct {
 	DeliverChannel string       `json:"deliverChannel" db:"deliver_channel"`
 	DeliverTo      string       `json:"deliverTo" db:"deliver_to"`
 	WakeHeartbeat  bool         `json:"wakeHeartbeat" db:"wake_heartbeat"`
-	// TimeoutMS overrides cfg.Cron.JobTimeoutDuration() for this specific job.
-	// NULL/zero means "use config default". Useful for long-running orchestrator
-	// agents that should fail fast instead of consuming the full retry budget.
-	TimeoutMS *int64 `json:"timeoutMs,omitempty" db:"timeout_ms"`
+	ProviderID     *uuid.UUID   `json:"providerId,omitempty" db:"provider_id"`
+	Model          *string      `json:"model,omitempty" db:"model"`
+	TimeoutMS      *int64       `json:"timeoutMs,omitempty" db:"timeout_ms"`
 }
 
 // CronSchedule defines when a job should run.
@@ -130,6 +129,8 @@ type CronJobPatch struct {
 	DeliverChannel *string       `json:"deliverChannel,omitempty" db:"-"`
 	DeliverTo      *string       `json:"deliverTo,omitempty" db:"-"`
 	WakeHeartbeat  *bool         `json:"wakeHeartbeat,omitempty" db:"-"`
+	ProviderID     *uuid.UUID    `json:"providerId,omitempty" db:"-"`
+	Model          *string       `json:"model,omitempty" db:"-"`
 }
 
 // CronEvent represents a job lifecycle event sent to subscribers.

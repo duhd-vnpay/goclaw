@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
+	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
@@ -61,16 +62,17 @@ type Channel struct {
 	//
 	// mcpStore comes from the MCP-aware factory variant; mcpClient is
 	// built at Start() iff config has mcp_server_name + mcp_base_url and
-	// the named mcp_servers row exists. Path B: the MCP server
-	// authenticates each onboard call via the caller-supplied Bitrix
-	// access_token — no shared admin secret is required. mcpServerID is
+	// the named mcp_servers row exists. Bitrix24 OAuth → existing
+	// mcp_user_credentials bridge: the MCP server authenticates each
+	// onboard call via the caller-supplied Bitrix access_token — no
+	// shared admin secret is required. mcpServerID is
 	// resolved once at Start() via mcpStore.GetServerByName and then
 	// cached — avoids looking up the server on every inbound message.
-	mcpStore     store.MCPServerStore
-	mcpClient    *mcpClient
-	mcpServerID  uuid.UUID
-	mcpProvMu    sync.Mutex
-	mcpDebounce  map[mcpDebounceKey]time.Time
+	mcpStore    store.MCPServerStore
+	mcpClient   *mcpClient
+	mcpServerID uuid.UUID
+	mcpProvMu   sync.Mutex
+	mcpDebounce map[mcpDebounceKey]time.Time
 
 	// User-facing degradation notice state. When provisionIfMissing fails
 	// in an UNEXPECTED way (HTTP failure, persist failure, not one of the
@@ -119,6 +121,12 @@ func (c *Channel) PortalName() string { return c.cfg.Portal }
 
 // Config returns a copy of the instance config. Exported for tests.
 func (c *Channel) Config() bitrixInstanceConfig { return c.cfg }
+
+// BlockReplyEnabled returns the per-channel block_reply override (nil = inherit gateway default).
+func (c *Channel) BlockReplyEnabled() *bool { return c.cfg.BlockReply }
+
+// ChatBehaviorConfig returns the per-channel chat_behavior override.
+func (c *Channel) ChatBehaviorConfig() *config.ChatBehaviorConfig { return c.cfg.ChatBehavior }
 
 // IsOpenChannelBot reports whether this channel was registered as a Bitrix24
 // Open Channel bot (TYPE "O"), i.e. a customer-facing bot attached to an

@@ -110,11 +110,7 @@ func (s *PGMemoryStore) PutDocument(ctx context.Context, agentID, userID, path, 
 	}
 
 	// Project-scoped memory: include project_id when set.
-	pid := store.MemoryProjectID(ctx)
 	var pidPtr *uuid.UUID
-	if pid != uuid.Nil {
-		pidPtr = &pid
-	}
 
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO memory_documents (id, agent_id, user_id, path, content, hash, tenant_id, project_id, updated_at)
@@ -393,11 +389,7 @@ func (s *PGMemoryStore) IndexDocument(ctx context.Context, agentID, userID, path
 	// Insert chunks
 	tid := tenantIDForInsert(ctx)
 	// Project-scoped memory: propagate project_id to chunks.
-	pid := store.MemoryProjectID(ctx)
 	var pidPtr *uuid.UUID
-	if pid != uuid.Nil {
-		pidPtr = &pid
-	}
 	for i, tc := range chunks {
 		hash := memory.ContentHash(tc.Text)
 		chunkID := uuid.Must(uuid.NewV7())

@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
-	harnessConstraints "github.com/nextlevelbuilder/goclaw/internal/harness/constraints"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
@@ -130,6 +129,9 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 	if l.agentToolPolicy != nil && l.agentToolPolicy.Wait != nil {
 		waitToolCfg = l.agentToolPolicy.Wait
 		ctx = tools.WithWaitToolConfig(ctx, waitToolCfg)
+	}
+	if l.agentToolPolicy != nil && l.agentToolPolicy.RateLimitPerHour > 0 {
+		ctx = tools.WithToolRateLimitOverride(ctx, l.agentToolPolicy.RateLimitPerHour)
 	}
 	if l.sandboxCfg != nil {
 		ctx = tools.WithSandboxConfig(ctx, l.sandboxCfg)
@@ -358,28 +360,6 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 		}
 	}
 
-	// Harness L1: run BeforeRun guards (superset of InputGuard — additional constraints).
-	if l.harness != nil && l.harness.Enabled() {
-		guardCtx := harnessConstraints.GuardContext{
-			AgentID:   l.agentUUID.String(),
-			AgentKey:  l.id,
-			UserID:    req.UserID,
-			SessionID: req.SessionKey,
-			TenantID:  l.tenantID.String(),
-		}
-		for _, r := range l.harness.Guards().RunPhase(harnessConstraints.BeforeRun, guardCtx) {
-			if r.Action == "block" {
-				slog.Warn("harness.guard_blocked",
-					"agent", l.id, "guard", r.GuardName, "feedback", r.Feedback)
-				return contextSetupResult{}, fmt.Errorf("harness guard blocked: %s — %s", r.GuardName, r.Feedback)
-			}
-			if r.Action == "warn" {
-				slog.Warn("harness.guard_warning",
-					"agent", l.id, "guard", r.GuardName, "feedback", r.Feedback)
-			}
-		}
-	}
-
 	// Inject agent key into context for tool-level resolution (multiple agents share tool registry)
 	ctx = tools.WithToolAgentKey(ctx, l.id)
 
@@ -418,6 +398,8 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 		AgentKey:            l.id,
 		TenantID:            l.tenantID,
 		UserID:              req.UserID,
+		RunID:               req.RunID,
+		SessionKey:          req.SessionKey,
 		CredentialUserID:    credUserID,
 		AgentType:           l.agentType,
 		SenderID:            req.SenderID,
@@ -428,6 +410,7 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 		SharedContext:       store.IsSharedContext(ctx),
 		RestrictToWorkspace: l.restrictToWs != nil && *l.restrictToWs,
 		BuiltinToolSettings: l.builtinToolSettings,
+		Channel:             req.Channel,
 		ChannelType:         req.ChannelType,
 		SubagentsCfg:        l.subagentsCfg,
 		ParentModel:         l.model,

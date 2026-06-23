@@ -95,6 +95,121 @@ func TestProvidersHandlerRegisterInMemoryUsesDBNameForAnthropic(t *testing.T) {
 	}
 }
 
+func TestProvidersHandlerRegisterInMemoryMiniMaxUsesM3Default(t *testing.T) {
+	providerReg := providers.NewRegistry(nil)
+	handler := NewProvidersHandler(newMockProviderStore(), newMockSecretsStore(), providerReg, "")
+
+	provider := &store.LLMProviderData{
+		BaseModel:    store.BaseModel{ID: uuid.New()},
+		TenantID:     uuid.New(),
+		Name:         "minimax",
+		ProviderType: store.ProviderMiniMax,
+		APIKey:       "token",
+		Enabled:      true,
+	}
+
+	handler.registerInMemory(provider)
+
+	runtimeProvider, err := providerReg.GetForTenant(provider.TenantID, provider.Name)
+	if err != nil {
+		t.Fatalf("GetForTenant() error = %v", err)
+	}
+	if got := runtimeProvider.DefaultModel(); got != "MiniMax-M3" {
+		t.Fatalf("DefaultModel() = %q, want MiniMax-M3", got)
+	}
+	openai, ok := runtimeProvider.(*providers.OpenAIProvider)
+	if !ok {
+		t.Fatalf("runtime provider = %T, want *providers.OpenAIProvider", runtimeProvider)
+	}
+	if got := openai.APIBase(); got != "https://api.minimax.io/v1" {
+		t.Fatalf("APIBase() = %q, want MiniMax default base", got)
+	}
+}
+
+func TestProvidersHandlerRegisterInMemoryMiniMaxUsesOpenAIChatCompletionsPath(t *testing.T) {
+	var capturedPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{
+					"message":       map[string]string{"content": "ok"},
+					"finish_reason": "stop",
+				},
+			},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+
+	providerReg := providers.NewRegistry(nil)
+	handler := NewProvidersHandler(newMockProviderStore(), newMockSecretsStore(), providerReg, "")
+	provider := &store.LLMProviderData{
+		BaseModel:    store.BaseModel{ID: uuid.New()},
+		TenantID:     uuid.New(),
+		Name:         "minimax",
+		ProviderType: store.ProviderMiniMax,
+		APIBase:      upstream.URL,
+		APIKey:       "token",
+		Enabled:      true,
+	}
+
+	handler.registerInMemory(provider)
+
+	runtimeProvider, err := providerReg.GetForTenant(provider.TenantID, provider.Name)
+	if err != nil {
+		t.Fatalf("GetForTenant() error = %v", err)
+	}
+	_, err = runtimeProvider.Chat(context.Background(), providers.ChatRequest{
+		Messages: []providers.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if capturedPath != "/chat/completions" {
+		t.Fatalf("captured path = %q, want /chat/completions", capturedPath)
+	}
+}
+
+func TestProvidersHandlerRegisterInMemoryZaiUsesGLM52Default(t *testing.T) {
+	for _, tt := range []struct {
+		providerType string
+		wantBase     string
+	}{
+		{providerType: store.ProviderZai, wantBase: "https://api.z.ai/api/paas/v4"},
+		{providerType: store.ProviderZaiCoding, wantBase: "https://api.z.ai/api/coding/paas/v4"},
+	} {
+		t.Run(tt.providerType, func(t *testing.T) {
+			providerReg := providers.NewRegistry(nil)
+			handler := NewProvidersHandler(newMockProviderStore(), newMockSecretsStore(), providerReg, "")
+			provider := &store.LLMProviderData{
+				BaseModel:    store.BaseModel{ID: uuid.New()},
+				TenantID:     uuid.New(),
+				Name:         tt.providerType,
+				ProviderType: tt.providerType,
+				APIKey:       "token",
+				Enabled:      true,
+			}
+
+			handler.registerInMemory(provider)
+
+			runtimeProvider, err := providerReg.GetForTenant(provider.TenantID, provider.Name)
+			if err != nil {
+				t.Fatalf("GetForTenant() error = %v", err)
+			}
+			if got := runtimeProvider.DefaultModel(); got != "glm-5.2" {
+				t.Fatalf("DefaultModel() = %q, want glm-5.2", got)
+			}
+			openai, ok := runtimeProvider.(*providers.OpenAIProvider)
+			if !ok {
+				t.Fatalf("runtime provider = %T, want *providers.OpenAIProvider", runtimeProvider)
+			}
+			if got := openai.APIBase(); got != tt.wantBase {
+				t.Fatalf("APIBase() = %q, want %q", got, tt.wantBase)
+			}
+		})
+	}
+}
+
 // TestProvidersHandlerRegisterInMemoryUsesDBNameForClaudeCLI mirrors the Anthropic guard for Claude CLI.
 // Custom-named CLI providers must be registered under their DB name to be locatable via verify.
 func TestProvidersHandlerRegisterInMemoryUsesDBNameForClaudeCLI(t *testing.T) {
@@ -201,6 +316,74 @@ func TestProvidersHandlerRegisterInMemoryAnthropicUsesModelRegistry(t *testing.T
 	}
 }
 
+func TestProvidersHandlerRegisterInMemoryDashScopeProxyKeepsCacheDetection(t *testing.T) {
+	providerReg := providers.NewRegistry(nil)
+	handler := NewProvidersHandler(newMockProviderStore(), newMockSecretsStore(), providerReg, "")
+
+	provider := &store.LLMProviderData{
+		BaseModel:    store.BaseModel{ID: uuid.New()},
+		TenantID:     uuid.New(),
+		Name:         "qwen-richard",
+		ProviderType: store.ProviderDashScope,
+		APIBase:      "https://proxy.internal/v1",
+		APIKey:       "sk-test",
+		Enabled:      true,
+	}
+
+	handler.registerInMemory(provider)
+
+	got, err := providerReg.GetForTenant(provider.TenantID, provider.Name)
+	if err != nil {
+		t.Fatalf("GetForTenant() error = %v", err)
+	}
+	assertRuntimeProviderWrapsDashScopeSystem(t, got, "qwen3.6-plus")
+}
+
+func TestProvidersHandlerRegisterInMemoryBailianProxyKeepsCacheDetection(t *testing.T) {
+	providerReg := providers.NewRegistry(nil)
+	handler := NewProvidersHandler(newMockProviderStore(), newMockSecretsStore(), providerReg, "")
+
+	provider := &store.LLMProviderData{
+		BaseModel:    store.BaseModel{ID: uuid.New()},
+		TenantID:     uuid.New(),
+		Name:         "qwen-richard",
+		ProviderType: store.ProviderBailian,
+		APIBase:      "https://proxy.internal/v1",
+		APIKey:       "sk-test",
+		Enabled:      true,
+	}
+
+	handler.registerInMemory(provider)
+
+	got, err := providerReg.GetForTenant(provider.TenantID, provider.Name)
+	if err != nil {
+		t.Fatalf("GetForTenant() error = %v", err)
+	}
+	assertRuntimeProviderWrapsDashScopeSystem(t, got, "qwen3.6-plus")
+}
+
+func assertRuntimeProviderWrapsDashScopeSystem(t *testing.T, runtimeProvider providers.Provider, model string) {
+	t.Helper()
+
+	bodyBuilder, ok := runtimeProvider.(interface {
+		BuildRequestBodyForTest(string, providers.ChatRequest, bool) map[string]any
+	})
+	if !ok {
+		t.Fatalf("runtime provider = %T, want BuildRequestBodyForTest", runtimeProvider)
+	}
+
+	body := bodyBuilder.BuildRequestBodyForTest(model, providers.ChatRequest{
+		Messages: []providers.Message{
+			{Role: "system", Content: "Stable prefix\n" + providers.CacheBoundaryMarker + "\nDynamic suffix"},
+			{Role: "user", Content: "Hi"},
+		},
+	}, false)
+	msgs := body["messages"].([]map[string]any)
+	if _, ok := msgs[0]["content"].([]map[string]any); !ok {
+		t.Fatalf("system content = %T, want DashScope cache blocks", msgs[0]["content"])
+	}
+}
+
 // writeFakeClaudeBinary creates an executable stub in a temp dir so exec.LookPath resolves it.
 // Returns the absolute path suitable for use as APIBase on a Claude CLI provider record.
 func writeFakeClaudeBinary(t *testing.T) string {
@@ -295,6 +478,79 @@ func TestProvidersHandlerCreateAllows1536EmbeddingDimensions(t *testing.T) {
 	}
 	if len(providerStore.providers) != 1 {
 		t.Fatalf("provider count = %d, want 1", len(providerStore.providers))
+	}
+}
+
+func TestProvidersHandlerCreateAllowsClaudeCLIExecutablePath(t *testing.T) {
+	token := setupProvidersAdminToken(t)
+	providerStore := newMockProviderStore()
+	handler := NewProvidersHandler(providerStore, newMockSecretsStore(), nil, "")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	body := map[string]any{
+		"name":          "claude-local",
+		"provider_type": store.ProviderClaudeCLI,
+		"api_base":      writeFakeClaudeBinary(t),
+		"enabled":       true,
+	}
+	rawBody, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/providers", bytes.NewReader(rawBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status code = %d, want %d, body=%s", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if got := providerStore.providers["claude-local"].APIBase; got == "" || !filepath.IsAbs(got) {
+		t.Fatalf("stored Claude CLI api_base = %q, want absolute executable path", got)
+	}
+}
+
+func TestProvidersHandlerUpdateAllowsClaudeCLIExecutablePath(t *testing.T) {
+	token := setupProvidersAdminToken(t)
+	providerStore := newMockProviderStore()
+	provider := &store.LLMProviderData{
+		BaseModel:    store.BaseModel{ID: uuid.New()},
+		Name:         "claude-local",
+		ProviderType: store.ProviderClaudeCLI,
+		APIBase:      "claude",
+		Enabled:      true,
+	}
+	if err := providerStore.CreateProvider(context.Background(), provider); err != nil {
+		t.Fatalf("CreateProvider() error = %v", err)
+	}
+
+	handler := NewProvidersHandler(providerStore, newMockSecretsStore(), nil, "")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	nextPath := writeFakeClaudeBinary(t)
+	body := map[string]any{"api_base": nextPath}
+	rawBody, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/v1/providers/"+provider.ID.String(), bytes.NewReader(rawBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d, body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	current, err := providerStore.GetProvider(context.Background(), provider.ID)
+	if err != nil {
+		t.Fatalf("GetProvider() error = %v", err)
+	}
+	if current.APIBase != nextPath {
+		t.Fatalf("api_base = %q, want %q", current.APIBase, nextPath)
 	}
 }
 

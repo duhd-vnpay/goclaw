@@ -53,7 +53,7 @@ var toolProfiles = map[string][]string{
 }
 
 // Legacy tool aliases — migrated to Registry.RegisterAlias() at startup.
-// Kept as seed data only; resolveAlias() is no longer used.
+// resolveAlias() is used by IsDenied to expand names before deny-spec matching.
 var legacyToolAliases = map[string]string{
 	"bash":           "exec",
 	"apply-patch":    "apply_patch",
@@ -488,21 +488,56 @@ func unionWithSpec(reg *Registry, current []string, allTools []string, spec []st
 	return current
 }
 
-// IsDenied checks if a tool name is explicitly denied by global or agent policy.
-// Used to prevent lazy-activated deferred tools from bypassing the deny list.
-func (pe *PolicyEngine) IsDenied(name string, agentPolicy *config.ToolPolicySpec) bool {
-	pe.mu.RLock()
-	reg := pe.registry
-	pe.mu.RUnlock()
-
-	if pe.globalPolicy != nil {
-		if matchDenySpec(reg, name, pe.globalPolicy.Deny) {
+// WouldAllow checks whether a tool name would pass the full policy pipeline
+// (profile → allow → deny → alsoAllow) if it were present in the registry.
+// Used to filter per-user tools (e.g. per-user MCP tools) that intentionally
+// bypass registration in the shared registry to prevent credential leaks, but
+// still need to respect the agent's tool policy.
+//
+// It works by running evaluate() with just [name] as the available set.
+// With a "full" profile and no allow restrictions, the name survives.
+// With a restrictive allow list that excludes MCP tools, it's removed.
+// With a deny containing group:mcp, MatchDenySpec removes it from the set.
+func (pe *PolicyEngine) WouldAllow(name, providerName string, agentPolicy *config.ToolPolicySpec, groupAllow []string) bool {
+	allowed := pe.evaluate([]string{name}, providerName, agentPolicy, groupAllow)
+	for _, a := range allowed {
+		if a == name {
 			return true
 		}
 	}
+	return false
+}
+
+// IsDenied checks if a tool name is explicitly denied by global or agent policy.
+// Used to prevent lazy-activated deferred tools from bypassing the deny list.
+// Checks under all candidate names: the raw name, the legacy alias (e.g. bash→exec),
+// and the registry alias when available.
+func (pe *PolicyEngine) IsDenied(name string, agentPolicy *config.ToolPolicySpec) bool {
+	candidates := map[string]struct{}{name: {}}
+	// Keep legacy alias compatibility (e.g. bash -> exec).
+	candidates[resolveAlias(name)] = struct{}{}
+	// Include registry alias mapping when available.
+	pe.mu.RLock()
+	reg := pe.registry
+	pe.mu.RUnlock()
+	if reg != nil {
+		if canonical, ok := reg.Aliases()[name]; ok && canonical != "" {
+			candidates[canonical] = struct{}{}
+		}
+	}
+
+	if pe.globalPolicy != nil {
+		for candidate := range candidates {
+			if matchDenySpec(reg, candidate, pe.globalPolicy.Deny) {
+				return true
+			}
+		}
+	}
 	if agentPolicy != nil {
-		if matchDenySpec(reg, name, agentPolicy.Deny) {
-			return true
+		for candidate := range candidates {
+			if matchDenySpec(reg, candidate, agentPolicy.Deny) {
+				return true
+			}
 		}
 	}
 	return false

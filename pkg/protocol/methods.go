@@ -27,11 +27,12 @@ const (
 	MethodAgentsFileSet  = "agents.files.set"
 
 	// Config
-	MethodConfigGet      = "config.get"
-	MethodConfigApply    = "config.apply"
-	MethodConfigPatch    = "config.patch"
-	MethodConfigSchema   = "config.schema"
-	MethodConfigDefaults = "config.defaults"
+	MethodConfigGet           = "config.get"
+	MethodConfigApply         = "config.apply"
+	MethodConfigPatch         = "config.patch"
+	MethodConfigSchema        = "config.schema"
+	MethodConfigDefaults      = "config.defaults"
+	MethodChatBehaviorPreview = "chat_behavior.preview"
 
 	// Sessions
 	MethodSessionsList    = "sessions.list"
@@ -40,6 +41,7 @@ const (
 	MethodSessionsDelete  = "sessions.delete"
 	MethodSessionsReset   = "sessions.reset"
 	MethodSessionsCompact = "sessions.compact"
+	MethodRunTimelineGet  = "run.timeline.get"
 
 	// System
 	MethodConnect = "connect"

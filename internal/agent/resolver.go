@@ -12,9 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
-	"github.com/nextlevelbuilder/goclaw/internal/eventbus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
-	"github.com/nextlevelbuilder/goclaw/internal/harness"
+	"github.com/nextlevelbuilder/goclaw/internal/eventbus"
 	"github.com/nextlevelbuilder/goclaw/internal/hooks"
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
@@ -85,9 +84,14 @@ type ResolverDeps struct {
 	// MCP grant checker — for runtime grant verification at BridgeTool.Execute
 	MCPGrantChecker mcpbridge.GrantChecker
 
+	// MCP OAuth token provider — injects Bearer tokens for OAuth-enabled MCP servers
+	MCPOAuthTokenProvider mcpbridge.OAuthTokenProvider
+
 	// Skill access store — for per-agent skill visibility filtering
-	SkillAccessStore   store.SkillAccessStore
-	SkillSlashCommands config.SkillSlashCommandConfig
+	SkillAccessStore    store.SkillAccessStore
+	SkillStore          store.SkillStore
+	SkillEvolutionStore store.SkillEvolutionStore
+	SkillSlashCommands  config.SkillSlashCommandConfig
 
 	// Config permission store for group file writer checks
 	ConfigPermStore store.ConfigPermissionStore
@@ -101,9 +105,16 @@ type ResolverDeps struct {
 	// Tracing store for budget enforcement queries
 	TracingStore store.TracingStore
 	UsageCaps    *usagecaps.Service
+	UsageEvents  store.UsageEventStore
 
 	// Memory store for extractive memory fallback
 	MemoryStore store.MemoryStore
+
+	// V3 evolution metrics store
+	EvolutionMetricsStore store.EvolutionMetricsStore
+
+	// Contact store for user identity resolution (channel contacts → tenant users)
+	ContactStore store.ContactStore
 
 	// Tenant store for workspace path resolution
 	TenantStore store.TenantStore
@@ -118,9 +129,6 @@ type ResolverDeps struct {
 	// Global workspace root (GOCLAW_WORKSPACE)
 	Workspace string
 
-	// Harness layer manager (nil = harness disabled)
-	Harness *harness.Manager
-
 	// TTS auto mode from config: "off", "always", "inbound", "tagged"
 	TTSAutoMode string
 
@@ -130,12 +138,6 @@ type ResolverDeps struct {
 	// V3 domain event bus for consolidation pipeline (nil = disabled)
 	DomainBus eventbus.DomainEventBus
 
-	// Evolution metrics store for auto-injector (nil = disabled)
-	EvolutionMetricsStore store.EvolutionMetricsStore
-
-	// Contact store for user identity resolution (nil = no credential merging)
-	ContactStore store.ContactStore
-
 	// HookDispatcher fires lifecycle hook events (Issue #875). Nil = noop.
 	HookDispatcher hooks.Dispatcher
 
@@ -143,9 +145,8 @@ type ResolverDeps struct {
 	OnTextUploaded func(ctx context.Context, path, content string)
 }
 
-// ResolveOpts carries optional parameters for agent resolution.
-// Upstream v3.2.0 adds ProjectID + ProjectOverrides for MCP project scoping;
-// kept as a struct so the ResolverFunc signature is forward-compatible.
+// ResolveOpts retained as stub for v3.15.0-beta.27 merge (project-as-channel dropped).
+// Type kept so ResolverFunc signature remains forward-compatible; fields unused.
 type ResolveOpts struct {
 	ProjectID        string
 	ProjectOverrides map[string]map[string]string
@@ -254,10 +255,6 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 		if maxIter <= 0 {
 			maxIter = config.DefaultMaxIterations
 		}
-		maxTokens := ag.ParseMaxTokens()
-		if maxTokens <= 0 {
-			maxTokens = 8192
-		}
 
 		// Per-agent config overrides (fallback to global defaults from config.json)
 		compactionCfg := deps.CompactionCfg
@@ -331,6 +328,9 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			}
 			if deps.MCPGrantChecker != nil {
 				mcpOpts = append(mcpOpts, mcpbridge.WithGrantChecker(deps.MCPGrantChecker))
+			}
+			if deps.MCPOAuthTokenProvider != nil {
+				mcpOpts = append(mcpOpts, mcpbridge.WithOAuthTokenProvider(deps.MCPOAuthTokenProvider))
 			}
 			mcpMgr := mcpbridge.NewManager(toolsReg, mcpOpts...)
 			if err := mcpMgr.LoadForAgent(ctx, ag.ID, ""); err != nil {
@@ -448,20 +448,51 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			dataDir = config.TenantDataDir(deps.DataDir, ag.TenantID, tenantSlug)
 		}
 
+		// v3 feature flags (from other_config JSONB).
+		// NOTE: flags are immutable per-Loop — changes via admin API take effect on next session only.
+		// In-flight loops continue with the flags set at creation. This is by design:
+		// CacheKindAgent invalidation destroys the old Loop, and the next request creates a new one.
+		v3f := ag.ParseV3Flags()
+
+		// v3 orchestration mode: resolve from team membership + agent links
+		orchMode := ResolveOrchestrationMode(ctx, ag.ID, deps.TeamStore, deps.AgentLinkStore)
+
+		// Populate delegation targets for prompt injection (only when mode >= delegate).
+		var delegateTargets []DelegateTargetEntry
+		if orchMode != ModeSpawn && deps.AgentLinkStore != nil {
+			if links, err := deps.AgentLinkStore.DelegateTargets(ctx, ag.ID); err == nil {
+				for _, link := range links {
+					delegateTargets = append(delegateTargets, DelegateTargetEntry{
+						AgentKey:    link.TargetAgentKey,
+						DisplayName: link.TargetDisplayName,
+						Description: link.Description,
+					})
+				}
+			}
+		}
+
+		// v3 evolution metrics: only wire store when feature flag enabled
+		var evoMetricsStore store.EvolutionMetricsStore
+		if v3f.EvolutionMetrics && deps.EvolutionMetricsStore != nil {
+			evoMetricsStore = deps.EvolutionMetricsStore
+		}
+
 		restrictVal := true // always restrict agents to their workspace
 		loop := NewLoop(LoopConfig{
 			ID:                     ag.AgentKey,
+			DisplayName:            ag.DisplayName,
 			AgentUUID:              ag.ID,
 			TenantID:               ag.TenantID,
 			AgentOtherConfig:       ag.OtherConfig,
 			AgentType:              ag.AgentType,
 			IsTeamLead:             isTeamLead,
+			AutoInjector:           deps.AutoInjector,
 			Provider:               provider,
 			Model:                  ag.Model,
 			ModelRegistry:          deps.ModelRegistry,
 			ContextWindow:          contextWindow,
+			MaxTokens:              ag.ParseMaxTokens(),
 			MaxIterations:          maxIter,
-			MaxTokens:              maxTokens,
 			Workspace:              workspace,
 			DataDir:                dataDir,
 			RestrictToWs:           &restrictVal,
@@ -501,6 +532,8 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			SystemConfigs:          deps.SystemConfigs,
 			DisabledTools:          disabledTools,
 			ReasoningConfig:        store.ResolveEffectiveReasoningConfig(providerReasoningDefaults, ag.ParseReasoningConfig()),
+			PromptMode:             PromptMode(ag.ParsePromptMode()),
+			PinnedSkills:           ag.ParsePinnedSkills(),
 			SelfEvolve:             ag.ParseSelfEvolve(),
 			AllowImageGeneration:   ag.ParseAllowImageGeneration(),
 			TTSAutoMode:            deps.TTSAutoMode,
@@ -517,17 +550,19 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			BudgetMonthlyCents:     derefInt(ag.BudgetMonthlyCents),
 			TracingStore:           deps.TracingStore,
 			UsageCaps:              deps.UsageCaps,
+			UsageEvents:            deps.UsageEvents,
 			MemoryStore:            deps.MemoryStore,
 			MCPStore:               deps.MCPStore,
 			MCPPool:                deps.MCPPool,
 			MCPUserCredSrvs:        mcpUserCredSrvs,
 			MCPGrantChecker:        deps.MCPGrantChecker,
-			Harness:                deps.Harness,
-			AutoInjector:           deps.AutoInjector,
+			MCPOAuthTokenProvider:  deps.MCPOAuthTokenProvider,
+			OrchMode:               orchMode,
+			DelegateTargets:        delegateTargets,
+			EvolutionMetricsStore:  evoMetricsStore,
+			SkillEvolutionStore:    deps.SkillEvolutionStore,
+			SkillStore:             deps.SkillStore,
 			UserResolver:           newContactResolver(deps.ContactStore),
-			PinnedSkills:           ag.ParsePinnedSkills(),
-			OrchMode:               ResolveOrchestrationMode(ctx, ag.ID, deps.TeamStore, deps.AgentLinkStore),
-			EvolutionMetricsStore:  deps.EvolutionMetricsStore,
 		})
 
 		slog.Info("resolved agent from DB", "agent", agentKey, "model", ag.Model, "provider", ag.Provider)

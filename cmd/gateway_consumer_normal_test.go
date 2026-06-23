@@ -1,6 +1,13 @@
 package cmd
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/channels/bitrix24"
+	"github.com/nextlevelbuilder/goclaw/internal/sessions"
+)
 
 // TestIsSafeBitrixEntityToken pins the validation contract for webhook-sourced
 // Bitrix entity metadata. The function gates which tokens may be interpolated
@@ -36,5 +43,111 @@ func TestIsSafeBitrixEntityToken(t *testing.T) {
 					tc.s, tc.maxLen, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestDeriveGroupUserID pins the group-scope userID precedence: Discord guild
+// member → openline participant → group fallback, with direct messages passing
+// msg.UserID through untouched. The openline participant branch is what gives
+// each Zalo customer its own per-person scope instead of the shared connector
+// proxy.
+func TestDeriveGroupUserID(t *testing.T) {
+	const group = string(sessions.PeerGroup)
+	const direct = string(sessions.PeerDirect)
+	cases := []struct {
+		name     string
+		msg      bus.InboundMessage
+		peerKind string
+		want     string
+	}{
+		{
+			name: "openline participant overrides group fallback",
+			msg: bus.InboundMessage{
+				Channel:  "zalo_ol",
+				ChatID:   "chat4878",
+				SenderID: "openlines:tamgiac:chat4878:111222",
+				UserID:   "openlines:tamgiac:chat4878:111222",
+				Metadata: map[string]string{
+					bitrix24.MetaKeyParticipantUserID: "openlines:tamgiac:chat4878:111222",
+				},
+			},
+			peerKind: group,
+			want:     "openlines:tamgiac:chat4878:111222",
+		},
+		{
+			name: "no participant id falls back to group-level",
+			msg: bus.InboundMessage{
+				Channel: "zalo_ol",
+				ChatID:  "chat4878",
+				UserID:  "960",
+			},
+			peerKind: group,
+			want:     "group:zalo_ol:chat4878",
+		},
+		{
+			name: "empty participant id (parse-fail degrade) falls back to group-level",
+			msg: bus.InboundMessage{
+				Channel:  "zalo_ol",
+				ChatID:   "chat4878",
+				UserID:   "960",
+				Metadata: map[string]string{bitrix24.MetaKeyParticipantUserID: ""},
+			},
+			peerKind: group,
+			want:     "group:zalo_ol:chat4878",
+		},
+		{
+			name: "discord guild takes precedence over participant id",
+			msg: bus.InboundMessage{
+				Channel:  "discord",
+				ChatID:   "chan-1",
+				SenderID: "u-9",
+				Metadata: map[string]string{
+					"guild_id":                        "g-1",
+					bitrix24.MetaKeyParticipantUserID: "openlines:x:y:z",
+				},
+			},
+			peerKind: group,
+			want:     "guild:g-1:user:u-9",
+		},
+		{
+			name: "direct message passes UserID through untouched",
+			msg: bus.InboundMessage{
+				Channel:  "zalo_ol",
+				ChatID:   "chat4878",
+				UserID:   "42",
+				Metadata: map[string]string{bitrix24.MetaKeyParticipantUserID: "openlines:x:y:z"},
+			},
+			peerKind: direct,
+			want:     "42",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deriveGroupUserID(tc.msg, tc.peerKind); got != tc.want {
+				t.Errorf("deriveGroupUserID() = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveSenderNameReadsWhatsAppUserName(t *testing.T) {
+	got := resolveSenderName(bus.InboundMessage{
+		Metadata: map[string]string{
+			"user_name": "Alice\nAdmin",
+		},
+	})
+	if got != "Alice Admin" {
+		t.Fatalf("resolveSenderName() = %q, want sanitized WhatsApp user_name", got)
+	}
+}
+
+func TestResolveSenderNameTruncatesLongMetadata(t *testing.T) {
+	got := resolveSenderName(bus.InboundMessage{
+		Metadata: map[string]string{
+			"display_name": strings.Repeat("x", 120),
+		},
+	})
+	if len([]rune(got)) != 100 {
+		t.Fatalf("resolveSenderName() length = %d, want 100", len([]rune(got)))
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
@@ -162,6 +163,18 @@ type ChannelDestroyer interface {
 // the gateway-level block_reply setting. Returns nil to inherit the gateway default.
 type BlockReplyChannel interface {
 	BlockReplyEnabled() *bool
+}
+
+// ChatBehaviorChannel is optionally implemented by channels that override
+// gateway-level human-like delivery behavior. Nil means inherit the gateway default.
+type ChatBehaviorChannel interface {
+	ChatBehaviorConfig() *config.ChatBehaviorConfig
+}
+
+// ReasoningDeliveryChannel is optionally implemented by channels that expose
+// how model reasoning should be delivered to end users.
+type ReasoningDeliveryChannel interface {
+	ReasoningDeliveryConfig() (mode string, legacyReasoningStream *bool)
 }
 
 // WebhookChannel extends Channel with an HTTP handler that can be mounted
@@ -340,9 +353,9 @@ func (c *BaseChannel) CheckDMPolicy(ctx context.Context, senderID, dmPolicy stri
 		if c.pairingService != nil {
 			paired, err := c.pairingService.IsPaired(ctx, senderID, c.name)
 			if err != nil {
-				slog.Warn("security.pairing_check_failed, assuming paired (fail-open)",
+				slog.Warn("security.pairing_check_failed, denying access (fail-closed)",
 					"sender_id", senderID, "channel", c.name, "error", err)
-				return PolicyAllow
+				return PolicyDeny
 			}
 			if paired {
 				return PolicyAllow
@@ -379,9 +392,9 @@ func (c *BaseChannel) CheckGroupPolicy(ctx context.Context, senderID, chatID, gr
 		if c.pairingService != nil {
 			paired, err := c.pairingService.IsPaired(ctx, groupSenderID, c.name)
 			if err != nil {
-				slog.Warn("security.pairing_check_failed, assuming paired (fail-open)",
+				slog.Warn("security.pairing_check_failed, denying access (fail-closed)",
 					"group_sender", groupSenderID, "channel", c.name, "error", err)
-				return PolicyAllow
+				return PolicyDeny
 			}
 			if paired {
 				c.MarkGroupApproved(chatID)
@@ -606,6 +619,24 @@ func (c *BaseChannel) ValidatePolicy(dmPolicy, groupPolicy string) {
 // This is the standard way for channels to forward received messages.
 // peerKind should be "direct" or "group" (see sessions.PeerDirect, sessions.PeerGroup).
 func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []string, metadata map[string]string, peerKind string) {
+	// Convert string paths to MediaFile (legacy path-only callers).
+	// Use filepath.Base(p) as filename so persistMedia's sanitizer gets a
+	// meaningful stem instead of falling back to UUID. MimeType is left empty —
+	// persistMedia infers it from the file extension for these callers.
+	var mediaFiles []bus.MediaFile
+	for _, p := range media {
+		mediaFiles = append(mediaFiles, bus.MediaFile{Path: p, Filename: filepath.Base(p)})
+	}
+	c.HandleMessageMedia(senderID, chatID, content, mediaFiles, metadata, peerKind)
+}
+
+// HandleMessageMedia is the richer sibling of HandleMessage: it accepts
+// pre-built bus.MediaFile values so a channel can preserve the original MIME
+// type and filename. This matters because the agent pipeline routes media by
+// MIME (image vs document vs audio vs video) — the path-only HandleMessage
+// loses that information. Channels that already know the content type at
+// download time (e.g. Bitrix24 file events) should call this directly.
+func (c *BaseChannel) HandleMessageMedia(senderID, chatID, content string, media []bus.MediaFile, metadata map[string]string, peerKind string) {
 	// For DMs, enforce the allowlist as a safety net.
 	// For group messages, skip this check — group access is already enforced
 	// by the channel-specific group policy (checkGroupPolicy / CheckPolicy).
@@ -622,20 +653,12 @@ func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []st
 		userID = senderID[:idx]
 	}
 
-	// Convert string paths to MediaFile (legacy path-only callers).
-	// Use filepath.Base(p) as filename so persistMedia's sanitizer gets a
-	// meaningful stem instead of falling back to UUID.
-	var mediaFiles []bus.MediaFile
-	for _, p := range media {
-		mediaFiles = append(mediaFiles, bus.MediaFile{Path: p, Filename: filepath.Base(p)})
-	}
-
 	msg := bus.InboundMessage{
 		Channel:  c.name,
 		SenderID: senderID,
 		ChatID:   chatID,
 		Content:  content,
-		Media:    mediaFiles,
+		Media:    media,
 		PeerKind: peerKind,
 		UserID:   userID,
 		Metadata: metadata,

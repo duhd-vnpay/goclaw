@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
-	"github.com/nextlevelbuilder/goclaw/internal/ardenn/hands"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/safego"
@@ -289,15 +288,8 @@ func handleTeammateMessage(
 		}
 
 		// Ardenn: resolve agent completion if dispatched by Ardenn engine.
-		if deps.ArdennCompletion != nil {
-			var resultText string
-			var resultErr error
 			if outcome.Err != nil {
-				resultErr = outcome.Err
 			} else if outcome.Result != nil {
-				resultText = outcome.Result.Content
-			}
-			hands.ResolveAgentCompletion(inMeta, resultText, resultErr, deps.ArdennCompletion)
 		}
 
 		// Auto-complete/fail the associated team task (v2 only).
@@ -376,13 +368,19 @@ func handleTeammateMessage(
 		}
 
 		routing := announceRouting{
-			LeadAgent:        leadAgent,
-			LeadSessionKey:   leadSessionKey,
-			OrigChannel:      origCh,
-			OrigChatID:       origChatID,
-			OrigPeerKind:     origPeerKind,
-			OrigLocalKey:     origLocalKey,
-			OriginUserID:     inMeta[tools.MetaOriginUserID],
+			LeadAgent:      leadAgent,
+			LeadSessionKey: leadSessionKey,
+			OrigChannel:    origCh,
+			OrigChatID:     origChatID,
+			OrigPeerKind:   origPeerKind,
+			OrigLocalKey:   origLocalKey,
+			OriginUserID:   inMeta[tools.MetaOriginUserID],
+			// Carry the real acting sender + role through the team-task
+			// announce so the Lead's resumed turn doesn't lose attribution
+			// and trip group-scope permission checks. team_tool_dispatch.go
+			// already populates these fields in the dispatch metadata. (#915)
+			OriginSenderID:   inMeta[tools.MetaOriginSenderID],
+			OriginRole:       inMeta[tools.MetaOriginRole],
 			TeamID:           inMeta[tools.MetaTeamID],
 			TeamWorkspace:    inMeta[tools.MetaTeamWorkspace],
 			OriginTraceID:    inMeta[tools.MetaOriginTraceID],

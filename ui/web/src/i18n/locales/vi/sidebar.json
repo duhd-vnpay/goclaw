@@ -17,6 +17,7 @@
     "sessions": "Session",
     "pendingMessages": "Tin nhắn chờ",
     "channels": "Channel",
+    "webhooks": "Webhook",
     "contacts": "Liên hệ",
     "skills": "Skill",
     "cron": "Tác vụ định kỳ",

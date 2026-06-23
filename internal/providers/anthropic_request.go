@@ -10,10 +10,11 @@ import (
 // to avoid circular import; agent_test verifies they match).
 const CacheBoundaryMarker = "<!-- GOCLAW_CACHE_BOUNDARY -->"
 
-// splitSystemPromptForCache splits a system prompt at the cache boundary marker.
+// SplitSystemPromptForCache splits a system prompt at CacheBoundaryMarker.
 // Returns 2 blocks if boundary found: stable (with cache_control) + dynamic (without).
 // Returns 1 block with cache_control if no boundary (backwards compat).
-func splitSystemPromptForCache(content string) []map[string]any {
+// Used by both Anthropic and DashScope cache middleware (identical wire format).
+func SplitSystemPromptForCache(content string) []map[string]any {
 	ephemeral := map[string]any{"type": "ephemeral"}
 	before, after, ok := strings.Cut(content, CacheBoundaryMarker)
 	if !ok {
@@ -95,10 +96,10 @@ func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stre
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case "system":
-			systemBlocks = append(systemBlocks, splitSystemPromptForCache(msg.Content)...)
+			systemBlocks = append(systemBlocks, SplitSystemPromptForCache(msg.Content)...)
 
 		case "user":
-			if len(msg.Images) > 0 {
+			if len(msg.Images) > 0 || len(msg.Videos) > 0 {
 				var blocks []map[string]any
 				for _, img := range msg.Images {
 					blocks = append(blocks, map[string]any{
@@ -110,6 +111,7 @@ func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stre
 						},
 					})
 				}
+				// Videos are not supported by Anthropic, they are omitted here.
 				if msg.Content != "" {
 					blocks = append(blocks, map[string]any{
 						"type": "text",
@@ -193,6 +195,9 @@ func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stre
 	if len(req.Tools) > 0 {
 		var tools []map[string]any
 		for _, t := range req.Tools {
+			if t.Type != "function" || t.Function == nil {
+				continue
+			}
 			cleanedParams := CleanSchemaForProvider("anthropic", t.Function.Parameters)
 			tool := map[string]any{
 				"name":         t.Function.Name,
@@ -213,7 +218,9 @@ func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stre
 		body["max_tokens"] = v
 	}
 	if v, ok := req.Options[OptTemperature]; ok {
-		body["temperature"] = v
+		if !anthropicSkipsTemperature(model) {
+			body["temperature"] = v
+		}
 	}
 
 	// Enable extended thinking if thinking_level is set
@@ -232,6 +239,30 @@ func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stre
 	}
 
 	return body
+}
+
+// anthropicSkipsTemperature reports whether the Messages API rejects sampling
+// parameters for this model. Claude Opus/Sonnet 4.6+ and Opus 4.7+ return HTTP
+// 400 when temperature (and top_p/top_k) are included; omit them entirely.
+func anthropicSkipsTemperature(model string) bool {
+	m := strings.ToLower(model)
+	for _, family := range []string{"claude-opus-4-", "claude-sonnet-4-"} {
+		after, ok := strings.CutPrefix(m, family)
+		if !ok {
+			continue
+		}
+		minor := 0
+		for _, c := range after {
+			if c < '0' || c > '9' {
+				break
+			}
+			minor = minor*10 + int(c-'0')
+		}
+		if minor >= 6 {
+			return true
+		}
+	}
+	return false
 }
 
 // anthropicThinkingBudget maps a thinking level to a token budget.

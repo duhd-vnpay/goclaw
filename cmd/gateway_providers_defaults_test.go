@@ -22,7 +22,7 @@ func TestRegisterProvidersUsesCurrentMiniMaxAndZaiDefaults(t *testing.T) {
 	cfg.Providers.ZaiCoding.APIKey = "zai-coding-token"
 
 	registry := providers.NewRegistry(nil)
-	registerProviders(registry, cfg, providers.NewInMemoryRegistry())
+	registerProviders(registry, cfg, providers.NewInMemoryRegistry(), ACPDeps{})
 
 	assertProviderDefault(t, registry, providers.MasterTenantID, "minimax", "MiniMax-M3", "https://api.minimax.io/v1")
 	assertProviderDefault(t, registry, providers.MasterTenantID, "zai", "glm-5.2", "https://api.z.ai/api/paas/v4")
@@ -49,7 +49,7 @@ func TestRegisterProvidersMiniMaxUsesOpenAIChatCompletionsPath(t *testing.T) {
 	cfg.Providers.MiniMax.APIBase = upstream.URL
 
 	registry := providers.NewRegistry(nil)
-	registerProviders(registry, cfg, providers.NewInMemoryRegistry())
+	registerProviders(registry, cfg, providers.NewInMemoryRegistry(), ACPDeps{})
 
 	runtimeProvider, err := registry.GetForTenant(providers.MasterTenantID, "minimax")
 	if err != nil {
@@ -98,7 +98,7 @@ func TestRegisterProvidersFromDBUsesCurrentMiniMaxAndZaiDefaults(t *testing.T) {
 	}
 
 	registry := providers.NewRegistry(nil)
-	registerProvidersFromDB(registry, providerStore, nil, "", "", nil, &config.Config{}, providers.NewInMemoryRegistry())
+	registerProvidersFromDB(registry, providerStore, nil, "", "", nil, &config.Config{}, providers.NewInMemoryRegistry(), ACPDeps{})
 
 	assertProviderDefault(t, registry, tenantID, "db-minimax", "MiniMax-M3", "https://api.minimax.io/v1")
 	assertProviderDefault(t, registry, tenantID, "db-zai", "glm-5.2", "https://api.z.ai/api/paas/v4")

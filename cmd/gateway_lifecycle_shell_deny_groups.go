@@ -42,7 +42,7 @@ func subscribeShellDenyGroupsReload(msgBus *bus.MessageBus, toolsReg *tools.Regi
 	})
 }
 
-func subscribeProviderShellDenyGroupsReload(msgBus *bus.MessageBus, providerReg *providers.Registry, provStore store.ProviderStore, mcpStore store.MCPServerStore) {
+func subscribeProviderShellDenyGroupsReload(msgBus *bus.MessageBus, providerReg *providers.Registry, provStore store.ProviderStore, mcpStore store.MCPServerStore, acpDeps ACPDeps) {
 	if msgBus == nil || providerReg == nil {
 		return
 	}
@@ -54,18 +54,18 @@ func subscribeProviderShellDenyGroupsReload(msgBus *bus.MessageBus, providerReg 
 		if !ok {
 			return
 		}
-		reloadShellDenyProviderPolicies(providerReg, provStore, mcpStore, updatedCfg)
+		reloadShellDenyProviderPolicies(providerReg, provStore, mcpStore, updatedCfg, acpDeps)
 	})
 }
 
-func reloadShellDenyProviderPolicies(providerReg *providers.Registry, provStore store.ProviderStore, mcpStore store.MCPServerStore, cfg *config.Config) {
+func reloadShellDenyProviderPolicies(providerReg *providers.Registry, provStore store.ProviderStore, mcpStore store.MCPServerStore, cfg *config.Config, acpDeps ACPDeps) {
 	if providerReg == nil || cfg == nil {
 		return
 	}
 	snapshot := cfg.Clone()
 	registerClaudeCLIFromConfig(providerReg, snapshot)
 	if snapshot.Providers.ACP.Binary != "" {
-		registerACPFromConfig(providerReg, snapshot.Providers.ACP, snapshot.ShellDenyGroupsSnapshot())
+		registerACPFromConfig(providerReg, snapshot.Providers.ACP, snapshot.ShellDenyGroupsSnapshot(), acpDeps)
 	}
 	if provStore == nil {
 		return
@@ -84,7 +84,7 @@ func reloadShellDenyProviderPolicies(providerReg *providers.Registry, provStore 
 		case store.ProviderClaudeCLI:
 			registerClaudeCLIFromDB(providerReg, p, gatewayAddr, snapshot.Gateway.Token, mcpStore, snapshot)
 		case store.ProviderACP:
-			registerACPFromDB(providerReg, p, snapshot.ShellDenyGroupsSnapshot())
+			registerACPFromDB(providerReg, p, snapshot.ShellDenyGroupsSnapshot(), acpDeps)
 		}
 	}
 }

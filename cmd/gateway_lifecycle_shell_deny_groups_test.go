@@ -138,7 +138,7 @@ func TestShellDenyGroupsConfigReload_ReplacesConfigClaudeCLIProvider(t *testing.
 	initial := config.Default()
 	initial.Providers.ClaudeCLI.CLIPath = "claude"
 	initial.Tools.ShellDenyGroups = map[string]bool{"package_install": true}
-	reloadShellDenyProviderPolicies(providerReg, nil, nil, initial)
+	reloadShellDenyProviderPolicies(providerReg, nil, nil, initial, ACPDeps{})
 
 	before, err := providerReg.Get(context.Background(), "claude-cli")
 	if err != nil {
@@ -152,7 +152,7 @@ func TestShellDenyGroupsConfigReload_ReplacesConfigClaudeCLIProvider(t *testing.
 	updated := config.Default()
 	updated.Providers.ClaudeCLI.CLIPath = "claude"
 	updated.Tools.ShellDenyGroups = map[string]bool{"package_install": false}
-	subscribeProviderShellDenyGroupsReload(msgBus, providerReg, nil, nil)
+	subscribeProviderShellDenyGroupsReload(msgBus, providerReg, nil, nil, ACPDeps{})
 	msgBus.Broadcast(bus.Event{Name: bus.TopicConfigChanged, Payload: updated})
 
 	after, err := providerReg.Get(context.Background(), "claude-cli")
@@ -186,7 +186,7 @@ func TestShellDenyGroupsConfigReload_ReplacesDBClaudeCLIProvider(t *testing.T) {
 
 	initial := config.Default()
 	initial.Tools.ShellDenyGroups = map[string]bool{"package_install": true}
-	reloadShellDenyProviderPolicies(providerReg, provStore, nil, initial)
+	reloadShellDenyProviderPolicies(providerReg, provStore, nil, initial, ACPDeps{})
 
 	before, err := providerReg.GetForTenant(tenantID, "tenant-claude")
 	if err != nil {
@@ -199,7 +199,7 @@ func TestShellDenyGroupsConfigReload_ReplacesDBClaudeCLIProvider(t *testing.T) {
 
 	updated := config.Default()
 	updated.Tools.ShellDenyGroups = map[string]bool{"package_install": false}
-	reloadShellDenyProviderPolicies(providerReg, provStore, nil, updated)
+	reloadShellDenyProviderPolicies(providerReg, provStore, nil, updated, ACPDeps{})
 
 	after, err := providerReg.GetForTenant(tenantID, "tenant-claude")
 	if err != nil {

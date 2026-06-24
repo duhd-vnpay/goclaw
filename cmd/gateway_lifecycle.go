@@ -94,7 +94,7 @@ func (d *gatewayDeps) runLifecycle(
 		providerStore = d.pgStores.Providers
 		mcpStore = d.pgStores.MCP
 	}
-	subscribeProviderShellDenyGroupsReload(d.msgBus, d.providerRegistry, providerStore, mcpStore)
+	subscribeProviderShellDenyGroupsReload(d.msgBus, d.providerRegistry, providerStore, mcpStore, d.acpDeps)
 
 	// Reload TTS providers on config changes via pub/sub.
 	d.msgBus.Subscribe("tts-config-reload", func(evt bus.Event) {

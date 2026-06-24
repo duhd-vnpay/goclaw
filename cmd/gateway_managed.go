@@ -62,6 +62,7 @@ func wireExtras(
 	domainBus eventbus.DomainEventBus,
 	usageCapSvc *usagecaps.Service,
 	mcpOAuthProvider mcpbridge.OAuthTokenProvider, // nil = OAuth injection disabled
+	acpDeps ACPDeps,
 ) (*tools.ContextFileInterceptor, *mcpbridge.Pool, *media.Store, tools.PostTurnProcessor) {
 	// 1. Build cache instances (in-memory or Redis depending on build tags)
 	agentCtxCache, userCtxCache := makeCaches(redisClient)
@@ -713,7 +714,7 @@ func wireExtras(
 		}
 		providerReg.UnregisterForTenant(tenantID, p.Name)
 		if p.Enabled {
-			registerACPFromDB(providerReg, *p, configuredShellDenyGroups(appCfg))
+			registerACPFromDB(providerReg, *p, configuredShellDenyGroups(appCfg), acpDeps)
 		}
 	})
 

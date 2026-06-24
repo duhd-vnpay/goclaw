@@ -30,6 +30,8 @@ type gatewayDeps struct {
 	agentRouter      *agent.Router
 	toolsReg         *tools.Registry
 	skillsLoader     *skills.Loader         // optional: enables skill creation in evolution approval
+	bundledSkillsDir string                 // path to /app/bundled-skills (or dev equivalent)
+	managedDir       string                 // path to skills-store managed directory
 	permCache        *cache.PermissionCache // nil if no tenant store; closed on shutdown to stop sweep goroutines
 	enrichProgress   *vault.EnrichProgress  // nil if enrichment worker not registered
 	enrichWorker     *vault.EnrichWorker    // nil if enrichment worker not registered; for stop/enqueue
@@ -39,4 +41,5 @@ type gatewayDeps struct {
 	usageCapSvc      *usagecaps.Service
 	audioMgr         *audio.Manager      // nil if TTS not configured; used by TTSHandler
 	ttsHandler       *httpapi.TTSHandler // nil if TTS not configured; for hot-reload
+	acpDeps          ACPDeps             // ACP MCP shim deps; zero-valued when shim unavailable
 }

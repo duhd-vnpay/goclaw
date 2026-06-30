@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
 	"github.com/titanous/json5"
 )
 
@@ -250,6 +251,18 @@ func (c *Config) applyEnvOverrides() {
 			c.Skills.MaxUploadSizeMB = ClampSkillMaxUploadSizeMB(mb)
 		}
 	}
+	// Webhook agent-run timeouts (seconds). Bounds (default 600, cap 3600) are
+	// applied at consumption via webhooks.ResolveTimeoutSec.
+	if v := os.Getenv("GOCLAW_WEBHOOK_ASYNC_TIMEOUT_SEC"); v != "" {
+		if sec, err := strconv.Atoi(v); err == nil && sec > 0 {
+			c.Gateway.WebhookAsyncTimeoutSec = sec
+		}
+	}
+	if v := os.Getenv("GOCLAW_WEBHOOK_SYNC_TIMEOUT_SEC"); v != "" {
+		if sec, err := strconv.Atoi(v); err == nil && sec > 0 {
+			c.Gateway.WebhookSyncTimeoutSec = sec
+		}
+	}
 	envBoolPtr := func(key string, dst **bool) {
 		if v := os.Getenv(key); v != "" {
 			b := parseEnvBool(v)
@@ -261,6 +274,8 @@ func (c *Config) applyEnvOverrides() {
 			*dst = parseEnvBool(v)
 		}
 	}
+	// Webhook internal streaming toggle (default true; nil → on via webhooks.ResolveStream).
+	envBoolPtr("GOCLAW_WEBHOOK_STREAM", &c.Gateway.WebhookStream)
 	envBoolPtr("GOCLAW_SKILLS_SLASH_COMMANDS_ENABLED", &c.Skills.SlashCommands.Enabled)
 	envBoolPtr("GOCLAW_SKILLS_SLASH_COMMANDS_SUGGEST_NOT_FOUND", &c.Skills.SlashCommands.SuggestNotFound)
 	envBool("GOCLAW_SKILLS_SLASH_COMMANDS_PARTIAL_MATCHING", &c.Skills.SlashCommands.PartialMatching)
@@ -328,15 +343,6 @@ func (c *Config) applyEnvOverrides() {
 	envStr("GOCLAW_TSNET_AUTH_KEY", &c.Tailscale.AuthKey)
 	envStr("GOCLAW_TSNET_DIR", &c.Tailscale.StateDir)
 
-	// Keycloak OIDC (secrets from env only)
-	envStr("GOCLAW_KEYCLOAK_REALM_URL", &c.Keycloak.RealmURL)
-	envStr("GOCLAW_KEYCLOAK_INTERNAL_URL", &c.Keycloak.InternalURL)
-	envStr("GOCLAW_KEYCLOAK_CLIENT_SECRET", &c.Keycloak.ClientSecret)
-	envStr("GOCLAW_KEYCLOAK_CALLBACK_URL", &c.Keycloak.CallbackURL)
-	if c.Keycloak.ClientID == "" {
-		c.Keycloak.ClientID = "goclaw-gateway"
-	}
-
 	// Sandbox (for Docker-compose sandbox overlay)
 	ensureSandbox := func() {
 		if c.Agents.Defaults.Sandbox == nil {
@@ -390,6 +396,15 @@ func (c *Config) applyEnvOverrides() {
 
 	// Cron job execution
 	envStr("GOCLAW_CRON_JOB_TIMEOUT", &c.Cron.JobTimeout)
+
+	// Keycloak OIDC (secrets from env only) — local fork patch
+	envStr("GOCLAW_KEYCLOAK_REALM_URL", &c.Keycloak.RealmURL)
+	envStr("GOCLAW_KEYCLOAK_INTERNAL_URL", &c.Keycloak.InternalURL)
+	envStr("GOCLAW_KEYCLOAK_CLIENT_SECRET", &c.Keycloak.ClientSecret)
+	envStr("GOCLAW_KEYCLOAK_CALLBACK_URL", &c.Keycloak.CallbackURL)
+	if c.Keycloak.ClientID == "" {
+		c.Keycloak.ClientID = "goclaw-gateway"
+	}
 }
 
 // Save writes the config to a JSON file.

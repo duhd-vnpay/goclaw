@@ -1981,6 +1981,27 @@ func TestObserveStage_LateInjectionAfterFinalContinuesRun(t *testing.T) {
 	}
 }
 
+func TestObserveStage_MovesTaggedThinkingIntoFinalThinking(t *testing.T) {
+	t.Parallel()
+	stage := NewObserveStage(&PipelineDeps{})
+	state := defaultState()
+	state.Think.LastResponse = &providers.ChatResponse{
+		Content:  "Visible <thinking>hidden reasoning</thinking> answer",
+		Thinking: "native",
+	}
+
+	err := stage.Execute(context.Background(), state)
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+	if state.Observe.FinalContent != "Visible  answer" {
+		t.Errorf("FinalContent = %q, want %q", state.Observe.FinalContent, "Visible  answer")
+	}
+	if state.Observe.FinalThinking != "native\nhidden reasoning" {
+		t.Errorf("FinalThinking = %q, want %q", state.Observe.FinalThinking, "native\nhidden reasoning")
+	}
+}
+
 func TestObserveStage_FinalContent_SetWhenNoToolCalls(t *testing.T) {
 	t.Parallel()
 	deps := &PipelineDeps{}
@@ -2437,6 +2458,35 @@ func TestFinalizeStage_SanitizesContent(t *testing.T) {
 	}
 	if state.Observe.FinalContent != "sanitized:raw content" {
 		t.Errorf("FinalContent = %q, want sanitized:raw content", state.Observe.FinalContent)
+	}
+}
+
+func TestFinalizeStage_SuppressesSilentReplyAfterFlush(t *testing.T) {
+	t.Parallel()
+	finalContent := "This is directed at Bảo Ly Content, not me. I should stay silent.NO_REPLY"
+	var flushed []providers.Message
+	deps := &PipelineDeps{
+		IsSilentReply: func(content string) bool {
+			return content == finalContent
+		},
+		FlushMessages: func(_ context.Context, _ string, messages []providers.Message) error {
+			flushed = append(flushed, messages...)
+			return nil
+		},
+	}
+	stage := NewFinalizeStage(deps)
+	state := defaultState()
+	state.Observe.FinalContent = finalContent
+
+	err := stage.Execute(context.Background(), state)
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+	if state.Observe.FinalContent != "" {
+		t.Fatalf("FinalContent = %q, want empty after silent reply suppression", state.Observe.FinalContent)
+	}
+	if len(flushed) == 0 || flushed[len(flushed)-1].Content != finalContent {
+		t.Fatalf("flushed final content = %#v, want original silent reply persisted before suppression", flushed)
 	}
 }
 
@@ -3231,3 +3281,104 @@ func TestThinkStage_AllowedTools_MixedFunctionAndNativeTools_NoPanic(t *testing.
 	}
 }
 
+// --- Issue #1177: non-tool messages deferred until all tool results emitted ---
+
+func TestToolStage_Sequential_DefersNonToolMessages(t *testing.T) {
+	t.Parallel()
+	deps := &PipelineDeps{
+		ExecuteToolCall: func(_ context.Context, _ *RunState, tc providers.ToolCall) ([]providers.Message, error) {
+			msgs := []providers.Message{
+				{Role: "tool", Content: "result:" + tc.Name, ToolCallID: tc.ID},
+			}
+			// Simulate a warning injected after first tool
+			if tc.Name == "tool_a" {
+				msgs = append(msgs, providers.Message{Role: "user", Content: "loop warning: read-only streak"})
+			}
+			return msgs, nil
+		},
+	}
+	stage := NewToolStage(deps)
+	state := defaultState()
+	state.Think.LastResponse = &providers.ChatResponse{
+		ToolCalls: []providers.ToolCall{
+			{ID: "1", Name: "tool_a"},
+			{ID: "2", Name: "tool_b"},
+			{ID: "3", Name: "tool_c"},
+		},
+	}
+
+	if err := stage.Execute(context.Background(), state); err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+
+	pending := state.Messages.Pending()
+	// Expect: 3 tool results first, then 1 user warning at the end
+	if len(pending) != 4 {
+		t.Fatalf("pending len = %d, want 4", len(pending))
+	}
+	// First 3 must be tool role
+	for i := 0; i < 3; i++ {
+		if pending[i].Role != "tool" {
+			t.Errorf("pending[%d].Role = %q, want tool", i, pending[i].Role)
+		}
+	}
+	// Last must be the deferred user warning
+	if pending[3].Role != "user" {
+		t.Errorf("pending[3].Role = %q, want user", pending[3].Role)
+	}
+	if !strings.Contains(pending[3].Content, "loop warning") {
+		t.Errorf("pending[3].Content = %q, want loop warning", pending[3].Content)
+	}
+}
+
+func TestToolStage_Parallel_DefersNonToolMessages(t *testing.T) {
+	t.Parallel()
+	deps := &PipelineDeps{
+		ExecuteToolCall: func(_ context.Context, _ *RunState, _ providers.ToolCall) ([]providers.Message, error) {
+			t.Fatal("ExecuteToolCall must NOT be called when parallel path is active")
+			return nil, nil
+		},
+		ExecuteToolRaw: func(_ context.Context, tc providers.ToolCall) (providers.Message, any, error) {
+			return providers.Message{Role: "tool", Content: "raw:" + tc.Name, ToolCallID: tc.ID}, nil, nil
+		},
+		ProcessToolResult: func(_ context.Context, _ *RunState, tc providers.ToolCall, rawMsg providers.Message, _ any) []providers.Message {
+			msgs := []providers.Message{rawMsg}
+			// Inject a warning after processing tool_b
+			if tc.Name == "tool_b" {
+				msgs = append(msgs, providers.Message{Role: "user", Content: "nudge: consider alternatives"})
+			}
+			return msgs
+		},
+		ParallelEligibleToolCall: func(providers.ToolCall) bool { return true },
+	}
+	stage := NewToolStage(deps)
+	state := defaultState()
+	state.Think.LastResponse = &providers.ChatResponse{
+		ToolCalls: []providers.ToolCall{
+			{ID: "1", Name: "tool_a"},
+			{ID: "2", Name: "tool_b"},
+			{ID: "3", Name: "tool_c"},
+		},
+	}
+
+	if err := stage.Execute(context.Background(), state); err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+
+	pending := state.Messages.Pending()
+	// Expect: 3 tool results first, then 1 user nudge at the end
+	if len(pending) != 4 {
+		t.Fatalf("pending len = %d, want 4", len(pending))
+	}
+	for i := 0; i < 3; i++ {
+		if pending[i].Role != "tool" {
+			t.Errorf("pending[%d].Role = %q, want tool", i, pending[i].Role)
+		}
+	}
+	if pending[3].Role != "user" {
+		t.Errorf("pending[3].Role = %q, want user", pending[3].Role)
+	}
+	if !strings.Contains(pending[3].Content, "nudge") {
+		t.Errorf("pending[3].Content = %q, want nudge", pending[3].Content)
+	}
+}

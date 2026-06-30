@@ -90,7 +90,7 @@ type pipelineCallbackSet struct {
 	checkReadOnly      func(state *pipeline.RunState) (*providers.Message, bool)
 	sanitizeContent    func(string) string
 	flushMessages      func(ctx context.Context, sessionKey string, msgs []providers.Message) error
-	updateMetadata     func(ctx context.Context, sessionKey string, usage providers.Usage) error
+	updateMetadata     func(ctx context.Context, sessionKey string, usage providers.Usage, msgCount int) error
 	bootstrapCleanup   func(ctx context.Context, state *pipeline.RunState) error
 	maybeSummarize     func(ctx context.Context, sessionKey string)
 }
@@ -199,7 +199,25 @@ func (l *Loop) makeInjectReminders(req *RunRequest) func(ctx context.Context, in
 }
 
 func (l *Loop) makeBuildFilteredTools(req *RunRequest) func(state *pipeline.RunState) ([]providers.ToolDefinition, error) {
+	// Per-run cache: all filtering inputs (policy, disabled tools, bootstrap,
+	// channel, orchestration mode, user MCP tools) are fixed for the lifetime
+	// of a run. Only the final iteration differs (strips all tools). Cache the
+	// result after the first call and reuse for iterations 0..maxIter-1.
+	var (
+		cachedToolDefs []providers.ToolDefinition
+		cacheValid     bool
+	)
 	return func(state *pipeline.RunState) ([]providers.ToolDefinition, error) {
+		maxIter := l.maxIterations
+		if req.MaxIterations > 0 && req.MaxIterations < maxIter {
+			maxIter = req.MaxIterations
+		}
+
+		// Cache hit: reuse tool defs from first call for non-final iterations.
+		if cacheValid && state.Iteration != maxIter {
+			return cachedToolDefs, nil
+		}
+
 		// Load per-user MCP tools (Notion, etc.) into registry before filtering.
 		// Servers with require_user_credentials are deferred at startup and
 		// connected per-request here with the actual user's credentials.
@@ -222,10 +240,6 @@ func (l *Loop) makeBuildFilteredTools(req *RunRequest) func(state *pipeline.RunS
 			"sender_id", state.Input.SenderID,
 			"actor_user_id", actorUserID,
 			"user_tools_count", len(userTools))
-		maxIter := l.maxIterations
-		if req.MaxIterations > 0 && req.MaxIterations < maxIter {
-			maxIter = req.MaxIterations
-		}
 		allMsgs := state.Messages.All()
 		toolDefs, _, returnedMsgs := l.buildFilteredTools(req, state.Context.HadBootstrap,
 			state.Iteration, maxIter, allMsgs, userTools)
@@ -237,6 +251,13 @@ func (l *Loop) makeBuildFilteredTools(req *RunRequest) func(state *pipeline.RunS
 				state.Messages.AppendPending(msg)
 			}
 		}
+
+		// Cache store after first successful non-final call.
+		if !cacheValid && state.Iteration != maxIter {
+			cachedToolDefs = toolDefs
+			cacheValid = true
+		}
+
 		mcpDefs := 0
 		for _, td := range toolDefs {
 			if td.Function != nil && strings.HasPrefix(strings.TrimSpace(td.Function.Name), "mcp_") {
@@ -612,12 +633,15 @@ func (l *Loop) makeFlushMessages(req *RunRequest) func(ctx context.Context, sess
 	}
 }
 
-func (l *Loop) makeUpdateMetadata(req *RunRequest) func(ctx context.Context, sessionKey string, usage providers.Usage) error {
-	return func(ctx context.Context, sessionKey string, usage providers.Usage) error {
+func (l *Loop) makeUpdateMetadata(req *RunRequest) func(ctx context.Context, sessionKey string, usage providers.Usage, msgCount int) error {
+	return func(ctx context.Context, sessionKey string, usage providers.Usage, msgCount int) error {
 		l.sessions.UpdateMetadata(ctx, sessionKey, l.model, l.provider.Name(), req.Channel)
 		l.sessions.AccumulateTokens(ctx, sessionKey, int64(usage.PromptTokens), int64(usage.CompletionTokens))
 		// Persist session to DB (matching v2 finalizeRun behavior).
 		// FlushMessages already ran, so all pending messages are in the cache.
+		if usage.PromptTokens > 0 {
+			l.sessions.SetLastPromptTokens(ctx, sessionKey, usage.PromptTokens, msgCount)
+		}
 		l.sessions.Save(ctx, sessionKey)
 		return nil
 	}

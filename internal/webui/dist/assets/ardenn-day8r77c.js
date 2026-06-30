@@ -1,0 +1,1 @@
+var e={light:`Light`,standard:`Standard`,full:`Full`},t={light:`bg-muted text-muted-foreground`,standard:`bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300`,full:`bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300`};export{e as n,t};

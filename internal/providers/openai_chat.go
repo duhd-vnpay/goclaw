@@ -12,6 +12,15 @@ import (
 )
 
 func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	// Cline API gateway wraps non-stream responses in {"data":{...},"success":true}
+	// envelope (non-OpenAI). OpenAIProvider.Chat() decoder expects choices/usage at
+	// root → silently fails parse → returns empty content + NULL tokens. Streaming
+	// SSE chunks ARE standard OpenAI, so route Cline through ChatStream regardless
+	// of caller's stream preference (cron forces Stream=false via gateway_cron.go).
+	if p.isClineEndpoint() {
+		return p.ChatStream(ctx, req, nil)
+	}
+
 	model := p.resolveModel(req.Model)
 	body := p.buildRequestBody(model, req, false)
 	body = ApplyMiddlewares(body, p.middlewares, p.middlewareConfig(model, req))

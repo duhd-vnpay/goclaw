@@ -40,6 +40,21 @@ func isDashScopeAPIBase(apiBase string) bool {
 	return strings.Contains(strings.ToLower(apiBase), "dashscope")
 }
 
+// isClineEndpoint returns true for Cline AI Gateway endpoints (api.cline.bot).
+// Cline non-stream responses are wrapped in {"data":{...},"success":true} envelope
+// — non-OpenAI standard — so OpenAIProvider.Chat() can't parse them and returns empty
+// content with NULL tokens. Streaming responses ARE standard OpenAI SSE.
+// Detection forces ChatStream path for Cline regardless of caller's stream preference.
+func (p *OpenAIProvider) isClineEndpoint() bool {
+	if strings.Contains(strings.ToLower(p.apiBase), "api.cline.bot") {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(p.name), "cline") {
+		return true
+	}
+	return false
+}
+
 // dashScopePassthroughKeys is true when enable_thinking / thinking_budget may be added to the JSON body.
 // Uses the same DashScope/Bailian route detection as prompt-cache wrapping.
 func (p *OpenAIProvider) dashScopePassthroughKeys() bool {

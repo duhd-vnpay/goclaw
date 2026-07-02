@@ -133,13 +133,15 @@ func InitOwnerIDs(ids []string) {
 }
 
 // isHTTPOwnerID checks if the user ID is a configured owner.
-// If no owner IDs configured, only "system" is treated as owner (fail-closed).
+// Security 2026-07-02 (audit P2#8): previously, an unconfigured GOCLAW_OWNER_IDS
+// granted RoleOwner (full tenant management, superset of admin) to any caller
+// presenting X-GoClaw-User-Id: system alongside a valid gateway token. Prod has
+// always had GOCLAW_OWNER_IDS set so this never fired live, but it was a footgun
+// for any deployment that forgot to set it. True fail-closed: nobody is Owner
+// without an explicit ownerIDs entry.
 func isHTTPOwnerID(userID string, ownerIDs []string) bool {
-	if userID == "" {
+	if userID == "" || len(ownerIDs) == 0 {
 		return false
-	}
-	if len(ownerIDs) == 0 {
-		return userID == "system"
 	}
 	return slices.Contains(ownerIDs, userID)
 }
@@ -364,12 +366,7 @@ func resolveTenantHint(ctx context.Context, hint, userID string) (uuid.UUID, boo
 // oidcHTTPRole maps Keycloak realm roles to a gateway permissions.Role for HTTP auth.
 func oidcHTTPRole(roles []string) permissions.Role {
 	has := func(name string) bool {
-		for _, r := range roles {
-			if r == name {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(roles, name)
 	}
 	switch {
 	case has("owner"):

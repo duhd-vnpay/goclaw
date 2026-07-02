@@ -107,10 +107,19 @@ func ClearProviderError(ctx context.Context, configs store.SystemConfigStore) {
 // apiKeyPattern matches common API key formats in error messages.
 var apiKeyPattern = regexp.MustCompile(`(?i)(sk-|Bearer\s+|api[_-]?key[=:]\s*)[a-zA-Z0-9_-]{4,}`)
 
+// dsnPasswordPattern matches the credential segment of a connection-string
+// DSN (postgres://user:pass@host, redis://:pass@host, amqp://user:pass@host,
+// etc.) and redacts only the password, keeping user+host for diagnostics.
+// Security 2026-07-02 (audit P2#12): apiKeyPattern alone didn't cover this —
+// a DB/broker connection error containing the raw DSN leaked its password
+// into the Telegram alert.
+var dsnPasswordPattern = regexp.MustCompile(`(?i)(:\/\/[^:@\/\s]*:)([^@\s]+)(@)`)
+
 // sanitizeErrorMessage strips potentially sensitive content from error messages.
 // Keeps the message useful for diagnostics while removing API keys and long bodies.
 func sanitizeErrorMessage(msg string) string {
 	msg = apiKeyPattern.ReplaceAllString(msg, "${1}****")
+	msg = dsnPasswordPattern.ReplaceAllString(msg, "${1}****${3}")
 	// Rune-safe truncation to avoid corrupting multi-byte UTF-8 characters.
 	const maxLen = 200
 	if runes := []rune(msg); len(runes) > maxLen {

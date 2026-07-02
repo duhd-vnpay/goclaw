@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -297,6 +298,7 @@ func (t *WebFetchTool) fetchRawContent(ctx context.Context, rawURL, extractMode 
 			MaxIdleConns:        10,
 			IdleConnTimeout:     30 * time.Second,
 			TLSHandshakeTimeout: 15 * time.Second,
+			DialContext:         ssrfSafeDialContext,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			redirectCount++
@@ -371,6 +373,42 @@ func (t *WebFetchTool) fetchRawContent(ctx context.Context, rawURL, extractMode 
 		finalURL:   finalURL,
 		statusCode: resp.StatusCode,
 	}, nil
+}
+
+// ssrfSafeDialContext is the http.Transport DialContext for fetchRawContent's
+// client. Security 2026-07-02 (audit P2#10): CheckSSRF validates rawURL's
+// hostname once, before client.Do — but the default dialer re-resolves DNS
+// independently when it actually connects. A DNS-rebinding attacker answers
+// a public IP for the check, then a private/metadata IP (169.254.169.254,
+// 127.0.0.1, ...) for the real connection, landing the fetch on an internal
+// service despite CheckSSRF having passed. Resolving here and dialing the
+// validated IP directly closes that gap — TLS SNI/cert validation still uses
+// the original hostname (net/http sets ServerName independently of dial addr).
+func ssrfSafeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	if ip := net.ParseIP(host); ip != nil {
+		if isPrivateIP(host) {
+			return nil, fmt.Errorf("blocked dial to private/reserved IP: %s", host)
+		}
+		return dialer.DialContext(ctx, network, addr)
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no addresses resolved for %s", host)
+	}
+	for _, resolved := range ips {
+		if isPrivateIP(resolved.IP.String()) {
+			return nil, fmt.Errorf("blocked dial to private/reserved IP: %s (resolved from %s)", resolved.IP.String(), host)
+		}
+	}
+	return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
 }
 
 // doDirectFetch wraps fetchRawContent with full HTTP metadata formatting.

@@ -422,7 +422,7 @@ func runGateway() {
 	// wireExtras returns, so setupACPShim couldn't construct the builder
 	// inline. The shim degrades to global catalog when SetMCPSessionBuilder
 	// stays unwired, so this is purely additive.
-	wireACPMCPSessionBuilder(acpDeps, toolsReg, mcpPool, pgStores)
+	wireACPMCPSessionBuilder(acpDeps, toolsReg, mcpPool, pgStores, msgBus)
 
 	// Populate shared deps struct used by extracted helper methods.
 	deps := &gatewayDeps{

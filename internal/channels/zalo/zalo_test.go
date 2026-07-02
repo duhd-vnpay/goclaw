@@ -26,6 +26,18 @@ func swapAPIBase(t *testing.T, url string) {
 	t.Cleanup(func() { apiBase = original })
 }
 
+// disableMediaSSRFCheck no-ops the SSRF guard in downloadMedia for tests that
+// exercise its fetch/extension/write logic against an httptest.Server (whose
+// address is 127.0.0.1 — legitimately rejected by the real check in
+// production). SSRF-blocking itself is covered separately by
+// TestDownloadMedia_BlocksSSRFTargets. Restores automatically via t.Cleanup.
+func disableMediaSSRFCheck(t *testing.T) {
+	t.Helper()
+	original := checkMediaURLSSRF
+	checkMediaURLSSRF = func(string) error { return nil }
+	t.Cleanup(func() { checkMediaURLSSRF = original })
+}
+
 // newTestChannel returns a Channel wired to the given mock server URL.
 // Token is fixed to "t" so callers can predict the URL path:
 //
@@ -457,6 +469,7 @@ func TestHandleImageMessage_EmptySenderDropped(t *testing.T) {
 // TestDownloadMedia_SuccessWritesTempFile verifies downloadMedia fetches
 // the URL and persists a temp file with matching extension.
 func TestDownloadMedia_SuccessWritesTempFile(t *testing.T) {
+	disableMediaSSRFCheck(t)
 	payload := bytes.Repeat([]byte("x"), 128)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
@@ -486,6 +499,7 @@ func TestDownloadMedia_SuccessWritesTempFile(t *testing.T) {
 
 // TestDownloadMedia_HTTPErrorReturnsError verifies non-200 responses error out.
 func TestDownloadMedia_HTTPErrorReturnsError(t *testing.T) {
+	disableMediaSSRFCheck(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	}))
@@ -500,6 +514,7 @@ func TestDownloadMedia_HTTPErrorReturnsError(t *testing.T) {
 // TestDownloadMedia_EmptyResponseReturnsError verifies zero-byte responses
 // are treated as errors (don't leave empty temp files behind).
 func TestDownloadMedia_EmptyResponseReturnsError(t *testing.T) {
+	disableMediaSSRFCheck(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")
 		// no body
@@ -515,6 +530,7 @@ func TestDownloadMedia_EmptyResponseReturnsError(t *testing.T) {
 // TestDownloadMedia_FallbackJPEGExtension verifies an unknown content-type
 // defaults to .jpg extension.
 func TestDownloadMedia_FallbackJPEGExtension(t *testing.T) {
+	disableMediaSSRFCheck(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Intentionally no Content-Type → default to .jpg
 		_, _ = w.Write([]byte("binary-bytes"))
@@ -550,5 +566,30 @@ func TestZaloAPIResponse_Roundtrip(t *testing.T) {
 	}
 	if !got.OK {
 		t.Error("OK field lost in round-trip")
+	}
+}
+
+// TestDownloadMedia_BlocksSSRFTargets verifies downloadMedia rejects
+// private/loopback/link-local URLs before making the request. Security
+// 2026-07-02 (audit P2#7): Zalo's polling-mode API response supplies this
+// URL — a MITM'd or malicious upstream response could point it at an
+// internal service. Does NOT call disableMediaSSRFCheck — this is the one
+// test that exercises the real guard.
+func TestDownloadMedia_BlocksSSRFTargets(t *testing.T) {
+	ch, _ := New(config.ZaloConfig{Token: "t"}, bus.New(), nil)
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"loopback", "http://127.0.0.1:9/x.png"},
+		{"private", "http://10.0.0.5/x.png"},
+		{"link_local_metadata", "http://169.254.169.254/latest/meta-data/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ch.downloadMedia(tc.url); err == nil {
+				t.Fatalf("expected SSRF guard to block %s, got nil error", tc.url)
+			}
+		})
 	}
 }

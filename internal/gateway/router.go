@@ -486,12 +486,7 @@ func oidcRoleStringFromRealmRoles(roles []string) string {
 // Priority: owner > admin > operator > member → operator > viewer (fallback).
 func oidcRoleFromRealmRoles(roles []string) permissions.Role {
 	has := func(name string) bool {
-		for _, r := range roles {
-			if r == name {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(roles, name)
 	}
 	switch {
 	case has("owner"):
@@ -508,13 +503,12 @@ func oidcRoleFromRealmRoles(roles []string) permissions.Role {
 }
 
 // isOwnerID checks if the given user ID is in the configured owner list.
-// If no owner IDs configured, only "system" is treated as owner (fail-closed).
+// Security 2026-07-02 (audit P2#8): sibling of http/auth.go isHTTPOwnerID —
+// see that function's doc for the rationale. True fail-closed: nobody is
+// Owner without an explicit ownerIDs entry.
 func isOwnerID(userID string, ownerIDs []string) bool {
-	if userID == "" {
+	if userID == "" || len(ownerIDs) == 0 {
 		return false
-	}
-	if len(ownerIDs) == 0 {
-		return userID == "system"
 	}
 	return slices.Contains(ownerIDs, userID)
 }
@@ -612,7 +606,12 @@ func (r *MethodRouter) handleHealth(ctx context.Context, client *Client, req *pr
 		}
 	}
 
-	// Connected clients list
+	// Connected clients list. Security 2026-07-02 (audit P2#11): the health
+	// method is intentionally exempt from the normal permission check (line 80
+	// above) so unauthenticated/low-privilege clients can poll liveness — but
+	// that meant every UserID + RemoteAddr on the gateway leaked to any
+	// connected client via this same response. Gate the list itself to
+	// RoleAdmin+ instead of the whole method.
 	type clientInfo struct {
 		ID          string `json:"id"`
 		RemoteAddr  string `json:"remoteAddr"`
@@ -620,16 +619,19 @@ func (r *MethodRouter) handleHealth(ctx context.Context, client *Client, req *pr
 		Role        string `json:"role"`
 		ConnectedAt string `json:"connectedAt"`
 	}
-	clients := s.ClientList()
-	clientList := make([]clientInfo, 0, len(clients))
-	for _, c := range clients {
-		clientList = append(clientList, clientInfo{
-			ID:          c.ID(),
-			RemoteAddr:  c.RemoteAddr(),
-			UserID:      c.UserID(),
-			Role:        string(c.Role()),
-			ConnectedAt: c.ConnectedAt().UTC().Format(time.RFC3339),
-		})
+	var clientList []clientInfo
+	if permissions.HasMinRole(client.Role(), permissions.RoleAdmin) {
+		clients := s.ClientList()
+		clientList = make([]clientInfo, 0, len(clients))
+		for _, c := range clients {
+			clientList = append(clientList, clientInfo{
+				ID:          c.ID(),
+				RemoteAddr:  c.RemoteAddr(),
+				UserID:      c.UserID(),
+				Role:        string(c.Role()),
+				ConnectedAt: c.ConnectedAt().UTC().Format(time.RFC3339),
+			})
+		}
 	}
 
 	// Tool count

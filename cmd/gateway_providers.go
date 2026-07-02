@@ -833,7 +833,7 @@ func setupACPShim(toolsReg *tools.Registry, msgBus *bus.MessageBus, pgStores *st
 //
 // Degrades silently when prerequisites are missing — shim falls back to the
 // pre-15f global catalog (which works for builtin-only agents).
-func wireACPMCPSessionBuilder(deps ACPDeps, toolsReg *tools.Registry, mcpPool *mcpbridge.Pool, pgStores *store.Stores) {
+func wireACPMCPSessionBuilder(deps ACPDeps, toolsReg *tools.Registry, mcpPool *mcpbridge.Pool, pgStores *store.Stores, msgBus *bus.MessageBus) {
 	if deps.Shim == nil {
 		return
 	}
@@ -871,10 +871,19 @@ func wireACPMCPSessionBuilder(deps ACPDeps, toolsReg *tools.Registry, mcpPool *m
 		// does NOT pollute the shared toolsReg (preserves the cross-agent leak
 		// guarantee documented at internal/agent/resolver.go:317-321).
 		sessReg := toolsReg.Clone()
-		mgr := mcpbridge.NewManager(sessReg,
+		mgrOpts := []mcpbridge.ManagerOption{
 			mcpbridge.WithStore(pgStores.MCP),
 			mcpbridge.WithPool(mcpPool),
-		)
+		}
+		// Security 2026-07-02 (audit P2#9): without a grant checker, an MCP
+		// grant revoked mid-session stayed callable in this ACP session until
+		// it ended (the resolver-side sibling at agent/resolver.go:329-331
+		// always wires one when available). msgBus wires cache invalidation on
+		// grant-change events the same way NewStoreGrantChecker does elsewhere.
+		if msgBus != nil {
+			mgrOpts = append(mgrOpts, mcpbridge.WithGrantChecker(mcpbridge.NewStoreGrantChecker(pgStores.MCP, msgBus)))
+		}
+		mgr := mcpbridge.NewManager(sessReg, mgrOpts...)
 		if err := mgr.LoadForAgent(ctx, aid, ""); err != nil {
 			// Partial success is acceptable — return the clone with whatever
 			// connected, plus the error so the shim can log it. Builtins still

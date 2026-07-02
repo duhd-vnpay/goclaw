@@ -21,6 +21,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
 const (
@@ -339,9 +340,21 @@ func (c *Channel) sendPairingReply(ctx context.Context, senderID, chatID string)
 
 const maxMediaBytes = 10 * 1024 * 1024 // 10MB
 
+// checkMediaURLSSRF validates a Zalo media URL before downloadMedia fetches it.
+// Var (not a direct call) so tests can swap in a no-op and exercise
+// downloadMedia's fetch/extension/write logic against an httptest.Server,
+// whose loopback address CheckSSRF legitimately rejects in production.
+var checkMediaURLSSRF = tools.CheckSSRF
+
 // downloadMedia fetches a photo from a Zalo CDN URL and saves it as a local temp file.
 // Zalo CDN URLs are auth-restricted and expire, so we must download immediately.
 func (c *Channel) downloadMedia(url string) (string, error) {
+	// Security 2026-07-02 (audit P2#7): Zalo's polling-mode API response supplies
+	// this URL (msg.PhotoURL/msg.Photo) — a MITM'd or malicious upstream response
+	// could point it at an internal service (SSRF). Same guard used by web_fetch.
+	if err := checkMediaURLSSRF(url); err != nil {
+		return "", fmt.Errorf("blocked media URL: %w", err)
+	}
 	resp, err := c.client.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("fetch: %w", err)

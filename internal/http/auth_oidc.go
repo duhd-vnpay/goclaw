@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,8 +77,10 @@ func (h *AuthOIDCHandler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"scope":         {"openid email profile"},
 	}
 
-	// Pass through ?redirect= for post-login navigation
-	if redir := r.URL.Query().Get("redirect"); redir != "" {
+	// Pass through ?redirect= for post-login navigation. Reject cross-origin
+	// targets here (defense in depth) — same-origin check repeated at the
+	// callback, which is the exploitable sink (open redirect + token leak).
+	if redir := r.URL.Query().Get("redirect"); redir != "" && isSafeRedirectTarget(redir, r) {
 		params.Set("state", redir)
 	}
 
@@ -205,8 +208,14 @@ func (h *AuthOIDCHandler) handleCallback(w http.ResponseWriter, r *http.Request)
 		"access_token": tokenResp.AccessToken,
 	}
 
-	// If state param has a redirect URL, redirect to the frontend with token
-	if state := r.URL.Query().Get("state"); state != "" {
+	// If state param has a redirect URL, redirect to the frontend with token.
+	// Security 2026-07-02 (audit P1#2): state is attacker-controlled (passed
+	// through unvalidated from ?redirect= at login) — without this check, an
+	// attacker crafts /v1/auth/login?redirect=https://evil.com to have the
+	// freshly-issued access token appended to an arbitrary origin's URL
+	// fragment (open redirect + token exfiltration via evil.com's JS reading
+	// location.hash).
+	if state := r.URL.Query().Get("state"); state != "" && isSafeRedirectTarget(state, r) {
 		// Redirect to frontend with token in fragment (not query -- avoids server logs)
 		frontendURL := state + "#access_token=" + url.QueryEscape(tokenResp.AccessToken)
 		http.Redirect(w, r, frontendURL, http.StatusFound)
@@ -215,6 +224,28 @@ func (h *AuthOIDCHandler) handleCallback(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// isSafeRedirectTarget reports whether target is safe to redirect to after
+// login: either a same-app relative path, or an absolute URL whose host
+// matches the incoming request's own origin (X-Forwarded-Host behind a
+// reverse proxy, else r.Host — same convention as callbackURL in
+// mcp_oauth.go). Rejects protocol-relative targets ("//evil.com", parsed by
+// net/url as a host-only URL with empty scheme) and any other-origin
+// absolute URL.
+func isSafeRedirectTarget(target string, r *http.Request) bool {
+	if strings.HasPrefix(target, "/") && !strings.HasPrefix(target, "//") {
+		return true
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	ownHost := r.Header.Get("X-Forwarded-Host")
+	if ownHost == "" {
+		ownHost = r.Host
+	}
+	return u.Host == ownHost
 }
 
 // handleMe returns the current user profile from a valid JWT.

@@ -7,9 +7,32 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"regexp"
 	"sync"
 	"sync/atomic"
 )
+
+// debugScrubPatterns redacts credential-shaped substrings from ACP JSON-RPC
+// wire dumps before they hit Debug logs. Security 2026-07-02 (audit P2#5):
+// these lines can carry tool-result payloads (e.g. env dumps, API responses)
+// containing live secrets. Kept minimal and local rather than importing
+// internal/tools.ScrubCredentials — that package imports internal/providers,
+// and internal/providers imports internal/providers/acp, so pulling it in
+// here would create an import cycle.
+var debugScrubPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`sk-[a-zA-Z0-9-]{20,}`),
+	regexp.MustCompile(`ghp_[a-zA-Z0-9]{36}`),
+	regexp.MustCompile(`AKIA[A-Z0-9]{16}`),
+	regexp.MustCompile(`(?i)(api[_-]?key|token|secret|password|bearer|authorization)\s*[:=]\s*["']?\S{8,}["']?`),
+	regexp.MustCompile(`(?i)(postgres|postgresql|mysql|mongodb|redis|amqp)://[^\s"']+`),
+}
+
+func scrubDebugLine(s string) string {
+	for _, pat := range debugScrubPatterns {
+		s = pat.ReplaceAllString(s, "[REDACTED]")
+	}
+	return s
+}
 
 // jsonrpcMessage is the wire format for JSON-RPC 2.0 messages.
 type jsonrpcMessage struct {
@@ -72,7 +95,7 @@ func (c *Conn) readLoop() {
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		slog.Debug("acp.jsonrpc: < READ", "line", string(line))
+		slog.Debug("acp.jsonrpc: < READ", "line", scrubDebugLine(string(line)))
 		if len(line) == 0 {
 			continue
 		}
@@ -208,7 +231,7 @@ func (c *Conn) writeMessage(msg *jsonrpcMessage) error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	slog.Debug("acp.jsonrpc: > WRITE", "data", string(data))
+	slog.Debug("acp.jsonrpc: > WRITE", "data", scrubDebugLine(string(data)))
 	_, err = c.writer.Write(data)
 	return err
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -135,7 +136,7 @@ func NewWebhookHandler(verificationToken, encryptKey string, onMessage func(even
 
 		// URL verification challenge
 		if envelope.Type == "url_verification" {
-			if verificationToken == "" || envelope.Token != verificationToken {
+			if verificationToken == "" || subtle.ConstantTimeCompare([]byte(envelope.Token), []byte(verificationToken)) != 1 {
 				slog.Warn("security.feishu_webhook_url_verification_rejected")
 				w.WriteHeader(http.StatusOK)
 				return
@@ -166,7 +167,7 @@ func NewWebhookHandler(verificationToken, encryptKey string, onMessage func(even
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		if verificationToken != "" && event.Header.Token != verificationToken {
+		if verificationToken != "" && subtle.ConstantTimeCompare([]byte(event.Header.Token), []byte(verificationToken)) != 1 {
 			slog.Warn("security.feishu_webhook_token_mismatch")
 			w.WriteHeader(http.StatusOK)
 			return

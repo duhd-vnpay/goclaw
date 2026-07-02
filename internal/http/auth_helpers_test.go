@@ -168,12 +168,16 @@ func TestIsHTTPOwnerID_EmptyUserID_NotOwner(t *testing.T) {
 	}
 }
 
-func TestIsHTTPOwnerID_EmptyOwnerList_OnlySystemIsOwner(t *testing.T) {
-	if !isHTTPOwnerID("system", nil) {
-		t.Error("'system' is default owner when no owner IDs configured")
+// Security 2026-07-02 (audit P2#8): "system" no longer gets an implicit Owner
+// fallback when GOCLAW_OWNER_IDS is unconfigured — that let any caller with
+// the gateway token escalate Admin→Owner via X-GoClaw-User-Id: system. True
+// fail-closed: nobody is Owner without an explicit ownerIDs entry.
+func TestIsHTTPOwnerID_EmptyOwnerList_NobodyIsOwner(t *testing.T) {
+	if isHTTPOwnerID("system", nil) {
+		t.Error("'system' should not be owner when no owner IDs configured (fail-closed)")
 	}
 	if isHTTPOwnerID("admin", nil) {
-		t.Error("non-system user should not be owner with empty owner list")
+		t.Error("non-configured user should not be owner with empty owner list")
 	}
 }
 

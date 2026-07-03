@@ -1239,6 +1239,5 @@ func TestCodexProviderDoesNotRetryAfterVisibleOutput(t *testing.T) {
 	}
 	if len(chunks) != 1 || chunks[0] != "partial" {
 		t.Fatalf("chunks = %#v, want [partial]", chunks)
-
 	}
 }

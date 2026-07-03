@@ -458,8 +458,15 @@ func (p *ACPProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 
 	var buf strings.Builder
 	var updateCount int
+	var lastMessageID string
 	promptResp, err := proc.Prompt(ctx, acpSessionID, content, func(update acp.SessionUpdate) {
 		if update.Message != nil {
+			if update.Message.MessageID != "" && update.Message.MessageID != lastMessageID {
+				if lastMessageID != "" {
+					buf.Reset()
+				}
+				lastMessageID = update.Message.MessageID
+			}
 			for _, block := range update.Message.Content {
 				if block.Type == "text" {
 					buf.WriteString(block.Text)
@@ -528,8 +535,15 @@ func (p *ACPProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk f
 
 	var buf strings.Builder
 	var updateCount int
+	var lastMessageID string
 	promptResp, err := proc.Prompt(ctx, acpSessionID, content, func(update acp.SessionUpdate) {
 		if update.Message != nil {
+			if update.Message.MessageID != "" && update.Message.MessageID != lastMessageID {
+				if lastMessageID != "" {
+					buf.Reset()
+				}
+				lastMessageID = update.Message.MessageID
+			}
 			for _, block := range update.Message.Content {
 				if block.Type == "text" {
 					onChunk(StreamChunk{Content: block.Text})

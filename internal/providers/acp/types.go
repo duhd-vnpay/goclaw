@@ -138,7 +138,8 @@ type SessionUpdate struct {
 
 	Update struct {
 		SessionUpdate string `json:"sessionUpdate"`
-		
+		MessageID     string `json:"messageId,omitempty"`
+
 		Content json.RawMessage `json:"content,omitempty"`
 
 		Entries []struct {
@@ -155,8 +156,9 @@ type SessionUpdate struct {
 }
 
 type MessageUpdate struct {
-	Role    string         `json:"role"`
-	Content []ContentBlock `json:"content"`
+	Role      string         `json:"role"`
+	Content   []ContentBlock `json:"content"`
+	MessageID string         `json:"messageId,omitempty"`
 }
 
 type ToolCallUpdate struct {

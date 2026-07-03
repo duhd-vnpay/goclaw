@@ -104,7 +104,7 @@ func (p *ACPProcess) dispatchUpdate(update SessionUpdate) {
 	// Gemini protocol mapping: agent_message_chunk → Message
 	if update.Update.SessionUpdate == "agent_message_chunk" && len(update.Update.Content) > 0 {
 		if update.Message == nil {
-			update.Message = &MessageUpdate{Role: "assistant"}
+			update.Message = &MessageUpdate{Role: "assistant", MessageID: update.Update.MessageID}
 		}
 		// Content may arrive as a single object {"type":"text","text":"..."} or an array
 		var single struct {

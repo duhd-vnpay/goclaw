@@ -292,7 +292,7 @@ func (p *ACPProvider) shimEnabled(ctx context.Context) bool {
 // resolveSession returns the ACP session ID for a goclaw session key.
 // It creates a new session if none exists, or reloads it after a process respawn.
 // A per-key mutex prevents concurrent creation races for the same session.
-func (p *ACPProvider) resolveSession(ctx context.Context, proc *acp.ACPProcess, goclawKey string) (string, error) {
+func (p *ACPProvider) resolveSession(ctx context.Context, proc *acp.ACPProcess, goclawKey string, model string) (string, error) {
 	actual, _ := p.sessionMu.LoadOrStore(goclawKey, &sync.Mutex{})
 	mu := actual.(*sync.Mutex)
 	mu.Lock()
@@ -329,6 +329,11 @@ func (p *ACPProvider) resolveSession(ctx context.Context, proc *acp.ACPProcess, 
 				sid, err = proc.LoadSession(ctx, entry.id)
 			}
 			if err == nil {
+				if model != "" {
+					if err := proc.SetSessionConfigOption(ctx, sid, "model", model); err != nil {
+						slog.Warn("acp.set_model_failed", "sid", sid, "model", model, "err", err)
+					}
+				}
 				p.acpSessions.Store(goclawKey, &acpSessionEntry{id: sid, proc: proc, lastUsed: time.Now()})
 				return sid, nil
 			}
@@ -352,6 +357,11 @@ func (p *ACPProvider) resolveSession(ctx context.Context, proc *acp.ACPProcess, 
 	}
 	if err != nil {
 		return "", err
+	}
+	if model != "" {
+		if err := proc.SetSessionConfigOption(ctx, sid, "model", model); err != nil {
+			slog.Warn("acp.set_model_failed", "sid", sid, "model", model, "err", err)
+		}
 	}
 	p.acpSessions.Store(goclawKey, &acpSessionEntry{id: sid, proc: proc, lastUsed: time.Now()})
 	return sid, nil
@@ -441,7 +451,7 @@ func (p *ACPProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 		return nil, fmt.Errorf("acp: spawn failed: %w", err)
 	}
 
-	acpSessionID, err := p.resolveSession(ctx, proc, sessionKey)
+	acpSessionID, err := p.resolveSession(ctx, proc, sessionKey, req.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -504,7 +514,7 @@ func (p *ACPProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk f
 		return nil, fmt.Errorf("acp: spawn failed: %w", err)
 	}
 
-	acpSessionID, err := p.resolveSession(ctx, proc, sessionKey)
+	acpSessionID, err := p.resolveSession(ctx, proc, sessionKey, req.Model)
 	if err != nil {
 		return nil, err
 	}

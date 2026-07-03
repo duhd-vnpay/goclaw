@@ -117,6 +117,19 @@ type CancelNotification struct {
 	SessionID string `json:"sessionId"`
 }
 
+// SetSessionConfigOptionRequest matches schema.json/$defs/SetSessionConfigOptionRequest
+// (x-method "session/set_config_option", x-side "agent").
+type SetSessionConfigOptionRequest struct {
+	SessionID string `json:"sessionId"`
+	ConfigID  string `json:"configId"`
+	Value     string `json:"value"`
+}
+
+// SetSessionConfigOptionResponse matches schema.json/$defs/SetSessionConfigOptionResponse.
+type SetSessionConfigOptionResponse struct {
+	ConfigOptions []any `json:"configOptions,omitempty"`
+}
+
 // --- Content Blocks ---
 
 type ContentBlock struct {

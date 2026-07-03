@@ -204,3 +204,19 @@ func (p *ACPProcess) Cancel(sessionID string) error {
 		SessionID: sessionID,
 	})
 }
+
+// SetSessionConfigOption sets a per-session config option (e.g. model selection)
+// via session/set_config_option. Callers should invoke this once right after
+// obtaining a session id (session/new or session/load), not on every prompt.
+func (p *ACPProcess) SetSessionConfigOption(ctx context.Context, sessionID, configID, value string) error {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	req := SetSessionConfigOptionRequest{SessionID: sessionID, ConfigID: configID, Value: value}
+	var resp SetSessionConfigOptionResponse
+	if err := p.conn.Call(ctx, "session/set_config_option", req, &resp); err != nil {
+		return fmt.Errorf("acp session/set_config_option: %w", err)
+	}
+	slog.Info("acp: session/set_config_option", "sid", sessionID, "configId", configID, "value", value)
+	return nil
+}

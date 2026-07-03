@@ -46,7 +46,9 @@ type ToolDescriptor struct {
 // SessionKey were added under Revision 1 to satisfy the routing context
 // expected by tools.ExecuteWithContext and outbound bus metadata.
 type CronContext struct {
-	AgentID       string `json:"agentId"`
+	AgentID       string `json:"agentId"` // agent_key (human-readable), NOT a UUID — see AgentUUID below
+	AgentUUID     string `json:"agentUuid,omitempty"` // agent UUID (uuid.String()); empty if unresolved
+	TenantID      string `json:"tenantId,omitempty"`  // tenant UUID (uuid.String()); needed by MCP grant re-check
 	RunID         string `json:"runId"`
 	ChannelID     string `json:"channelId"`
 	DeliverTarget string `json:"deliverTarget"`

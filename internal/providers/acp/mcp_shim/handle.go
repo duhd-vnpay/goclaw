@@ -79,6 +79,8 @@ func fromACP(e acp.ShimSessionEntry) SessionEntry {
 		Allowlist: e.Allowlist,
 		Cron: CronContext{
 			AgentID:       e.AgentID,
+			AgentUUID:     e.AgentUUID,
+			TenantID:      e.TenantID,
 			ChannelID:     e.ChannelID,
 			DeliverTarget: e.DeliverTarget,
 			PeerKind:      e.PeerKind,

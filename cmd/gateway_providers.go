@@ -56,6 +56,7 @@ type toolsCtxReader struct{}
 func (toolsCtxReader) ReadRouting(ctx context.Context) providers.ACPRoutingContext {
 	return providers.ACPRoutingContext{
 		AgentKey:   tools.ToolAgentKeyFromCtx(ctx),
+		AgentID:    store.AgentIDFromContext(ctx),
 		ChannelID:  tools.ToolChannelFromCtx(ctx),
 		ChatID:     tools.ToolChatIDFromCtx(ctx),
 		PeerKind:   tools.ToolPeerKindFromCtx(ctx),

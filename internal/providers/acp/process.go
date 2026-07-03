@@ -44,6 +44,8 @@ type ShimSessionEntry struct {
 	SID           string
 	Allowlist     []string
 	AgentID       string
+	AgentUUID     string // agent UUID (uuid.String()); distinct from AgentID (agent_key) above
+	TenantID      string // tenant UUID (uuid.String()); needed by MCP grant re-check (store.WithTenantID)
 	ChannelID     string
 	DeliverTarget string
 	PeerKind      string

@@ -33,10 +33,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/mcp"
+	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
@@ -427,6 +429,22 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 	if sess.Cron.SessionKey != "" {
 		ctx = tools.WithToolSessionKey(ctx, sess.Cron.SessionKey)
+	}
+	// BridgeTool.Execute's runtime grant re-check (mcp.GrantChecker.IsAllowed,
+	// security audit finding P2#9) reads store.AgentIDFromContext/TenantIDFromContext
+	// off ctx — without these the check fails closed with "tenant_id required"
+	// for every MCP-bridge tool call under ACP. Session-level ctx here never had
+	// them (only tools.WithTool* above), unlike the non-ACP pipeline path where
+	// loop_context.go sets both at turn start.
+	if sess.Cron.AgentUUID != "" {
+		if aid, err := uuid.Parse(sess.Cron.AgentUUID); err == nil {
+			ctx = store.WithAgentID(ctx, aid)
+		}
+	}
+	if sess.Cron.TenantID != "" {
+		if tid, err := uuid.Parse(sess.Cron.TenantID); err == nil {
+			ctx = store.WithTenantID(ctx, tid)
+		}
 	}
 
 	// Detect tools/list so we can filter the response. We read the body once

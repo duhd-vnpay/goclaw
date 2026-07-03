@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/nextlevelbuilder/goclaw/internal/providers/acp"
 )
 
@@ -31,6 +33,7 @@ type ACPToolResolver interface {
 // inside an ACP sub-session. Provided by ACPContextReader.
 type ACPRoutingContext struct {
 	AgentKey   string
+	AgentID    uuid.UUID // agent UUID off store.WithAgentID(ctx); zero if unset
 	ChannelID  string
 	ChatID     string
 	PeerKind   string
@@ -389,10 +392,16 @@ func (p *ACPProvider) makeShimRegisterFn(ctx context.Context, goclawKey string) 
 			allowlist = nil
 		}
 
+		var agentUUIDStr string
+		if rc.AgentID != uuid.Nil {
+			agentUUIDStr = rc.AgentID.String()
+		}
 		entry := acp.ShimSessionEntry{
 			SID:           sid,
 			Allowlist:     allowlist,
 			AgentID:       rc.AgentKey,
+			AgentUUID:     agentUUIDStr,
+			TenantID:      p.tenantID,
 			ChannelID:     rc.ChannelID,
 			DeliverTarget: rc.ChatID,
 			PeerKind:      rc.PeerKind,

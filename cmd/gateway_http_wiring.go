@@ -67,6 +67,9 @@ func (d *gatewayDeps) wireHTTPHandlersOnServer(
 		d.server.SetMCPHandler(h.mcp)
 	}
 	if h.mcpUserCreds != nil {
+		if mcpPool != nil {
+			h.mcpUserCreds.SetPoolEvictor(mcpPool)
+		}
 		d.server.SetMCPUserCredentialsHandler(h.mcpUserCreds)
 	}
 	if h.mcpOAuth != nil {

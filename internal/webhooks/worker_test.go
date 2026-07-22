@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/crypto"
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/security"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
@@ -28,8 +30,8 @@ type stubCallStore struct {
 	claimErr    error          // if non-nil, returned by ClaimNext
 	reclaimN    int64          // count returned by ReclaimStale
 	casLeaseErr error          // if non-nil, returned by UpdateStatusCAS
-	hbCount     int32 // số lần Heartbeat được gọi (atomic)
-	hbErr       error // nếu non-nil, Heartbeat trả về lỗi này
+	hbCount     int32          // số lần Heartbeat được gọi (atomic)
+	hbErr       error          // nếu non-nil, Heartbeat trả về lỗi này
 }
 
 func newStubCallStore(initial *store.WebhookCallData) *stubCallStore {
@@ -181,6 +183,33 @@ func newTestCall(callbackURL string, agentID *uuid.UUID) *store.WebhookCallData 
 	return call
 }
 
+func TestNewCallbackUsageMapsCacheTokens(t *testing.T) {
+	if got := newCallbackUsage(nil); got != nil {
+		t.Fatalf("nil usage must map to nil, got %+v", got)
+	}
+	u := &providers.Usage{
+		PromptTokens:                      10,
+		CompletionTokens:                  5,
+		TotalTokens:                       15,
+		CacheReadTokens:                   8,
+		CacheCreationTokens:               2,
+		PromptTokensIncludeCachedSegments: true,
+	}
+	got := newCallbackUsage(u)
+	if got == nil {
+		t.Fatal("expected non-nil callbackUsage")
+	}
+	if got.PromptTokens != 10 || got.CompletionTokens != 5 || got.TotalTokens != 15 {
+		t.Errorf("base tokens wrong: %+v", got)
+	}
+	if got.CacheReadTokens != 8 || got.CacheCreationTokens != 2 {
+		t.Errorf("cache tokens not mapped: read=%d create=%d", got.CacheReadTokens, got.CacheCreationTokens)
+	}
+	if !got.PromptTokensIncludeCachedSegments {
+		t.Error("include-cached flag not mapped")
+	}
+}
+
 func TestDecodeAsyncPayload_UnwrapsAuditEnvelope(t *testing.T) {
 	meta := asyncPayload{
 		Input:       json.RawMessage(`"hello"`),
@@ -296,6 +325,78 @@ func TestHMACHeaderPresent(t *testing.T) {
 	expected := Sign(rawSecret, ts, gotBody)
 	if gotSig != expected {
 		t.Errorf("HMAC mismatch\ngot:  %s\nwant: %s", gotSig, expected)
+	}
+}
+
+// TestExecuteReDeliveryCarriesCallsBreakdown verifies that when a call already has
+// a stored callbackPayload (call.Response set, simulating a re-delivery/retry), the
+// re-sent HTTP callback body carries forward the per-call breakdown (`calls`) and
+// `total_cost_usd` fields from the previously-stored payload.
+func TestExecuteReDeliveryCarriesCallsBreakdown(t *testing.T) {
+	security.SetAllowLoopbackForTest(true)
+	defer security.SetAllowLoopbackForTest(false)
+
+	var gotBody []byte
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	agentID := uuid.New()
+	call := newTestCall(srv.URL, &agentID)
+	// Pre-populate response so agent invocation is skipped and the re-delivery
+	// path (execute's "else if len(call.Response) > 0" branch) is exercised.
+	prevResp, _ := json.Marshal(callbackPayload{
+		Output: "prior output",
+		Status: "done",
+		Calls: []providers.CallUsage{
+			{
+				Type:     "tool_call",
+				Name:     "read_image",
+				Provider: "9router",
+				Model:    "cx/gpt-5.5",
+				Usage:    providers.Usage{PromptTokens: 100, TotalTokens: 100},
+				CostUSD:  0.02,
+			},
+		},
+		TotalCostUSD: 0.02,
+	})
+	call.Response = prevResp
+
+	wh, _ := newTestWebhook(call.WebhookID, testEncKey)
+	callStore := newStubCallStore(call)
+	whStore := &stubWebhookStore{wh: wh}
+
+	w := newTestWorker(callStore, whStore)
+	w.execute(context.Background(), call, call.TenantID, "test-lease")
+
+	if len(gotBody) == 0 {
+		t.Fatal("no callback body captured — request never reached server")
+	}
+
+	var payload callbackPayload
+	if err := json.Unmarshal(gotBody, &payload); err != nil {
+		t.Fatalf("unmarshal captured body: %v\nbody: %s", err, gotBody)
+	}
+
+	if len(payload.Calls) != 1 {
+		t.Fatalf("payload.Calls length: got %d, want 1 (body: %s)", len(payload.Calls), gotBody)
+	}
+	if payload.Calls[0].Name != "read_image" {
+		t.Errorf("payload.Calls[0].Name: got %q, want %q", payload.Calls[0].Name, "read_image")
+	}
+	if payload.TotalCostUSD < 0.0199 || payload.TotalCostUSD > 0.0201 {
+		t.Errorf("payload.TotalCostUSD: got %f, want ~0.02", payload.TotalCostUSD)
+	}
+
+	// Belt-and-suspenders: also confirm the raw JSON carries the expected keys.
+	bodyStr := string(gotBody)
+	for _, want := range []string{`"calls"`, `"read_image"`, `"total_cost_usd"`} {
+		if !strings.Contains(bodyStr, want) {
+			t.Errorf("callback body missing %s: %s", want, bodyStr)
+		}
 	}
 }
 
@@ -729,6 +830,24 @@ func TestHeartbeatLoopRenews(t *testing.T) {
 	}
 	if runCtx.Err() != nil {
 		t.Errorf("runCtx must NOT be cancelled while lease valid; err=%v", runCtx.Err())
+	}
+}
+
+func TestBuildCallbackBreakdown(t *testing.T) {
+	calls := []providers.CallUsage{
+		{Type: "llm_call", Provider: "p", Model: "m", Usage: providers.Usage{PromptTokens: 10, TotalTokens: 10}, CostUSD: 0.01},
+		{Type: "tool_call", Name: "read_image", Provider: "9router", Model: "cx/gpt-5.5",
+			Usage: providers.Usage{PromptTokens: 100, TotalTokens: 100}, CostUSD: 0.02},
+	}
+	usage, cost := callbackBreakdown(calls)
+	if usage == nil || usage.PromptTokens != 110 {
+		t.Errorf("usage sum wrong: %+v", usage)
+	}
+	if cost < 0.0299 || cost > 0.0301 {
+		t.Errorf("cost = %f, want ~0.03", cost)
+	}
+	if usage2, _ := callbackBreakdown(nil); usage2 != nil {
+		t.Error("nil calls → nil usage")
 	}
 }
 

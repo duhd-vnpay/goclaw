@@ -91,6 +91,9 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 	if req.ChannelType != "" {
 		ctx = tools.WithToolChannelType(ctx, req.ChannelType)
 	}
+	if len(req.TelegramManagerPermissions) > 0 {
+		ctx = tools.WithTelegramManagerPermissions(ctx, req.TelegramManagerPermissions)
+	}
 	// Inject channel/chatID/peerKind/sessionKey into context so ACP provider's
 	// ctxReader.ReadRouting(ctx) can populate SessionEntry.Cron at shim
 	// register time. Without these, write_file(deliver=true) inside an ACP
@@ -229,9 +232,11 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 		ctx = tools.WithToolTeamID(ctx, req.TeamID)
 		// Team root for dispatched tasks: resolve the UserChatLayer-stripped root
 		// so the dispatched agent can still read peer-scoped files in the same team.
+		// l.dataDir is already tenant-scoped (see resolver.go: config.TenantDataDir),
+		// so TenantLayer must NOT be reapplied here — doing so double-joins the
+		// tenant segment (tenants/<slug>/tenants/<slug>/teams/<id>).
 		if teamUUID, err := uuid.Parse(req.TeamID); err == nil && l.dataDir != "" {
 			teamRoot := tools.ResolveWorkspace(l.dataDir,
-				tools.TenantLayer(store.TenantIDFromContext(ctx), store.TenantSlugFromContext(ctx)),
 				tools.TeamLayer(teamUUID),
 			)
 			ctx = tools.WithToolTeamRoot(ctx, teamRoot)
@@ -261,9 +266,10 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 				wsChat = req.UserID
 			}
 			shared := tools.IsSharedWorkspace(team.Settings)
-			// Resolve team workspace via layered pipeline: tenant → team → user/chat.
+			// Resolve team workspace via layered pipeline: team → user/chat.
+			// l.dataDir is already tenant-scoped (see resolver.go: config.TenantDataDir) —
+			// do NOT reapply TenantLayer here, it would double-join the tenant segment.
 			wsDir := tools.ResolveWorkspace(l.dataDir,
-				tools.TenantLayer(store.TenantIDFromContext(ctx), store.TenantSlugFromContext(ctx)),
 				tools.TeamLayer(team.ID),
 				tools.UserChatLayer(wsChat, shared),
 			)
@@ -281,7 +287,6 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 			// the same team. Writes still default to wsDir above; team root only
 			// widens the allowed-prefix set for path boundary checks.
 			teamRoot := tools.ResolveWorkspace(l.dataDir,
-				tools.TenantLayer(store.TenantIDFromContext(ctx), store.TenantSlugFromContext(ctx)),
 				tools.TeamLayer(team.ID),
 			)
 			ctx = tools.WithToolTeamRoot(ctx, teamRoot)
@@ -311,12 +316,14 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 			// Filesystem path segment must use agent_key, not UUID — matches
 			// the v2 path in loop_pipeline_callbacks.go and the session_key
 			// anchor. See docs/agent-identity-conventions.md.
-			AgentID:    l.id,
-			AgentType:  l.agentType,
-			UserID:     req.UserID,
-			ChatID:     req.ChatID,
-			TenantID:   store.TenantIDFromContext(ctx).String(),
-			TenantSlug: store.TenantSlugFromContext(ctx),
+			AgentID:   l.id,
+			AgentType: l.agentType,
+			UserID:    req.UserID,
+			ChatID:    req.ChatID,
+			// TenantID/TenantSlug intentionally left empty: l.dataDir (BaseDir below)
+			// is already tenant-scoped (see resolver.go: config.TenantDataDir). Setting
+			// TenantID here would make resolveTeam/resolvePersonal reapply tenantPath()
+			// and double-join the tenant segment (tenants/<slug>/tenants/<slug>/...).
 			PeerKind:   req.PeerKind,
 			TeamID:     teamIDPtr,
 			TeamConfig: teamWSConfig,

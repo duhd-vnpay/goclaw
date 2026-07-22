@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,7 +48,7 @@ func (l *Loop) pipelineCallbacks(req *RunRequest, bridgeRS *runState) pipelineCa
 		loadSessionHistory: l.makeLoadSessionHistory(),
 		resolveWorkspace:   l.makeResolveWorkspace(req),
 		loadContextFiles:   l.makeLoadContextFiles(),
-		buildMessages:      l.makeBuildMessages(),
+		buildMessages:      l.makeBuildMessages(req),
 		enrichMedia:        l.makeEnrichMedia(req),
 		injectReminders:    l.makeInjectReminders(req),
 		buildFilteredTools: l.makeBuildFilteredTools(req),
@@ -129,14 +132,20 @@ func (l *Loop) makeLoadContextFiles() func(ctx context.Context, userID string) (
 	}
 }
 
-func (l *Loop) makeBuildMessages() func(ctx context.Context, input *pipeline.RunInput, history []providers.Message, summary string) ([]providers.Message, error) {
+func (l *Loop) makeBuildMessages(req *RunRequest) func(ctx context.Context, input *pipeline.RunInput, history []providers.Message, summary string) ([]providers.Message, error) {
 	return func(ctx context.Context, input *pipeline.RunInput, history []providers.Message, summary string) ([]providers.Message, error) {
+		if prompt := buildTeamWorkDirectivePrompt(req.TeamWorkDirective); prompt != "" {
+			if input.ExtraSystemPrompt != "" {
+				input.ExtraSystemPrompt += "\n\n"
+			}
+			input.ExtraSystemPrompt += prompt
+		}
 		msgs, _ := l.buildMessages(ctx, history, summary,
 			input.Message, input.ExtraSystemPrompt,
 			input.SessionKey, input.Channel, input.ChannelType,
 			input.BitrixPortalDomain,
 			input.ChatTitle, input.ChatID, input.PeerKind, input.UserID, input.SenderName,
-			input.HistoryLimit, input.SkillFilter, input.LightContext)
+			input.HistoryLimit, input.SkillFilter, input.LightContext, input.TelegramManagerPermissions)
 		return msgs, nil
 	}
 }
@@ -258,18 +267,29 @@ func (l *Loop) makeBuildFilteredTools(req *RunRequest) func(state *pipeline.RunS
 			cacheValid = true
 		}
 
-		mcpDefs := 0
-		for _, td := range toolDefs {
-			if td.Function != nil && strings.HasPrefix(strings.TrimSpace(td.Function.Name), "mcp_") {
-				mcpDefs++
-			}
-		}
 		slog.Debug("mcp.filtered_tools",
 			"tool_defs_count", len(toolDefs),
-			"mcp_defs_count", mcpDefs,
+			"mcp_defs_count", countMCPToolDefs(toolDefs),
 			"iteration", state.Iteration)
 		return toolDefs, nil
 	}
+}
+
+// countMCPToolDefs counts MCP-bridged tool definitions (name prefix "mcp_").
+// It skips entries with a nil Function — e.g. the native image_generation
+// sentinel providers.ToolDefinition{Type: "image_generation"} — which would
+// otherwise nil-deref (the v3.14.0 panic on every message for codex agents).
+func countMCPToolDefs(toolDefs []providers.ToolDefinition) int {
+	n := 0
+	for _, td := range toolDefs {
+		if td.Function == nil {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(td.Function.Name), "mcp_") {
+			n++
+		}
+	}
+	return n
 }
 
 // makeAuthorizeToolCall enforces a runtime fail-closed allowlist check before
@@ -299,7 +319,7 @@ func (l *Loop) makeAuthorizeToolCall() func(ctx context.Context, state *pipeline
 		if l.tools != nil && l.tools.TryActivateDeferred(name) {
 			// Re-check deny policy to prevent a lazy-activated tool from bypassing
 			// an explicit deny rule.
-			if l.toolPolicy != nil && l.toolPolicy.IsDenied(name, l.agentToolPolicy) {
+			if l.toolPolicy != nil && l.toolPolicy.IsDenied(tools.ResolveConcreteRegistry(l.tools), name, l.agentToolPolicy) {
 				return false, "tool not allowed by policy: " + name
 			}
 			allowed[name] = true
@@ -308,6 +328,18 @@ func (l *Loop) makeAuthorizeToolCall() func(ctx context.Context, state *pipeline
 
 		return false, "tool not allowed by policy: " + name
 	}
+}
+
+// allowedToolNamesSlice converts a policy-filtered allowed-tool set into a
+// sorted slice for deterministic downstream consumption (e.g. Claude CLI
+// --disallowedTools derivation).
+func allowedToolNamesSlice(allowed map[string]bool) []string {
+	names := make([]string, 0, len(allowed))
+	for name := range allowed {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 func (l *Loop) makeCallLLM(req *RunRequest, emitRun func(AgentEvent)) func(ctx context.Context, state *pipeline.RunState, chatReq providers.ChatRequest) (*providers.ChatResponse, error) {
@@ -328,8 +360,22 @@ func (l *Loop) makeCallLLM(req *RunRequest, emitRun func(AgentEvent)) func(ctx c
 		chatReq.Options[providers.OptPeerKind] = req.PeerKind
 		chatReq.Options[providers.OptLocalKey] = req.LocalKey
 		chatReq.Options[providers.OptWorkspace] = tools.ToolWorkspaceFromCtx(ctx)
-		if tid := store.TenantIDFromContext(ctx); tid != uuid.Nil {
-			chatReq.Options[providers.OptTenantID] = tid.String()
+		// Pass the policy-filtered allowed tool set so the Claude CLI provider
+		// can restrict its native built-in tools (Bash, Edit, Write, Read,
+		// WebFetch, WebSearch) to what the agent's tool policy actually allows.
+		// A nil state.Tool.AllowedTools means BuildFilteredTools didn't run
+		// (not wired) — do NOT set the option in that case, so the CLI
+		// provider's own fail-closed default (nil -> no tools allowed) applies
+		// rather than silently omitting the flag.
+		if state.Tool.AllowedTools != nil {
+			chatReq.Options[providers.OptAllowedToolNames] = allowedToolNamesSlice(state.Tool.AllowedTools)
+		}
+		tenantID := store.TenantIDFromContext(ctx)
+		if tenantID != uuid.Nil {
+			chatReq.Options[providers.OptTenantID] = tenantID.String()
+		}
+		if supportsPromptCacheParams(provider) {
+			setDefaultPromptCacheOptions(chatReq.Options, tenantID, l.agentUUID, provider.Name(), req.SessionKey)
 		}
 
 		// Reasoning decision: resolve effort level for thinking models (o3, DeepSeek-R1, Kimi).
@@ -356,6 +402,9 @@ func (l *Loop) makeCallLLM(req *RunRequest, emitRun func(AgentEvent)) func(ctx c
 			opts = append(opts, withProvider(provider.Name()))
 		}
 		spanID := l.emitLLMSpanStart(ctx, start, state.Iteration+1, chatReq.Messages, opts...)
+		if spanID != uuid.Nil {
+			state.CurrentLLMSpanID = &spanID
+		}
 		recordUsageCapAttempt := func(reservation *usagecaps.Reservation) {
 			if reservation != nil {
 				opts = append(opts, withUsageCapMetadata(reservation.TraceMetadata()))
@@ -468,9 +517,29 @@ func (l *Loop) makeCallLLM(req *RunRequest, emitRun func(AgentEvent)) func(ctx c
 			}(),
 			"tools_provided", len(chatReq.Tools))
 
+		if err == nil && teamWorkDirectiveNeedsRetry(req.TeamWorkDirective, state.Iteration, resp) {
+			retryReq := buildTeamWorkDirectiveRetryRequest(chatReq, req.TeamWorkDirective)
+			resp, err = callProvider("team-work-directive-retry", retryReq)
+			slog.Info("team_work_classify: directive retry response",
+				"has_error", err != nil,
+				"required_tool", req.TeamWorkDirective.normalizedRequiredTool(),
+				"tool_calls_count", func() int {
+					if resp == nil {
+						return -1
+					}
+					return len(resp.ToolCalls)
+				}())
+			if err == nil && teamWorkDirectiveNeedsRetry(req.TeamWorkDirective, state.Iteration, resp) {
+				resp = &providers.ChatResponse{
+					Content:      teamWorkDirectiveBlocker(req.TeamWorkDirective),
+					FinishReason: "stop",
+				}
+			}
+		}
+
 		// One guarded retry when MCP task tools are available but the model
 		// returns text-only instead of tool calls.
-		retryEligible := err == nil && resp != nil && len(resp.ToolCalls) == 0 && shouldRetryTaskMCP(chatReq)
+		retryEligible := req.TeamWorkDirective == nil && err == nil && resp != nil && len(resp.ToolCalls) == 0 && shouldRetryTaskMCP(chatReq)
 		slog.Info("debug.llm.retry_guard", "retry_eligible", retryEligible)
 		if retryEligible {
 			retryReq := chatReq
@@ -522,6 +591,17 @@ func (l *Loop) makeCallLLM(req *RunRequest, emitRun func(AgentEvent)) func(ctx c
 			}
 		}
 		l.emitLLMSpanEnd(ctx, spanID, start, resp, err, opts...)
+		if err == nil && resp != nil && resp.Usage != nil {
+			effModel, effProvider := l.resolveSpan(opts)
+			state.AppendCall(providers.CallUsage{
+				Type:     "llm_call",
+				Name:     fmt.Sprintf("%s/%s #%d", effProvider, effModel, state.Iteration+1),
+				Provider: effProvider,
+				Model:    effModel,
+				Usage:    *resp.Usage,
+				CostUSD:  l.calculateLLMCost(ctx, effProvider, effModel, resp.Usage),
+			})
+		}
 		return resp, err
 	}
 }
@@ -696,4 +776,35 @@ func (l *Loop) reserveLLMUsageFor(ctx context.Context, req *RunRequest, iteratio
 		Messages:        chatReq.Messages,
 		MaxOutputTokens: l.maxOutputTokensFromRequest(chatReq),
 	})
+}
+
+func supportsPromptCacheParams(provider providers.Provider) bool {
+	switch provider.(type) {
+	case *providers.CodexProvider, *providers.ChatGPTOAuthRouter:
+		return true
+	default:
+		return false
+	}
+}
+
+func setDefaultPromptCacheOptions(opts map[string]any, tenantID, agentID uuid.UUID, providerName, sessionKey string) {
+	if opts == nil {
+		return
+	}
+	if _, ok := opts[providers.OptPromptCacheKey]; !ok {
+		opts[providers.OptPromptCacheKey] = defaultPromptCacheKey(tenantID, agentID, providerName, sessionKey)
+	}
+	if _, ok := opts[providers.OptPromptCacheRetention]; !ok {
+		opts[providers.OptPromptCacheRetention] = "24h"
+	}
+}
+
+func defaultPromptCacheKey(tenantID, agentID uuid.UUID, providerName, sessionKey string) string {
+	h := sha256.Sum256([]byte(strings.Join([]string{
+		tenantID.String(),
+		agentID.String(),
+		providerName,
+		sessionKey,
+	}, "\x00")))
+	return "goclaw/" + hex.EncodeToString(h[:16])
 }

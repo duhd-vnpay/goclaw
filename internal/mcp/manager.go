@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -156,11 +157,26 @@ func WithConfigs(cfgs map[string]*config.MCPServerConfig) ManagerOption {
 	}
 }
 
+// SetConfigs replaces the static server config map on an already-constructed Manager.
+// This is used by the gateway to populate configs from the database after the store
+// is initialised, before calling Start.
+func (m *Manager) SetConfigs(cfgs map[string]*config.MCPServerConfig) {
+	slog.Debug("mcp.Manager.SetConfigs: applying configs", "count", len(cfgs))
+	m.configs = cfgs
+	slog.Debug("mcp.Manager.SetConfigs: configs applied successfully", "count", len(cfgs))
+}
+
 // WithStore sets the MCPServerStore for DB-backed MCP server loading.
 func WithStore(s store.MCPServerStore) ManagerOption {
 	return func(m *Manager) {
 		m.store = s
 	}
+}
+
+// SetStore sets the MCP store on an already-constructed Manager.
+// Use this when the store is not yet available at construction time.
+func (m *Manager) SetStore(s store.MCPServerStore) {
+	m.store = s
 }
 
 // WithPool sets a shared connection pool for MCP servers.
@@ -201,17 +217,20 @@ func NewManager(registry *tools.Registry, opts ...ManagerOption) *Manager {
 // Start connects to all config-file MCP servers.
 // Non-fatal: logs warnings for servers that fail to connect and continues.
 func (m *Manager) Start(ctx context.Context) error {
+	slog.Debug("mcp.Manager.Start: called", "configs", len(m.configs))
 	if len(m.configs) == 0 {
+		slog.Debug("mcp.Manager.Start: no configs, returning early")
 		return nil
 	}
 
 	var errs []string
 	for name, cfg := range m.configs {
 		if !cfg.IsEnabled() {
-			slog.Info("mcp.server.disabled", "server", name)
+			slog.Debug("mcp.server.disabled", "server", name)
 			continue
 		}
 
+		slog.Debug("mcp.Manager.Start: starting server", "name", name, "transport", cfg.Transport)
 		// Config-path servers have no DB ID — pass uuid.Nil
 		headers, err := resolveEnvVars(cfg.Headers)
 		if err != nil {
@@ -225,9 +244,19 @@ func (m *Manager) Start(ctx context.Context) error {
 		if err := m.connectServer(ctx, name, cfg.Transport, cfg.Command, cfg.Args, cfg.Env, cfg.URL, headers, cfg.ToolPrefix, cfg.TimeoutSec, uuid.Nil, ToolHints{}, nil, nil); err != nil {
 			slog.Warn("mcp.server.connect_failed", "server", name, "error", err)
 			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
+		} else {
+			m.mu.RLock()
+			toolCount := 0
+			if ss, ok := m.servers[name]; ok {
+				toolCount = len(ss.toolNames)
+			}
+			m.mu.RUnlock()
+			slog.Debug("mcp.Manager.Start: server started", "name", name, "tools", toolCount)
 		}
 	}
 
+	totalTools := len(m.ToolNames())
+	slog.Debug("mcp.Manager.Start: fully started", "total_tools", totalTools, "errors", len(errs))
 	if len(errs) > 0 {
 		return fmt.Errorf("some MCP servers failed to connect: %s", joinErrors(errs))
 	}
@@ -261,7 +290,10 @@ func (m *Manager) resolveServerCredentials(ctx context.Context, info store.MCPAc
 	}
 
 	// Skip server if it requires scoped/user credentials and none are present.
-	if requireUserCreds(srv.Settings) {
+	// Prefer the top-level column (Phase 89 backfilled from settings JSONB);
+	// fall back to the legacy JSONB entry for cases where a caller mutated
+	// settings directly without touching the column.
+	if srv.RequireUserCredentials || requireUserCreds(srv.Settings) {
 		if userID == "" {
 			return nil
 		}
@@ -349,7 +381,7 @@ func (m *Manager) resolveServerCredentials(ctx context.Context, info store.MCPAc
 		}
 		tenantID := store.TenantIDFromContext(ctx)
 		oauthUserID := ""
-		if requireUserCreds(srv.Settings) {
+		if srv.RequireUserCredentials || requireUserCreds(srv.Settings) {
 			oauthUserID = userID
 		}
 		token, err2 := m.oauthTokenProvider.GetValidToken(ctx, srv.ID, tenantID, oauthUserID)
@@ -422,7 +454,7 @@ func (m *Manager) LoadForAgent(ctx context.Context, agentID uuid.UUID, userID st
 	for _, info := range accessible {
 		// When loading at startup (userID=""), store servers requiring per-user
 		// credentials for later per-request resolution instead of skipping them.
-		if userID == "" && requireUserCreds(info.Server.Settings) && info.Server.Enabled {
+		if userID == "" && (info.Server.RequireUserCredentials || requireUserCreds(info.Server.Settings)) && info.Server.Enabled {
 			m.userCredServers = append(m.userCredServers, info)
 			slog.Debug("mcp.server.deferred_user_creds", "server", info.Server.Name)
 			continue
@@ -640,6 +672,245 @@ func (m *Manager) Stop() {
 	m.servers = make(map[string]*serverState)
 	m.poolServers = nil
 	m.poolToolNames = nil
+}
+
+// MCPToolPreviewInfo describes an MCP tool as seen from the store configuration,
+// without requiring a live connection to the MCP server.
+type MCPToolPreviewInfo struct {
+	// RegisteredName is the tool name as it appears in the tool registry (with mcp_ prefix).
+	RegisteredName string
+	// Description is derived from server tool hints, if configured.
+	Description string
+	// Parameters is the tool's cached JSON Schema for input parameters, captured
+	// at connect-time (see buildCachedToolInfo in manager_connect.go). nil when
+	// no schema has been cached yet (server never connected, or cache predates
+	// schema capture).
+	Parameters json.RawMessage
+}
+
+// mcpPreviewDiscoveryTimeout bounds the on-demand tool discovery
+// ListToolsForAgent performs when a server has never been live-connected for
+// this agent (empty tool_cache and empty registry). Kept short since it's on
+// the hot path of a prompt-preview HTTP request, unlike the longer
+// discoverToolsTimeout used by the dedicated admin "test connection"/"browse
+// tools" endpoints.
+const mcpPreviewDiscoveryTimeout = 5 * time.Second
+
+// bareMCPToolName strips a persisted "{effectivePrefix}__" prefix from a
+// stored tool_allow/tool_deny entry, if present.
+//
+// Historically, some agent grants were captured while their MCP server was
+// already live-connected and ended up storing the registered (prefixed) tool
+// name instead of the bare original MCP tool name — see ServerToolInfos'
+// doc comment for how that mismatch happened. Those legacy rows are never
+// rewritten automatically, so ListToolsForAgent must accept both shapes
+// going forward: bare names (the current, correct shape) and prefixed names
+// (already-persisted legacy grants), normalizing to bare before matching
+// against tool_cache keys or the live tool registry.
+func bareMCPToolName(stored, effectivePrefix string) string {
+	if bare, ok := strings.CutPrefix(stored, effectivePrefix+"__"); ok {
+		return bare
+	}
+	return stored
+}
+
+// resolveMCPToolInfo resolves the description and parameter schema for a bare
+// MCP tool name, preferring the CURRENT live registry entry (if the server is
+// connected right now) over the settings-persisted tool_cache snapshot, which
+// can be stale or entirely absent. Admin-authored hints always take priority
+// over both sources; the server's global hint is the last-resort fallback.
+func (m *Manager) resolveMCPToolInfo(toolName, effectivePrefix string, hints ToolHints, toolCache map[string]store.CachedToolInfo) (string, json.RawMessage) {
+	desc := hints.HintFor(toolName)
+	var params json.RawMessage
+
+	if tool, ok := m.registry.Get(effectivePrefix + "__" + toolName); ok {
+		if bridgeTool, isBridge := tool.(*BridgeTool); isBridge {
+			if desc == "" {
+				desc = bridgeTool.Description()
+			}
+			if schema := bridgeTool.Parameters(); schema != nil {
+				if schemaJSON, err := json.Marshal(schema); err == nil {
+					params = schemaJSON
+				}
+			}
+		}
+	}
+
+	cached := toolCache[toolName]
+	if desc == "" {
+		desc = cached.Description
+	}
+	if params == nil {
+		params = cached.Parameters
+	}
+	if desc == "" && hints.Global != "" {
+		desc = hints.Global
+	}
+	return desc, params
+}
+
+// ListToolsForAgent returns a best-effort list of MCP tool names and descriptions
+// for a given agent+user based on store configuration only — no actual MCP
+// server connections are made. It is intended for prompt preview.
+//
+// For each accessible server:
+//   - If the agent grant has an explicit ToolAllow list, those tool names are
+//     used (minus any ToolDeny entries).
+//   - If ToolAllow is empty (all tools allowed), only a single placeholder entry
+//     is returned for the server (the exact tool list is unknown without connecting).
+//
+// Per-tool descriptions are populated from the server's tool_hints settings when present.
+func (m *Manager) ListToolsForAgent(ctx context.Context, agentID uuid.UUID, userID string) ([]MCPToolPreviewInfo, error) {
+	slog.Debug("mcp.ListToolsForAgent.called", "agent_id", agentID, "user_id", userID)
+
+	if m.store == nil {
+		slog.Debug("mcp.ListToolsForAgent.no_store", "agent_id", agentID)
+		return nil, nil
+	}
+
+	accessible, err := m.store.ListAccessible(ctx, agentID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list accessible MCP servers: %w", err)
+	}
+
+	slog.Debug("mcp.ListToolsForAgent.accessible_servers", "agent_id", agentID, "count", len(accessible))
+
+	var result []MCPToolPreviewInfo
+	for _, info := range accessible {
+		slog.Debug("mcp.ListToolsForAgent.server", "server", info.Server.Name, "enabled", info.Server.Enabled, "tool_allow_count", len(info.ToolAllow), "tool_deny_count", len(info.ToolDeny), "has_settings", len(info.Server.Settings) > 0)
+		if !info.Server.Enabled {
+			slog.Debug("mcp.ListToolsForAgent.server_disabled", "server", info.Server.Name)
+			continue
+		}
+		hints := ParseToolHints(info.Server.Settings)
+		effectivePrefix := ensureMCPPrefix(info.Server.ToolPrefix, info.Server.Name)
+		slog.Debug("mcp.ListToolsForAgent.server_hints", "server", info.Server.Name, "global_hint", hints.Global, "tool_hints_count", len(hints.Tools), "effective_prefix", effectivePrefix)
+
+		// Parse tool cache from settings as fallback descriptions + parameter schemas.
+		toolCache := make(map[string]store.CachedToolInfo)
+		if len(info.Server.Settings) > 0 {
+			var settingsMap map[string]json.RawMessage
+			if err := json.Unmarshal(info.Server.Settings, &settingsMap); err == nil {
+				if cacheRaw, ok := settingsMap["tool_cache"]; ok {
+					if err := json.Unmarshal(cacheRaw, &toolCache); err != nil {
+						// Backward-compat: pre-schema-caching rows stored a bare
+						// map[string]string (name -> description). Fall back to
+						// that shape and treat entries as description-only (no
+						// parameter schema). Stale rows self-heal on next connect
+						// since the write path always writes the new shape.
+						var legacyCache map[string]string
+						if legacyErr := json.Unmarshal(cacheRaw, &legacyCache); legacyErr == nil {
+							toolCache = make(map[string]store.CachedToolInfo, len(legacyCache))
+							for name, desc := range legacyCache {
+								toolCache[name] = store.CachedToolInfo{Description: desc}
+							}
+						} else {
+							slog.Debug("mcp.ListToolsForAgent.tool_cache_unmarshal_failed", "server", info.Server.Name, "error", err)
+						}
+					}
+				}
+			}
+		}
+
+		// Nothing persisted yet and no live registry entries either (the
+		// server has never actually been connected for this agent, e.g. a
+		// freshly added MCP server before the agent's first real chat turn
+		// triggers Manager.LoadForAgent). ListToolsForAgent is otherwise
+		// documented as "no actual MCP server connections are made", which
+		// left the prompt preview permanently showing empty descriptions and
+		// "{type: object}" schemas until a real session happened to connect.
+		// Do a single bounded on-demand discovery here (same live path the
+		// admin "browse tools" endpoint already uses, see handleListServerTools
+		// in internal/http/mcp_tools.go) so the preview reflects real tool
+		// data immediately, and persist it so subsequent calls hit the cache.
+		if len(toolCache) == 0 && len(m.ServerToolInfos(info.Server.Name)) == 0 {
+			if rs := m.resolveServerCredentials(ctx, info, userID); rs != nil {
+				discovered, err := discoverRawTools(ctx, info.Server.Transport, info.Server.Command, rs.args, rs.env, info.Server.URL, rs.headers, mcpPreviewDiscoveryTimeout)
+				if err != nil {
+					slog.Debug("mcp.ListToolsForAgent.on_demand_discovery_failed", "server", info.Server.Name, "error", err)
+				} else {
+					toolCache = buildCachedToolInfo(discovered)
+					if info.Server.ID != uuid.Nil && m.store != nil && len(toolCache) > 0 {
+						go func(sid uuid.UUID, cache map[string]store.CachedToolInfo) {
+							cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+							defer cancel()
+							if cacheErr := m.store.CacheToolDescriptions(cacheCtx, sid, cache); cacheErr != nil {
+								slog.Debug("mcp.ListToolsForAgent.cache_tool_descriptions_failed", "server_id", sid, "error", cacheErr)
+							}
+						}(info.Server.ID, toolCache)
+					}
+				}
+			}
+		}
+
+		// Build deny set, normalizing legacy prefixed entries to bare names
+		// (see bareMCPToolName) so they match tool_cache/registry lookups.
+		denySet := make(map[string]struct{}, len(info.ToolDeny))
+		for _, d := range info.ToolDeny {
+			denySet[bareMCPToolName(d, effectivePrefix)] = struct{}{}
+		}
+
+		if len(info.ToolAllow) == 0 {
+			if len(toolCache) > 0 {
+				// Unrestricted grant, but we have real tool names cached from a
+				// prior connection — enumerate them instead of a placeholder.
+				var serverTools []string
+				for toolName := range toolCache {
+					if _, denied := denySet[toolName]; denied {
+						slog.Debug("mcp.ListToolsForAgent.tool_denied", "server", info.Server.Name, "tool", toolName)
+						continue
+					}
+					registeredName := effectivePrefix + "__" + toolName
+					desc, params := m.resolveMCPToolInfo(toolName, effectivePrefix, hints, toolCache)
+					serverTools = append(serverTools, registeredName)
+					result = append(result, MCPToolPreviewInfo{
+						RegisteredName: registeredName,
+						Description:    desc,
+						Parameters:     params,
+					})
+				}
+				slog.Debug("mcp.ListToolsForAgent.server_tools_added_from_cache", "server", info.Server.Name, "tools", serverTools)
+				continue
+			}
+
+			// Unknown tool list and nothing cached — emit one placeholder entry.
+			placeholder := effectivePrefix + "__*"
+			desc := hints.Global
+			if desc == "" {
+				desc = "MCP server: " + info.Server.Name
+			}
+			slog.Debug("mcp.ListToolsForAgent.placeholder_entry", "server", info.Server.Name, "placeholder", placeholder)
+			result = append(result, MCPToolPreviewInfo{
+				RegisteredName: placeholder,
+				Description:    desc,
+			})
+			continue
+		}
+
+		var serverTools []string
+		for _, storedName := range info.ToolAllow {
+			// Normalize legacy prefixed entries (persisted before the grant-capture
+			// fix in mcp_tools.go) to the bare tool name so they resolve against
+			// tool_cache and the live registry the same as current bare entries.
+			toolName := bareMCPToolName(storedName, effectivePrefix)
+			if _, denied := denySet[toolName]; denied {
+				slog.Debug("mcp.ListToolsForAgent.tool_denied", "server", info.Server.Name, "tool", toolName)
+				continue
+			}
+			registeredName := effectivePrefix + "__" + toolName
+			desc, params := m.resolveMCPToolInfo(toolName, effectivePrefix, hints, toolCache)
+			serverTools = append(serverTools, registeredName)
+			result = append(result, MCPToolPreviewInfo{
+				RegisteredName: registeredName,
+				Description:    desc,
+				Parameters:     params,
+			})
+		}
+		slog.Debug("mcp.ListToolsForAgent.server_tools_added", "server", info.Server.Name, "tools", serverTools)
+	}
+
+	slog.Info("mcp.ListToolsForAgent.result", "agent_id", agentID, "user_id", userID, "total_tools", len(result))
+	return result, nil
 }
 
 // ServerStatus returns the status of all connected MCP servers.

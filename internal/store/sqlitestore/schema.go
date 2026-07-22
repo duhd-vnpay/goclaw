@@ -16,7 +16,7 @@ var schemaSQL string
 
 // SchemaVersion is the current SQLite schema version.
 // Bump this when adding new migration steps below.
-const SchemaVersion = 52
+const SchemaVersion = 58
 
 // migrations maps version → SQL to apply when upgrading FROM that version.
 // schema.sql always represents the LATEST full schema (for fresh DBs).
@@ -30,6 +30,25 @@ const SchemaVersion = 52
 //
 // Then bump SchemaVersion to 2.
 var migrations = map[int]string{
+	// Version 57 → 58: restore custom skills previously converted by the bundled skill seeder.
+	57: `UPDATE skills
+SET is_system = 0,
+    visibility = 'private',
+    status = 'archived',
+    frontmatter = json_set(
+        CASE WHEN json_valid(frontmatter) THEN frontmatter ELSE '{}' END,
+        '$._goclaw_recovery',
+        'bundled_slug_collision'
+    ),
+    version = CASE WHEN version > 1 THEN version - 1 ELSE 1 END,
+    file_path = CASE
+        WHEN file_path LIKE '%/' || version THEN
+            substr(file_path, 1, length(file_path) - length(CAST(version AS TEXT))) ||
+            CAST(CASE WHEN version > 1 THEN version - 1 ELSE 1 END AS TEXT)
+        ELSE file_path
+    END,
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE is_system = 1 AND owner_id <> 'system';`,
 	// Version 49 → 50: per-cron-job LLM provider/model override (mirrors agent_heartbeats).
 	49: `ALTER TABLE cron_jobs ADD COLUMN provider_id TEXT REFERENCES llm_providers(id) ON DELETE SET NULL;
 ALTER TABLE cron_jobs ADD COLUMN model VARCHAR(200);`,
@@ -884,6 +903,59 @@ CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_server_tenant ON mcp_oauth_token
 	// Version 51 → 52: add last_heartbeat_at to webhook_calls for lease heartbeat.
 	// Mirrors PG migration 000085. Idempotent-guarded via idempotentColumnMigration(51).
 	51: `ALTER TABLE webhook_calls ADD COLUMN last_heartbeat_at TEXT;`,
+	// Version 52 → 53: preserve provider cache/thinking token dimensions in usage event analytics.
+	52: `ALTER TABLE usage_events ADD COLUMN cache_read_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE usage_events ADD COLUMN cache_create_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE usage_events ADD COLUMN thinking_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE usage_event_rollups ADD COLUMN cache_read_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE usage_event_rollups ADD COLUMN cache_create_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE usage_event_rollups ADD COLUMN thinking_tokens BIGINT NOT NULL DEFAULT 0;`,
+	// Version 53 → 54: dedupe passive memory extraction items across runs for the same channel instance.
+	53: addChannelMemoryItemChannelHashUnique,
+	// Version 54 → 55: preserve Discord thread parent channel for passive-memory excludes.
+	54: `ALTER TABLE channel_pending_messages ADD COLUMN parent_history_key VARCHAR(200) NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_channel_pending_messages_parent
+  ON channel_pending_messages(channel_name, parent_history_key)
+  WHERE parent_history_key <> '';`,
+	// Version 55 → 56: promote require_user_credentials from settings JSONB
+	// to a top-level column so channel factories can filter directly.
+	// Backfill reads the legacy JSONB via json_extract so no admin needs to
+	// re-tick after upgrading. Mirrors PG migration 000092. Idempotent-guarded
+	// via idempotentColumnMigration(55).
+	55: `ALTER TABLE mcp_servers ADD COLUMN require_user_credentials BOOLEAN NOT NULL DEFAULT 0;
+UPDATE mcp_servers
+   SET require_user_credentials = COALESCE(CAST(json_extract(settings, '$.require_user_credentials') AS INTEGER), 0)
+ WHERE settings IS NOT NULL
+   AND json_extract(settings, '$.require_user_credentials') IS NOT NULL;`,
+	// Version 56 → 57: backfill Bitrix24 channel_instances.config with
+	// mcp_server_id by resolving the legacy mcp_server_name against
+	// mcp_servers (matched on the channel's agent tenant_id since
+	// channel_instances doesn't carry tenant_id directly). Mirrors PG
+	// migration 000093. Idempotent — only touches rows without an
+	// existing mcp_server_id key.
+	56: `UPDATE channel_instances
+        SET config = json_set(
+                COALESCE(config, '{}'),
+                '$.mcp_server_id',
+                (SELECT srv.id
+                   FROM mcp_servers srv
+                  WHERE srv.name = json_extract(channel_instances.config, '$.mcp_server_name')
+                    AND srv.tenant_id = (
+                        SELECT a.tenant_id FROM agents a WHERE a.id = channel_instances.agent_id
+                    )
+                  LIMIT 1)
+        ),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE channel_type = 'bitrix24'
+        AND json_extract(config, '$.mcp_server_name') IS NOT NULL
+        AND json_extract(config, '$.mcp_server_id') IS NULL
+        AND EXISTS (
+            SELECT 1 FROM mcp_servers srv
+             WHERE srv.name = json_extract(channel_instances.config, '$.mcp_server_name')
+               AND srv.tenant_id = (
+                   SELECT a.tenant_id FROM agents a WHERE a.id = channel_instances.agent_id
+               )
+        );`,
 }
 
 const addUsageEventAnalyticsTables = `
@@ -910,6 +982,9 @@ CREATE TABLE IF NOT EXISTS usage_events (
     input_tokens  BIGINT NOT NULL DEFAULT 0,
     output_tokens BIGINT NOT NULL DEFAULT 0,
     total_tokens  BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens   BIGINT NOT NULL DEFAULT 0,
+    cache_create_tokens BIGINT NOT NULL DEFAULT 0,
+    thinking_tokens     BIGINT NOT NULL DEFAULT 0,
     cost_usd      NUMERIC(12,6) NOT NULL DEFAULT 0,
     duration_ms   INTEGER NOT NULL DEFAULT 0,
     call_count    INTEGER NOT NULL DEFAULT 1,
@@ -946,6 +1021,9 @@ CREATE TABLE IF NOT EXISTS usage_event_rollups (
     input_tokens  BIGINT NOT NULL DEFAULT 0,
     output_tokens BIGINT NOT NULL DEFAULT 0,
     total_tokens  BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens   BIGINT NOT NULL DEFAULT 0,
+    cache_create_tokens BIGINT NOT NULL DEFAULT 0,
+    thinking_tokens     BIGINT NOT NULL DEFAULT 0,
     cost_usd      NUMERIC(12,6) NOT NULL DEFAULT 0,
     duration_ms   INTEGER NOT NULL DEFAULT 0,
     call_count    INTEGER NOT NULL DEFAULT 0,
@@ -1115,12 +1193,39 @@ CREATE TABLE IF NOT EXISTS channel_memory_extraction_items (
     episodic_id         VARCHAR(64) NOT NULL DEFAULT '',
     created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    UNIQUE (tenant_id, run_id, item_hash)
+    UNIQUE (tenant_id, channel_instance_id, item_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_channel_memory_items_channel_status
   ON channel_memory_extraction_items(tenant_id, channel_instance_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_channel_memory_items_run
   ON channel_memory_extraction_items(tenant_id, run_id);`
+
+const addChannelMemoryItemChannelHashUnique = `
+DELETE FROM channel_memory_extraction_items
+WHERE id NOT IN (
+    SELECT id
+    FROM (
+        SELECT id,
+               ROW_NUMBER() OVER (
+                   PARTITION BY tenant_id, channel_instance_id, item_hash
+                   ORDER BY
+                       CASE status
+                           WHEN 'written' THEN 5
+                           WHEN 'approved' THEN 4
+                           WHEN 'pending_review' THEN 3
+                           WHEN 'rejected' THEN 2
+                           WHEN 'deleted' THEN 1
+                           ELSE 0
+                       END DESC,
+                       created_at DESC,
+                       id DESC
+               ) AS rn
+        FROM channel_memory_extraction_items
+    )
+    WHERE rn = 1
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_memory_items_tenant_channel_hash_unique
+    ON channel_memory_extraction_items(tenant_id, channel_instance_id, item_hash);`
 
 const addChannelContextCapabilityTables = `
 CREATE TABLE IF NOT EXISTS mcp_context_grants (
@@ -1398,6 +1503,24 @@ func EnsureSchema(db *sql.DB) error {
 					patch = `SELECT 1;`
 				}
 			}
+			if v == 49 {
+				patch, err = sqliteCronProviderMigrationPatch(db)
+				if err != nil {
+					return fmt.Errorf("inspect cron_jobs provider override columns: %w", err)
+				}
+			}
+			if v == 52 {
+				patch, err = sqliteUsageEventTokenMigrationPatch(db)
+				if err != nil {
+					return fmt.Errorf("inspect usage event token columns: %w", err)
+				}
+			}
+			if v == 54 {
+				patch, err = sqlitePendingMessageParentMigrationPatch(db)
+				if err != nil {
+					return fmt.Errorf("inspect channel pending message parent column: %w", err)
+				}
+			}
 			// Migrations that rebuild a table referenced by another table's FK
 			// require foreign_keys=OFF per SQLite altertable §7. The pragma is
 			// a no-op inside a transaction, so toggle it around BEGIN/COMMIT.
@@ -1484,9 +1607,78 @@ func idempotentColumnMigration(version int) (string, string, bool) {
 		return "secure_cli_binaries", "adapter_name", true
 	case 51:
 		return "webhook_calls", "last_heartbeat_at", true
+	case 55:
+		return "mcp_servers", "require_user_credentials", true
 	default:
 		return "", "", false
 	}
+}
+
+func sqliteCronProviderMigrationPatch(db *sql.DB) (string, error) {
+	hasProviderID, err := sqliteColumnExists(db, "cron_jobs", "provider_id")
+	if err != nil {
+		return "", err
+	}
+	hasModel, err := sqliteColumnExists(db, "cron_jobs", "model")
+	if err != nil {
+		return "", err
+	}
+
+	patch := ""
+	if !hasProviderID {
+		patch += "ALTER TABLE cron_jobs ADD COLUMN provider_id TEXT REFERENCES llm_providers(id) ON DELETE SET NULL;\n"
+	}
+	if !hasModel {
+		patch += "ALTER TABLE cron_jobs ADD COLUMN model VARCHAR(200);\n"
+	}
+	if patch == "" {
+		patch = "SELECT 1;"
+	}
+	return patch, nil
+}
+
+func sqliteUsageEventTokenMigrationPatch(db *sql.DB) (string, error) {
+	columns := []struct {
+		table string
+		name  string
+	}{
+		{table: "usage_events", name: "cache_read_tokens"},
+		{table: "usage_events", name: "cache_create_tokens"},
+		{table: "usage_events", name: "thinking_tokens"},
+		{table: "usage_event_rollups", name: "cache_read_tokens"},
+		{table: "usage_event_rollups", name: "cache_create_tokens"},
+		{table: "usage_event_rollups", name: "thinking_tokens"},
+	}
+
+	patch := ""
+	for _, col := range columns {
+		hasColumn, err := sqliteColumnExists(db, col.table, col.name)
+		if err != nil {
+			return "", err
+		}
+		if !hasColumn {
+			patch += fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s BIGINT NOT NULL DEFAULT 0;\n", col.table, col.name)
+		}
+	}
+	if patch == "" {
+		patch = "SELECT 1;"
+	}
+	return patch, nil
+}
+
+func sqlitePendingMessageParentMigrationPatch(db *sql.DB) (string, error) {
+	hasColumn, err := sqliteColumnExists(db, "channel_pending_messages", "parent_history_key")
+	if err != nil {
+		return "", err
+	}
+	patch := ""
+	if !hasColumn {
+		patch += "ALTER TABLE channel_pending_messages ADD COLUMN parent_history_key VARCHAR(200) NOT NULL DEFAULT '';\n"
+	}
+	patch += `CREATE INDEX IF NOT EXISTS idx_channel_pending_messages_parent
+  ON channel_pending_messages(channel_name, parent_history_key)
+  WHERE parent_history_key <> '';`
+	return patch, nil
 }
 
 func sqliteColumnExists(db *sql.DB, tableName, columnName string) (bool, error) {

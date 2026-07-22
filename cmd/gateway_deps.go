@@ -5,11 +5,13 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/audio"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/cache"
+	"github.com/nextlevelbuilder/goclaw/internal/channelmemory"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/eventbus"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway"
 	httpapi "github.com/nextlevelbuilder/goclaw/internal/http"
+	"github.com/nextlevelbuilder/goclaw/internal/memory"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
@@ -27,11 +29,10 @@ type gatewayDeps struct {
 	pgStores         *store.Stores
 	providerRegistry *providers.Registry
 	channelMgr       *channels.Manager
+	channelMemorySvc *channelmemory.Service
 	agentRouter      *agent.Router
 	toolsReg         *tools.Registry
 	skillsLoader     *skills.Loader         // optional: enables skill creation in evolution approval
-	bundledSkillsDir string                 // path to /app/bundled-skills (or dev equivalent)
-	managedDir       string                 // path to skills-store managed directory
 	permCache        *cache.PermissionCache // nil if no tenant store; closed on shutdown to stop sweep goroutines
 	enrichProgress   *vault.EnrichProgress  // nil if enrichment worker not registered
 	enrichWorker     *vault.EnrichWorker    // nil if enrichment worker not registered; for stop/enqueue
@@ -41,5 +42,8 @@ type gatewayDeps struct {
 	usageCapSvc      *usagecaps.Service
 	audioMgr         *audio.Manager      // nil if TTS not configured; used by TTSHandler
 	ttsHandler       *httpapi.TTSHandler // nil if TTS not configured; for hot-reload
-	acpDeps          ACPDeps             // ACP MCP shim deps; zero-valued when shim unavailable
+	teamWorkEmbedder memory.EmbeddingProvider
+	bundledSkillsDir string  // path to /app/bundled-skills (or dev equivalent)
+	managedDir       string  // path to skills-store managed directory
+	acpDeps          ACPDeps // ACP MCP shim deps; zero-valued when shim unavailable
 }

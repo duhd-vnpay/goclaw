@@ -44,6 +44,7 @@ func (f *FlexibleStringSlice) UnmarshalJSON(data []byte) error {
 // Config is the root configuration for the GoClaw Gateway.
 type Config struct {
 	DataDir   string          `json:"data_dir,omitempty"` // persistent data directory (default: ~/.goclaw/data)
+	Branding  BrandingConfig  `json:"branding,omitempty"`
 	Agents    AgentsConfig    `json:"agents"`
 	Channels  ChannelsConfig  `json:"channels"`
 	Providers ProvidersConfig `json:"providers"`
@@ -61,7 +62,41 @@ type Config struct {
 	Keycloak  KeycloakConfig  `json:"keycloak"`
 	Hooks     HooksConfig     `json:"hooks"`
 	Packages  PackagesConfig  `json:"packages"` // runtime package mgmt (GitHub updater)
+	Messages  SystemMsgConfig `json:"system_messages,omitempty"`
 	mu        sync.RWMutex
+}
+
+// BrandingConfig customizes public app metadata and media used by the web UI.
+// URL fields may point to external URLs or to uploaded /branding-assets/* files.
+type BrandingConfig struct {
+	AppName           string `json:"app_name,omitempty"`
+	AppShortName      string `json:"app_short_name,omitempty"`
+	MetaTitle         string `json:"meta_title,omitempty"`
+	MetaDescription   string `json:"meta_description,omitempty"`
+	MetaKeywords      string `json:"meta_keywords,omitempty"`
+	LogoURL           string `json:"logo_url,omitempty"`
+	FaviconURL        string `json:"favicon_url,omitempty"`
+	AppleTouchIconURL string `json:"apple_touch_icon_url,omitempty"`
+	OGTitle           string `json:"og_title,omitempty"`
+	OGDescription     string `json:"og_description,omitempty"`
+	OGImageURL        string `json:"og_image_url,omitempty"`
+	ThemeColor        string `json:"theme_color,omitempty"`
+}
+
+// HasValues reports whether any branding override is configured.
+func (b BrandingConfig) HasValues() bool {
+	return strings.TrimSpace(b.AppName) != "" ||
+		strings.TrimSpace(b.AppShortName) != "" ||
+		strings.TrimSpace(b.MetaTitle) != "" ||
+		strings.TrimSpace(b.MetaDescription) != "" ||
+		strings.TrimSpace(b.MetaKeywords) != "" ||
+		strings.TrimSpace(b.LogoURL) != "" ||
+		strings.TrimSpace(b.FaviconURL) != "" ||
+		strings.TrimSpace(b.AppleTouchIconURL) != "" ||
+		strings.TrimSpace(b.OGTitle) != "" ||
+		strings.TrimSpace(b.OGDescription) != "" ||
+		strings.TrimSpace(b.OGImageURL) != "" ||
+		strings.TrimSpace(b.ThemeColor) != ""
 }
 
 // PackagesConfig tunes the runtime package update flow (Phase 1: GitHub
@@ -83,6 +118,38 @@ type PackagesConfig struct {
 }
 
 // UpdatesCheckTTLDuration parses UpdatesCheckTTL returning 1h on empty/invalid.
+// SystemMsgConfig customizes operator-facing system messages that GoClaw
+// sends directly, outside normal LLM replies. Message templates use
+// {{variable}} placeholders and may be overridden per locale.
+type SystemMsgConfig struct {
+	DefaultLocale string                            `json:"default_locale,omitempty"`
+	Messages      map[string]LocalizedSystemMessage `json:"messages,omitempty"`
+}
+
+// LocalizedSystemMessage maps locale code ("en", "vi", "zh", "ko", "ru") to a
+// template override for one system message key.
+type LocalizedSystemMessage map[string]string
+
+// Clone returns a deep copy safe for snapshots and ReplaceFrom.
+func (s SystemMsgConfig) Clone() SystemMsgConfig {
+	out := SystemMsgConfig{DefaultLocale: strings.TrimSpace(s.DefaultLocale)}
+	if len(s.Messages) == 0 {
+		return out
+	}
+	out.Messages = make(map[string]LocalizedSystemMessage, len(s.Messages))
+	for key, byLocale := range s.Messages {
+		if len(byLocale) == 0 {
+			continue
+		}
+		cp := make(LocalizedSystemMessage, len(byLocale))
+		for locale, template := range byLocale {
+			cp[locale] = template
+		}
+		out.Messages[key] = cp
+	}
+	return out
+}
+
 func (p PackagesConfig) UpdatesCheckTTLDuration() time.Duration {
 	if p.UpdatesCheckTTL == "" {
 		return time.Hour
@@ -126,7 +193,7 @@ type TailscaleConfig struct {
 type KeycloakConfig struct {
 	RealmURL     string `json:"-"`                               // from env GOCLAW_KEYCLOAK_REALM_URL (e.g. "https://auth.x.vnshop.cloud/realms/vnpay")
 	InternalURL  string `json:"-"`                               // from env GOCLAW_KEYCLOAK_INTERNAL_URL; base for backend JWKS/Token fetches. Falls back to RealmURL if empty. Used when public URL is behind a proxy unreachable from backend (e.g. Teleport)
-	ClientID     string `json:"keycloak_client_id,omitempty"`     // OIDC client ID (default "goclaw-gateway")
+	ClientID     string `json:"keycloak_client_id,omitempty"`    // OIDC client ID (default "goclaw-gateway")
 	ClientSecret string `json:"-"`                               // from env GOCLAW_KEYCLOAK_CLIENT_SECRET only
 	CallbackURL  string `json:"keycloak_callback_url,omitempty"` // redirect URI after login
 }
@@ -418,6 +485,7 @@ type SandboxConfig struct {
 	User           string `json:"user,omitempty"`             // container user (e.g. "1000:1000", "nobody")
 	TmpfsSizeMB    int    `json:"tmpfs_size_mb,omitempty"`    // default tmpfs size in MB (0 = Docker default)
 	MaxOutputBytes int    `json:"max_output_bytes,omitempty"` // limit exec output capture (default 1MB)
+	Workdir        string `json:"workdir,omitempty"`          // container workdir + workspace mount target (default "/workspace")
 
 	// Pruning (matching TS SandboxPruneSettings)
 	IdleHours        int `json:"idle_hours,omitempty"`         // prune containers idle > N hours (default 24)
@@ -490,6 +558,9 @@ func (sc *SandboxConfig) ToSandboxConfig() sandbox.Config {
 	}
 	if sc.MaxOutputBytes > 0 {
 		cfg.MaxOutputBytes = sc.MaxOutputBytes
+	}
+	if sc.Workdir != "" {
+		cfg.Workdir = sc.Workdir
 	}
 
 	// Pruning
@@ -629,6 +700,7 @@ func (c *Config) ReplaceFrom(src *Config) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.DataDir = src.DataDir
+	c.Branding = src.Branding
 	c.Agents = src.Agents
 	c.Channels = src.Channels
 	c.Providers = src.Providers
@@ -643,6 +715,7 @@ func (c *Config) ReplaceFrom(src *Config) {
 	c.Tailscale = src.Tailscale
 	c.Bindings = src.Bindings
 	c.Keycloak = src.Keycloak
+	c.Messages = src.Messages.Clone()
 }
 
 // Clone returns a deep copy of the config while holding the read lock.
@@ -661,6 +734,14 @@ func (c *Config) Clone() *Config {
 	return cp
 }
 
+// BrandingSnapshot returns the current branding overrides without exposing the
+// mutable root config to HTTP handlers.
+func (c *Config) BrandingSnapshot() BrandingConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Branding
+}
+
 // ShellDenyGroupsSnapshot returns a copy of the current global shell deny-group
 // overrides. Callers can safely resolve patterns without racing config reloads.
 func (c *Config) ShellDenyGroupsSnapshot() map[string]bool {
@@ -673,6 +754,14 @@ func (c *Config) ShellDenyGroupsSnapshot() map[string]bool {
 	groups := make(map[string]bool, len(c.Tools.ShellDenyGroups))
 	maps.Copy(groups, c.Tools.ShellDenyGroups)
 	return groups
+}
+
+// SystemMessagesSnapshot returns a deep copy of configured system-message
+// overrides without exposing mutable config state to long-lived channels.
+func (c *Config) SystemMessagesSnapshot() SystemMsgConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Messages.Clone()
 }
 
 // IdentityConfig defines agent persona / display identity.

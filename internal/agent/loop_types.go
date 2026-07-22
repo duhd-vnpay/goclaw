@@ -449,10 +449,10 @@ type LoopConfig struct {
 	MemoryStore store.MemoryStore
 
 	// Per-user MCP tools (servers requiring per-user credentials)
-	MCPStore              store.MCPServerStore      // for credential lookup
-	MCPPool               *mcpbridge.Pool           // user-keyed connection pool
-	MCPUserCredSrvs       []store.MCPAccessInfo     // servers needing per-user creds
-	MCPGrantChecker       mcpbridge.GrantChecker    // runtime grant verification (nil = skip)
+	MCPStore              store.MCPServerStore         // for credential lookup
+	MCPPool               *mcpbridge.Pool              // user-keyed connection pool
+	MCPUserCredSrvs       []store.MCPAccessInfo        // servers needing per-user creds
+	MCPGrantChecker       mcpbridge.GrantChecker       // runtime grant verification (nil = skip)
 	MCPOAuthTokenProvider mcpbridge.OAuthTokenProvider // OAuth Bearer token injection (nil = disabled)
 
 	// V3 orchestration mode (resolved by resolver, controls tool visibility)
@@ -608,36 +608,38 @@ func NewLoop(cfg LoopConfig) *Loop {
 
 // RunRequest is the input for processing a message through the agent.
 type RunRequest struct {
-	SessionKey         string             // composite key: agent:{agentId}:{channel}:{peerKind}:{chatId}
-	Message            string             // user message
-	Media              []bus.MediaFile    // local media files with MIME types
-	ForwardMedia       []bus.MediaFile    // media files to forward to output (from delegation results)
-	Channel            string             // source channel instance name (e.g. "my-telegram-bot")
-	ChannelType        string             // platform type (e.g. "zalo_personal", "telegram") — for system prompt context
-	BitrixPortalDomain string             // bitrix24-only: portal domain (e.g. "tamgiac.bitrix24.com") for entity URL construction
-	ChatTitle          string             // group chat display name (e.g. Telegram group title)
-	ChatID             string             // source chat ID
-	PeerKind           string             // "direct" or "group" (for session key building and tool context)
-	RunID              string             // unique run identifier
-	UserID             string             // external user ID (TEXT, free-form) for multi-tenant scoping
-	SenderID           string             // original individual sender ID (preserved in group chats for permission checks)
-	SenderName         string             // display name from channel metadata (for bootstrap auto-contact)
-	Role               string             // caller's RBAC role (admin/operator/viewer/owner); bypasses per-user grants for authenticated admins (#915)
-	Stream             bool               // whether to stream response chunks
-	ExtraSystemPrompt  string             // optional: injected into system prompt (skills, subagent context, etc.)
-	SkillFilter        []string           // per-request skill override: nil=use agent default, []=no skills, ["x","y"]=whitelist
-	HistoryLimit       int                // max user turns to keep in context (0=unlimited, from channel config)
-	ToolAllow          []string           // per-group tool allow list (nil = no restriction, supports "group:xxx")
-	LocalKey           string             // composite key with topic/thread suffix for routing (e.g. "-100123:topic:42")
-	ParentTraceID      uuid.UUID          // if set, reuse parent trace instead of creating new (announce runs)
-	ParentRootSpanID   uuid.UUID          // if set, nest announce agent span under this parent span
-	LinkedTraceID      uuid.UUID          // if set, create new trace with parent_trace_id pointing to this (team task runs)
-	TraceName          string             // override trace name (default: "chat <agentID>")
-	TraceTags          []string           // additional tags for the trace (e.g. "cron")
-	MaxIterations      int                // per-request override (0 = use agent default, must be lower)
-	ModelOverride      string             // per-request model override (heartbeat uses cheaper model)
-	ProviderOverride   providers.Provider // per-request provider override (heartbeat uses different provider)
-	LightContext       bool               // skip loading context files (only inject ExtraSystemPrompt)
+	SessionKey                 string             // composite key: agent:{agentId}:{channel}:{peerKind}:{chatId}
+	Message                    string             // user message
+	Media                      []bus.MediaFile    // local media files with MIME types
+	ForwardMedia               []bus.MediaFile    // media files to forward to output (from delegation results)
+	Channel                    string             // source channel instance name (e.g. "my-telegram-bot")
+	ChannelType                string             // platform type (e.g. "zalo_personal", "telegram") — for system prompt context
+	BitrixPortalDomain         string             // bitrix24-only: portal domain (e.g. "tamgiac.bitrix24.com") for entity URL construction
+	ChatTitle                  string             // group chat display name (e.g. Telegram group title)
+	ChatID                     string             // source chat ID
+	PeerKind                   string             // "direct" or "group" (for session key building and tool context)
+	RunID                      string             // unique run identifier
+	UserID                     string             // external user ID (TEXT, free-form) for multi-tenant scoping
+	SenderID                   string             // original individual sender ID (preserved in group chats for permission checks)
+	SenderName                 string             // display name from channel metadata (for bootstrap auto-contact)
+	Role                       string             // caller's RBAC role (admin/operator/viewer/owner); bypasses per-user grants for authenticated admins (#915)
+	Stream                     bool               // whether to stream response chunks
+	ExtraSystemPrompt          string             // optional: injected into system prompt (skills, subagent context, etc.)
+	TeamWorkDirective          *TeamWorkDirective // optional: force this turn through team/delegate workflow
+	SkillFilter                []string           // per-request skill override: nil=use agent default, []=no skills, ["x","y"]=whitelist
+	HistoryLimit               int                // max user turns to keep in context (0=unlimited, from channel config)
+	ToolAllow                  []string           // per-group tool allow list (nil = no restriction, supports "group:xxx")
+	TelegramManagerPermissions []string           // hidden Telegram management permission groups granted by the channel config
+	LocalKey                   string             // composite key with topic/thread suffix for routing (e.g. "-100123:topic:42")
+	ParentTraceID              uuid.UUID          // if set, reuse parent trace instead of creating new (announce runs)
+	ParentRootSpanID           uuid.UUID          // if set, nest announce agent span under this parent span
+	LinkedTraceID              uuid.UUID          // if set, create new trace with parent_trace_id pointing to this (team task runs)
+	TraceName                  string             // override trace name (default: "chat <agentID>")
+	TraceTags                  []string           // additional tags for the trace (e.g. "cron")
+	MaxIterations              int                // per-request override (0 = use agent default, must be lower)
+	ModelOverride              string             // per-request model override (heartbeat uses cheaper model)
+	ProviderOverride           providers.Provider // per-request provider override (heartbeat uses different provider)
+	LightContext               bool               // skip loading context files (only inject ExtraSystemPrompt)
 
 	// Run classification
 	RunKind       string // "delegation", "announce" — empty for user-initiated runs
@@ -671,16 +673,17 @@ type RunRequest struct {
 
 // RunResult is the output of a completed agent run.
 type RunResult struct {
-	Content        string           `json:"content"`
-	Thinking       string           `json:"thinking,omitempty"` // reasoning content from thinking models (Claude, o3, DeepSeek-R1, Kimi)
-	RunID          string           `json:"runId"`
-	Iterations     int              `json:"iterations"`
-	Usage          *providers.Usage `json:"usage,omitempty"`
-	Media          []MediaResult    `json:"media,omitempty"`          // media files from tool results (MEDIA: prefix)
-	Deliverables   []string         `json:"deliverables,omitempty"`   // actual content from tool outputs (for team task results)
-	BlockReplies   int              `json:"blockReplies,omitempty"`   // number of block.reply events emitted
-	LastBlockReply string           `json:"lastBlockReply,omitempty"` // last block reply content (for dedup)
-	LoopKilled     bool             `json:"loopKilled,omitempty"`     // true when run was terminated by loop detector
+	Content        string                `json:"content"`
+	Thinking       string                `json:"thinking,omitempty"` // reasoning content from thinking models (Claude, o3, DeepSeek-R1, Kimi)
+	RunID          string                `json:"runId"`
+	Iterations     int                   `json:"iterations"`
+	Usage          *providers.Usage      `json:"usage,omitempty"`
+	Media          []MediaResult         `json:"media,omitempty"`          // media files from tool results (MEDIA: prefix)
+	Deliverables   []string              `json:"deliverables,omitempty"`   // actual content from tool outputs (for team task results)
+	BlockReplies   int                   `json:"blockReplies,omitempty"`   // number of block.reply events emitted
+	LastBlockReply string                `json:"lastBlockReply,omitempty"` // last block reply content (for dedup)
+	LoopKilled     bool                  `json:"loopKilled,omitempty"`     // true when run was terminated by loop detector
+	Calls          []providers.CallUsage `json:"calls,omitempty"`          // per-call usage breakdown
 }
 
 // MediaResult represents a media file produced by a tool during the agent run.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
@@ -111,24 +112,32 @@ func TestProvidersHandlerListProviderModelsChatGPTOAuthIncludesReasoningMetadata
 		t.Fatalf("reasoning_defaults.effort = %q, want high", result.ReasoningDefaults.Effort)
 	}
 
-	var found bool
-	for _, model := range result.Models {
-		if model.ID != "gpt-5.5" {
-			continue
+	assertModelIDsInOrder(t, result.Models, []string{
+		"gpt-5.6-sol",
+		"gpt-5.6-terra",
+		"gpt-5.5",
+	})
+
+	for _, wantID := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"} {
+		var found bool
+		for _, model := range result.Models {
+			if model.ID != wantID {
+				continue
+			}
+			found = true
+			if model.Reasoning == nil {
+				t.Fatalf("%s reasoning = nil, want capability metadata", wantID)
+			}
+			if model.Reasoning.DefaultEffort != "medium" {
+				t.Fatalf("%s default_effort = %q, want medium", wantID, model.Reasoning.DefaultEffort)
+			}
+			if got := model.Reasoning.Levels; len(got) != 5 || got[4] != "xhigh" {
+				t.Fatalf("%s levels = %#v, want none..xhigh", wantID, got)
+			}
 		}
-		found = true
-		if model.Reasoning == nil {
-			t.Fatal("gpt-5.5 reasoning = nil, want capability metadata")
+		if !found {
+			t.Fatalf("%s not found in ChatGPT OAuth model list", wantID)
 		}
-		if model.Reasoning.DefaultEffort != "medium" {
-			t.Fatalf("gpt-5.5 default_effort = %q, want medium", model.Reasoning.DefaultEffort)
-		}
-		if got := model.Reasoning.Levels; len(got) != 5 || got[4] != "xhigh" {
-			t.Fatalf("gpt-5.5 levels = %#v, want none..xhigh", got)
-		}
-	}
-	if !found {
-		t.Fatal("gpt-5.5 not found in ChatGPT OAuth model list")
 	}
 }
 
@@ -385,6 +394,47 @@ func TestOpenAIModelsAPIBaseDefaultsKimiCoding(t *testing.T) {
 	}
 	if got := openAIModelsAPIBase(store.ProviderOpenAICompat, ""); got != "https://api.openai.com/v1" {
 		t.Fatalf("OpenAI compat default api base = %q", got)
+	}
+}
+
+func TestProvidersHandlerListProviderModelsAIMLAPIUsesCuratedCatalog(t *testing.T) {
+	token := setupProvidersAdminToken(t)
+	providerStore := newMockProviderStore()
+	provider := &store.LLMProviderData{
+		BaseModel:    store.BaseModel{ID: uuid.New()},
+		Name:         "aimlapi",
+		ProviderType: store.ProviderAIMLAPI,
+		APIBase:      "http://127.0.0.1:1",
+		APIKey:       "aimlapi-key",
+		Enabled:      true,
+	}
+	if err := providerStore.CreateProvider(t.Context(), provider); err != nil {
+		t.Fatalf("CreateProvider() error = %v", err)
+	}
+
+	handler := NewProvidersHandler(providerStore, newMockSecretsStore(), nil, "")
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodGet, "/v1/providers/"+provider.ID.String()+"/models", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d, body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var result ProviderModelsResponse
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	want := providers.AIMLAPIChatModels()
+	if len(result.Models) != len(want) {
+		t.Fatalf("models = %#v, want %d curated models", result.Models, len(want))
+	}
+	for index, model := range result.Models {
+		if model.ID != want[index] {
+			t.Errorf("models[%d].ID = %q, want %q", index, model.ID, want[index])
+		}
 	}
 }
 

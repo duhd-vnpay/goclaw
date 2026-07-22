@@ -85,29 +85,7 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 			}
 
 			if err := channel.Send(sendCtx, msg); err != nil {
-				slog.Error("error sending message to channel",
-					"channel", msg.Channel,
-					"chat_id", msg.ChatID,
-					"content_len", len(msg.Content),
-					"content_preview", Truncate(msg.Content, 160),
-					"error", err,
-				)
-				// Try to send a text-only error notification back to the chat.
-				// Only for media failures — text-only failures likely mean the chat
-				// is inaccessible (kicked, blocked, etc.) so retrying won't help.
-				if len(msg.Media) > 0 {
-					notifyMsg := bus.OutboundMessage{
-						Channel:  msg.Channel,
-						ChatID:   msg.ChatID,
-						Content:  formatChannelSendError(err),
-						Metadata: sendErrorMeta(msg.Metadata),
-						TenantID: msg.TenantID,
-					}
-					if err2 := channel.Send(sendCtx, notifyMsg); err2 != nil {
-						slog.Warn("failed to send error notification",
-							"channel", msg.Channel, "error", err2)
-					}
-				}
+				m.handleSendFailure(sendCtx, channel, msg, err)
 			}
 
 			// Clean up temp media files only. Workspace-generated files are preserved
@@ -120,6 +98,63 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// handleSendFailure reports a failed channel.Send from dispatchOutbound.
+//
+// Cross-target forwards (message tool, forward=true) are fire-and-forget onto
+// the bus — the tool already returned "sent" to the model and announced
+// success to the origin chat before this consumer ever ran. If the
+// destination itself was bad (e.g. the model passed a display name instead
+// of a real chat ID), this tells the ORIGIN chat the truth instead of
+// retrying against the same broken destination or, for text-only forwards,
+// silently dropping the failure.
+//
+// Non-forward sends keep the older behavior: retry-notify the same chat, and
+// only for media failures (text-only failures on a chat the agent is already
+// bound to usually mean the chat itself is inaccessible — kicked, blocked —
+// so retrying won't help).
+func (m *Manager) handleSendFailure(sendCtx context.Context, channel Channel, msg bus.OutboundMessage, sendErr error) {
+	slog.Error("error sending message to channel",
+		"channel", msg.Channel,
+		"chat_id", msg.ChatID,
+		"content_len", len(msg.Content),
+		"content_preview", Truncate(msg.Content, 160),
+		"error", sendErr,
+	)
+
+	if originCh := msg.Metadata[bus.MetaForwardOriginChannel]; originCh != "" {
+		originChat := msg.Metadata[bus.MetaForwardOriginChatID]
+		m.mu.RLock()
+		origin, originExists := m.channels[originCh]
+		m.mu.RUnlock()
+		if originExists && originChat != "" {
+			notifyMsg := bus.OutboundMessage{
+				Channel: originCh,
+				ChatID:  originChat,
+				Content: fmt.Sprintf("⚠️ Không gửi được tin nhắn forward tới %q — kiểm tra lại đích gửi (có thể chưa đúng ID nhóm/chat).", msg.ChatID),
+			}
+			if err2 := origin.Send(sendCtx, notifyMsg); err2 != nil {
+				slog.Warn("failed to send forward-failure notice to origin",
+					"origin_channel", originCh, "origin_chat", originChat, "error", err2)
+			}
+		}
+		return
+	}
+
+	if len(msg.Media) > 0 {
+		notifyMsg := bus.OutboundMessage{
+			Channel:  msg.Channel,
+			ChatID:   msg.ChatID,
+			Content:  formatChannelSendError(sendErr),
+			Metadata: sendErrorMeta(msg.Metadata),
+			TenantID: msg.TenantID,
+		}
+		if err2 := channel.Send(sendCtx, notifyMsg); err2 != nil {
+			slog.Warn("failed to send error notification",
+				"channel", msg.Channel, "error", err2)
 		}
 	}
 }
@@ -158,6 +193,75 @@ func (m *Manager) SendToChannel(ctx context.Context, channelName, chatID, conten
 	}
 
 	return channel.Send(ctx, msg)
+}
+
+// MessageEditor is optionally implemented by channels that support editing an
+// existing message in place (e.g. Telegram admin editing a channel post).
+type MessageEditor interface {
+	EditMessage(ctx context.Context, chatID string, messageID int, content string) error
+}
+
+// EditChannelMessage edits an existing message in a channel by name. Returns an
+// error if the channel is unknown or its type does not support editing.
+func (m *Manager) EditChannelMessage(ctx context.Context, channelName, chatID string, messageID int, content string) error {
+	m.mu.RLock()
+	channel, exists := m.channels[channelName]
+	m.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("channel %s not found", channelName)
+	}
+	editor, ok := channel.(MessageEditor)
+	if !ok {
+		return fmt.Errorf("channel %s (%s) does not support editing messages", channelName, channel.Type())
+	}
+	return editor.EditMessage(ctx, chatID, messageID, content)
+}
+
+// MessageReactor is optionally implemented by channels that can set an emoji
+// reaction on an existing message.
+type MessageReactor interface {
+	ReactToMessage(ctx context.Context, chatID string, messageID int, emoji string) error
+}
+
+// ReactToMessage sets an emoji reaction on a message in a channel by name.
+// Returns an error if the channel is unknown or does not support reactions.
+func (m *Manager) ReactToMessage(ctx context.Context, channelName, chatID string, messageID int, emoji string) error {
+	m.mu.RLock()
+	channel, exists := m.channels[channelName]
+	m.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("channel %s not found", channelName)
+	}
+	reactor, ok := channel.(MessageReactor)
+	if !ok {
+		return fmt.Errorf("channel %s (%s) does not support reactions", channelName, channel.Type())
+	}
+	return reactor.ReactToMessage(ctx, chatID, messageID, emoji)
+}
+
+// TopicMessagePoster is optionally implemented by channels that can post a
+// message into a forum topic and return the sent message's id.
+type TopicMessagePoster interface {
+	PostToTopic(ctx context.Context, chatID string, threadID int, content string) (int, error)
+}
+
+// PostToTopic posts a message into a forum topic of a channel and returns the
+// sent message id. Errors if the channel is unknown or does not support it.
+func (m *Manager) PostToTopic(ctx context.Context, channelName, chatID string, threadID int, content string) (int, error) {
+	m.mu.RLock()
+	channel, exists := m.channels[channelName]
+	m.mu.RUnlock()
+
+	if !exists {
+		return 0, fmt.Errorf("channel %s not found", channelName)
+	}
+	poster, ok := channel.(TopicMessagePoster)
+	if !ok {
+		return 0, fmt.Errorf("channel %s (%s) does not support topic posting", channelName, channel.Type())
+	}
+	return poster.PostToTopic(ctx, chatID, threadID, content)
 }
 
 // SendMediaToChannel delivers a message with media attachments to a specific channel by name.

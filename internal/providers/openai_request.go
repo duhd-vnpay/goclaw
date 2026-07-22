@@ -273,6 +273,8 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 	// Without this, Ollama defaults to a small context (often 2048) and returns
 	// context-window errors on long conversations.
 	// Priority: user-configured ollamaNumCtx > pre-queried /api/show value > 131072 default.
+	// Also disable thinking by default to prevent bloated chain-of-thought responses
+	// from models like qwq and deepseek-r1 which have thinking enabled by default.
 	if p.isOllamaEndpoint() {
 		numCtx := OllamaDefaultNumCtx
 		numCtxSource := "default"
@@ -295,6 +297,18 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 				raw = raw[:500] + "..."
 			}
 			slog.Debug("ollama.request: final request body (first 500 chars)", "provider", p.name, "model", model, "body_prefix", raw)
+		}
+		// Thinking visibility: provider-level override (settings.thinking_enabled)
+		// takes precedence; otherwise disable thinking by default (models like
+		// qwq/deepseek-r1 have thinking on by default) unless the caller
+		// explicitly requests a reasoning effort level.
+		switch {
+		case p.thinkingEnabled != nil:
+			body["think"] = *p.thinkingEnabled
+		default:
+			if level, _ := req.Options[OptThinkingLevel].(string); level == "" || level == "off" {
+				body["think"] = false
+			}
 		}
 	}
 

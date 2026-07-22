@@ -24,7 +24,13 @@ type MCPServerData struct {
 	TimeoutSec  int             `json:"timeout_sec" db:"timeout_sec"`
 	Settings    json.RawMessage `json:"settings,omitempty" db:"settings"`
 	Enabled     bool            `json:"enabled" db:"enabled"`
-	CreatedBy   string          `json:"created_by" db:"created_by"`
+	// RequireUserCredentials marks servers that mint credentials per-user at
+	// message time (e.g. Bitrix24 channel auto-onboard) instead of sharing a
+	// single admin api_key across every caller. Promoted from
+	// settings.require_user_credentials (JSONB) to a top-level column so
+	// channel factories can filter mcp_servers directly.
+	RequireUserCredentials bool   `json:"require_user_credentials" db:"require_user_credentials"`
+	CreatedBy              string `json:"created_by" db:"created_by"`
 }
 
 // MCPAgentGrant represents an MCP server grant to an agent.
@@ -158,4 +164,22 @@ type MCPServerStore interface {
 	GetUserCredentials(ctx context.Context, serverID uuid.UUID, userID string) (*MCPUserCredentials, error)
 	SetUserCredentials(ctx context.Context, serverID uuid.UUID, userID string, creds MCPUserCredentials) error
 	DeleteUserCredentials(ctx context.Context, serverID uuid.UUID, userID string) error
+
+	// CacheToolDescriptions stores a map of tool name → cached tool info
+	// (description + real parameter schema, when available) into the
+	// server's settings JSONB under the "tool_cache" key.
+	CacheToolDescriptions(ctx context.Context, serverID uuid.UUID, toolInfo map[string]CachedToolInfo) error
+}
+
+// CachedToolInfo is the cached, per-tool information stored under an MCP
+// server's settings "tool_cache" key. It is used to render prompt previews
+// without a live connection to the MCP server.
+type CachedToolInfo struct {
+	// Description is the tool's human-readable description.
+	Description string `json:"description"`
+	// Parameters is the tool's full JSON Schema for its input parameters,
+	// captured from the live MCP connection at cache-write time. It may be
+	// nil for cache entries written before this field existed, or for
+	// servers whose tools genuinely expose no schema.
+	Parameters json.RawMessage `json:"parameters,omitempty"`
 }

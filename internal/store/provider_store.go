@@ -13,6 +13,7 @@ const (
 	ProviderOpenAICompat    = "openai_compat"
 	ProviderGeminiNative    = "gemini_native"
 	ProviderOpenRouter      = "openrouter"
+	ProviderAIMLAPI         = "aimlapi"
 	ProviderGroq            = "groq"
 	ProviderDeepSeek        = "deepseek"
 	ProviderMistral         = "mistral"
@@ -72,6 +73,7 @@ var ValidProviderTypes = map[string]bool{
 	ProviderOpenAICompat:    true,
 	ProviderGeminiNative:    true,
 	ProviderOpenRouter:      true,
+	ProviderAIMLAPI:         true,
 	ProviderGroq:            true,
 	ProviderDeepSeek:        true,
 	ProviderMistral:         true,
@@ -190,6 +192,24 @@ func ParseEmbeddingSettings(settings json.RawMessage) *EmbeddingSettings {
 		return nil
 	}
 	return s.Embedding
+}
+
+// ParseThinkingEnabled extracts the provider-level override for whether the
+// provider should be asked to emit visible reasoning/thinking tokens (e.g.
+// Ollama native "think" field, OpenAI-compat "think" for Ollama endpoints).
+// Returns nil when unset in settings JSONB, meaning "use provider default"
+// (currently off for Ollama). Explicit true/false overrides that default.
+func ParseThinkingEnabled(settings json.RawMessage) *bool {
+	if len(settings) == 0 {
+		return nil
+	}
+	var s struct {
+		ThinkingEnabled *bool `json:"thinking_enabled"`
+	}
+	if json.Unmarshal(settings, &s) != nil {
+		return nil
+	}
+	return s.ThinkingEnabled
 }
 
 // ParseChatGPTOAuthProviderSettings extracts provider-level Codex pool defaults from settings JSONB.

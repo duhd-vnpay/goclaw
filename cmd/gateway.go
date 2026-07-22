@@ -49,8 +49,10 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/security"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"github.com/nextlevelbuilder/goclaw/internal/systemmessages"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 	usagecaps "github.com/nextlevelbuilder/goclaw/internal/usage/caps"
+	usagepricing "github.com/nextlevelbuilder/goclaw/internal/usage/pricing"
 	"github.com/nextlevelbuilder/goclaw/internal/vault"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 
@@ -75,6 +77,100 @@ func gatewayLogOutput() io.Writer {
 	}
 	fmt.Fprintf(os.Stderr, "logging to %s\n", logFile)
 	return io.MultiWriter(os.Stdout, f)
+}
+
+type traceCostBackfiller interface {
+	BackfillLLMCosts(context.Context) (store.TraceCostBackfillStats, error)
+}
+
+type traceUsageAggregateReconciler interface {
+	ReconcileTraceUsageAggregates(context.Context) (store.TraceUsageAggregateStats, error)
+}
+
+type usageEventCostBackfiller interface {
+	BackfillUsageEventCosts(context.Context) (store.UsageEventCostBackfillStats, error)
+}
+
+type snapshotCostBackfiller interface {
+	BackfillSnapshotCosts(context.Context) (store.SnapshotCostBackfillStats, error)
+}
+
+type snapshotBucketRefresher interface {
+	RefreshBuckets(context.Context, []time.Time) (int, error)
+}
+
+func backfillTraceCostsAfterPricingSync(ctx context.Context, stores *store.Stores, snapshots snapshotBucketRefresher) {
+	if stores == nil {
+		return
+	}
+	backfillCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	if stores.Tracing != nil {
+		backfiller, ok := stores.Tracing.(traceCostBackfiller)
+		if ok {
+			stats, err := backfiller.BackfillLLMCosts(backfillCtx)
+			if err != nil {
+				slog.Warn("usage_pricing.trace_cost_backfill_failed", "error", err)
+			} else {
+				refreshedBuckets := 0
+				if snapshots != nil && len(stats.SnapshotBuckets) > 0 {
+					refreshedBuckets, err = snapshots.RefreshBuckets(backfillCtx, stats.SnapshotBuckets)
+					if err != nil {
+						slog.Warn("usage_pricing.trace_cost_snapshot_refresh_failed", "error", err, "buckets", len(stats.SnapshotBuckets))
+					}
+				}
+				if stats.SpanRowsUpdated > 0 || stats.TraceRowsUpdated > 0 || refreshedBuckets > 0 {
+					slog.Info("usage_pricing.trace_cost_backfill_complete",
+						"spans", stats.SpanRowsUpdated,
+						"traces", stats.TraceRowsUpdated,
+						"snapshot_buckets", refreshedBuckets,
+					)
+				}
+			}
+		}
+	}
+
+	if stores.Tracing != nil {
+		reconciler, ok := stores.Tracing.(traceUsageAggregateReconciler)
+		if ok {
+			stats, err := reconciler.ReconcileTraceUsageAggregates(backfillCtx)
+			if err != nil {
+				slog.Warn("usage_pricing.trace_usage_aggregate_reconcile_failed", "error", err)
+			} else if stats.TraceRowsUpdated > 0 {
+				slog.Info("usage_pricing.trace_usage_aggregate_reconcile_complete", "traces", stats.TraceRowsUpdated)
+			}
+		}
+	}
+
+	if stores.Snapshots != nil {
+		backfiller, ok := stores.Snapshots.(snapshotCostBackfiller)
+		if ok {
+			stats, err := backfiller.BackfillSnapshotCosts(backfillCtx)
+			if err != nil {
+				slog.Warn("usage_pricing.snapshot_cost_backfill_failed", "error", err)
+			} else if stats.SnapshotRowsUpdated > 0 {
+				slog.Info("usage_pricing.snapshot_cost_backfill_complete", "snapshots", stats.SnapshotRowsUpdated)
+			}
+		}
+	}
+
+	if stores.UsageEvents != nil {
+		backfiller, ok := stores.UsageEvents.(usageEventCostBackfiller)
+		if ok {
+			stats, err := backfiller.BackfillUsageEventCosts(backfillCtx)
+			if err != nil {
+				slog.Warn("usage_pricing.usage_event_cost_backfill_failed", "error", err)
+				return
+			}
+			if stats.EventRowsUpdated > 0 || len(stats.RollupBuckets) > 0 {
+				slog.Info("usage_pricing.usage_event_cost_backfill_complete",
+					"events", stats.EventRowsUpdated,
+					"rollup_buckets", len(stats.RollupBuckets),
+				)
+			}
+		}
+	}
 }
 
 func runGateway() {
@@ -171,7 +267,9 @@ func runGateway() {
 		tools.DetectServerIPs(context.Background())
 	}
 
+	slog.Debug("creating mcpMgr via setupToolRegistry")
 	toolsReg, execApprovalMgr, mcpMgr, sandboxMgr, browserMgr, webFetchTool, ttsTool, audioMgr, permPE, toolPE, dataDir, agentCfg := setupToolRegistry(cfg, workspace, providerRegistry)
+	slog.Debug("setupToolRegistry completed", "mcpMgr_nil", mcpMgr == nil)
 	if browserMgr != nil {
 		defer browserMgr.Close()
 	}
@@ -182,6 +280,10 @@ func runGateway() {
 	pgStores, traceCollector, snapshotWorker := setupStoresAndTracing(cfg, dataDir, msgBus)
 	if browserMgr != nil && pgStores != nil && pgStores.BrowserCookies != nil && cfg.Tools.Browser.CookieSyncEnabled {
 		browserMgr.SetCookieProvider(newStoreBrowserCookieProvider(pgStores.BrowserCookies))
+	}
+
+	if ttsTool != nil && pgStores.SystemConfigs != nil {
+		ttsTool.SetSystemConfigStore(pgStores.SystemConfigs)
 	}
 
 	// Recover from crashes: flip ghost 'summoning' rows to 'summon_failed'.
@@ -275,7 +377,30 @@ func runGateway() {
 		applyUserAllowedPaths(toolsReg, paths)
 		slog.Info("filesystem allowed paths reapplied from system_configs", "paths", len(paths))
 	}
-	setupMemoryEmbeddings(pgStores, providerRegistry)
+	// MCP servers: load from database (single source of truth).
+	// pgStores.MCP is nil on SQLite/desktop builds that don't support MCP tables.
+	// Apply store to MCP manager so ListToolsForAgent can query DB.
+	// mcpMgr is created before pgStores is available, so the store must be set here.
+	if pgStores.MCP != nil && mcpMgr != nil {
+		mcpMgr.SetStore(pgStores.MCP)
+		slog.Info("applied store to MCPManager")
+	}
+	slog.Debug("checking MCP store availability", "pgStores_MCP_nil", pgStores == nil || pgStores.MCP == nil, "mcpMgr_nil", mcpMgr == nil)
+	if pgStores.MCP != nil {
+		slog.Debug("initializing MCP from database")
+		if err := initMCPFromDB(context.Background(), mcpMgr, pgStores.MCP); err != nil {
+			slog.Warn("mcp.db_load_errors", "error", err)
+		} else {
+			slog.Debug("initMCPFromDB completed successfully")
+		}
+		if mcpMgr != nil {
+			slog.Info("MCP manager started", "tools", len(mcpMgr.ToolNames()))
+		}
+	} else {
+		slog.Debug("skipping MCP database init: pgStores.MCP is nil")
+	}
+
+	teamWorkEmbedder := setupMemoryEmbeddings(pgStores, providerRegistry)
 	usageCapSvc := usagecaps.NewService(pgStores.UsageCaps, pgStores.Providers)
 
 	// Resolve background provider for consolidation + vault enrichment.
@@ -310,8 +435,10 @@ func runGateway() {
 		}
 	}
 
+	var channelMemorySvc *channelmemory.Service
 	if memorySvc := makeChannelMemoryService(pgStores, domainBus, providerRegistry, usageCapSvc); memorySvc != nil {
-		cleanupChannelMemory := (&channelmemory.Worker{Service: memorySvc}).Start(context.Background())
+		channelMemorySvc = memorySvc
+		cleanupChannelMemory := (&channelmemory.Worker{Service: channelMemorySvc}).Start(context.Background())
 		defer cleanupChannelMemory()
 		slog.Info("channel memory extraction worker registered")
 	}
@@ -389,8 +516,10 @@ func runGateway() {
 	server.SetVersion(Version)
 	server.SetDB(pgStores.DB)
 	server.SetPolicyEngine(permPE)
+	server.SetToolPolicy(toolPE)
 	server.SetPairingService(pgStores.Pairing)
 	server.SetMessageBus(msgBus)
+	server.SetExecApprovalManager(execApprovalMgr)
 	server.SetOAuthHandler(httpapi.NewOAuthHandler(pgStores.Providers, pgStores.ConfigSecrets, providerRegistry, msgBus))
 
 	// contextFileInterceptor is created inside wireExtras.
@@ -402,6 +531,66 @@ func runGateway() {
 	if pgStores.Agents != nil {
 		server.SetAgentStore(pgStores.Agents)
 	}
+	// Wire the skill/cron stores used by the CRUD MCP server (see
+	// internal/mcp/crud_server.go, mounted at /api/mcp/ in BuildMux()).
+	if pgStores.Skills != nil {
+		server.SetSkillStore(pgStores.Skills)
+	}
+	if pgStores.Cron != nil {
+		server.SetCronStore(pgStores.Cron)
+	}
+	if pgStores.AgentLinks != nil {
+		server.SetAgentLinkStore(pgStores.AgentLinks)
+	}
+	if pgStores.ConfigPermissions != nil {
+		server.SetConfigPermissionStore(pgStores.ConfigPermissions)
+	}
+	if pgStores.BitrixPortals != nil {
+		server.SetBitrixPortalStore(pgStores.BitrixPortals)
+	}
+	if pgStores.RunTimeline != nil {
+		server.SetRunTimelineStore(pgStores.RunTimeline)
+	}
+	if pgStores.Teams != nil {
+		server.SetTeamStore(pgStores.Teams)
+	}
+	if pgStores.ChannelInstances != nil {
+		server.SetChannelInstanceStore(pgStores.ChannelInstances)
+	}
+	if pgStores.Heartbeats != nil {
+		server.SetHeartbeatStore(pgStores.Heartbeats)
+	}
+	if pgStores.Providers != nil {
+		server.SetProviderStore(pgStores.Providers)
+	}
+	if pgStores.Tenants != nil {
+		server.SetTenantStore(pgStores.Tenants)
+	}
+	if pgStores.Memory != nil {
+		server.SetMemoryStore(pgStores.Memory)
+	}
+	if pgStores.KnowledgeGraph != nil {
+		server.SetKnowledgeGraphStore(pgStores.KnowledgeGraph)
+	}
+	if pgStores.Tracing != nil {
+		server.SetTracingStore(pgStores.Tracing)
+	}
+	if pgStores.Contacts != nil {
+		server.SetContactStore(pgStores.Contacts)
+	}
+	if pgStores.PendingMessages != nil {
+		server.SetPendingMessageStore(pgStores.PendingMessages)
+	}
+	if pgStores.Activity != nil {
+		server.SetActivityStore(pgStores.Activity)
+	}
+	if pgStores.SystemConfigs != nil {
+		server.SetSystemConfigStore(pgStores.SystemConfigs)
+	}
+	if pgStores.SecureCLI != nil {
+		server.SetSecureCLIStore(pgStores.SecureCLI)
+	}
+	server.SetSQLDB(pgStores.DB)
 
 	// Build OAuth token refresher before wireExtras so the resolver can inject tokens.
 	var mcpOAuthRefresher mcpbridge.OAuthTokenProvider
@@ -437,12 +626,14 @@ func runGateway() {
 		bundledSkillsDir: bundledSkillsDir,
 		enrichProgress:   enrichProgress,
 		enrichWorker:     enrichWorker,
+		channelMemorySvc: channelMemorySvc,
 		workspace:        workspace,
 		dataDir:          dataDir,
 		domainBus:        domainBus,
 		usageCapSvc:      usageCapSvc,
 		audioMgr:         audioMgr,
 		acpDeps:          acpDeps,
+		teamWorkEmbedder: teamWorkEmbedder,
 	}
 	// Resolve managed skills-store dir for SkillReseedHandler (same resolution as setupSkillsSystem).
 	if pgStores.Skills != nil {
@@ -466,11 +657,17 @@ func runGateway() {
 	// Wire dependencies for system prompt preview parity.
 	if agentsH != nil {
 		agentsH.SetPreviewDeps(toolsReg, skillsLoader)
+		agentsH.SetPreviewToolPolicy(toolPE)
 		var skillAccess store.SkillAccessStore
 		if pgStores.Skills != nil {
 			skillAccess, _ = pgStores.Skills.(store.SkillAccessStore)
 		}
 		agentsH.SetPreviewStores(pgStores.Teams, pgStores.AgentLinks, skillAccess)
+		slog.Debug("wiring MCP preview manager", "mcpMgr_nil", mcpMgr == nil)
+		if mcpMgr != nil {
+			agentsH.SetPreviewMCPManager(httpapi.NewMCPPreviewAdapter(mcpMgr))
+			slog.Debug("set MCP preview manager on agentsH")
+		}
 	}
 
 	// External wake/trigger API
@@ -550,7 +747,7 @@ func runGateway() {
 	// Register all RPC methods
 	server.SetLogTee(logTee)
 	server.SetRuntimeLogsHandler(httpapi.NewRuntimeLogsHandler(logTee))
-	pairingMethods, heartbeatMethods, chatMethods, cfgPermsMethods := registerAllMethods(server, agentRouter, pgStores.Sessions, pgStores.RunTimeline, pgStores.Cron, pgStores.Pairing, cfg, cfgPath, workspace, dataDir, msgBus, execApprovalMgr, pgStores.Agents, pgStores.Skills, pgStores.ConfigSecrets, pgStores.Teams, contextFileInterceptor, logTee, pgStores.Heartbeats, pgStores.ConfigPermissions, pgStores.SystemConfigs, pgStores.Tenants, pgStores.SkillTenantCfgs, audioMgr, usageCapSvc, providerRegistry)
+	pairingMethods, heartbeatMethods, chatMethods, cfgPermsMethods := registerAllMethods(server, agentRouter, pgStores.Sessions, pgStores.Tracing, pgStores.RunTimeline, pgStores.Cron, pgStores.Pairing, cfg, cfgPath, workspace, dataDir, msgBus, execApprovalMgr, pgStores.Agents, pgStores.Skills, pgStores.ConfigSecrets, pgStores.Teams, pgStores.AgentLinks, contextFileInterceptor, logTee, pgStores.Heartbeats, pgStores.ConfigPermissions, pgStores.SystemConfigs, pgStores.Tenants, pgStores.SkillTenantCfgs, audioMgr, usageCapSvc, providerRegistry, teamWorkEmbedder)
 
 	// Phase 3: Agent hooks RPC methods (hooks.list/create/update/delete/toggle/test/history).
 	if hs, ok := pgStores.Hooks.(hooks.HookStore); ok && hs != nil {
@@ -561,6 +758,7 @@ func runGateway() {
 			hm.SetTestRunner(methods.NewDispatcherTestRunner(sharedHookHandlers))
 		}
 		hm.Register(server.Router())
+		server.SetHookStore(hs)
 		slog.Info("registered hooks RPC methods")
 	}
 
@@ -601,7 +799,9 @@ func runGateway() {
 
 	// Channel manager
 	channelMgr := channels.NewManager(msgBus)
+	channelMgr.SetSystemMessages(systemmessages.NewResolver(cfg))
 	deps.channelMgr = channelMgr
+	server.SetChannelManager(channelMgr)
 
 	// Wire channel member resolver into permission grant paths (WS + HTTP) so
 	// file_writer grants coming from the Web UI auto-enrich their metadata.
@@ -613,11 +813,48 @@ func runGateway() {
 		// Bitrix24 channels (imbot.unregister bot cleanup).
 		channelInstancesH.SetChannelManager(channelMgr)
 	}
+	if deps.channelMemorySvc != nil {
+		deps.channelMemorySvc.ContextResolver = channelmemory.ContextResolverFunc(func(ctx context.Context, inst *store.ChannelInstanceData, group store.PendingMessageGroup) (channelmemory.ExtractionContext, error) {
+			return resolveChannelMemoryExtractionContext(ctx, channelMgr, inst, group)
+		})
+	}
 
 	// Wire channel sender + tenant checker on message tool (now that channelMgr exists)
 	if t, ok := toolsReg.Get("message"); ok {
 		if cs, ok := t.(tools.ChannelSenderAware); ok {
 			cs.SetChannelSender(channelMgr.SendToChannel)
+		}
+		if ce, ok := t.(tools.ChannelEditorAware); ok {
+			ce.SetChannelEditor(channelMgr.EditChannelMessage)
+		}
+		if rs, ok := t.(tools.ReactionSetterAware); ok {
+			rs.SetReactionSetter(channelMgr.ReactToMessage)
+		}
+		if tr, ok := t.(tools.TopicResolverAware); ok && pgStores != nil && pgStores.Contacts != nil {
+			contacts := pgStores.Contacts
+			tr.SetTopicResolver(func(ctx context.Context, channel, chatID, topicName string) (string, bool) {
+				list, err := contacts.ListContacts(ctx, store.ContactListOpts{
+					ChannelInstance: channel,
+					ContactType:     "topic",
+					Limit:           500,
+				})
+				if err != nil {
+					return "", false
+				}
+				want := strings.ToLower(strings.TrimSpace(topicName))
+				for _, c := range list {
+					if c.SenderID != chatID || c.ThreadID == nil || c.DisplayName == nil {
+						continue
+					}
+					if strings.ToLower(strings.TrimSpace(*c.DisplayName)) == want {
+						return *c.ThreadID, true
+					}
+				}
+				return "", false
+			})
+		}
+		if tp, ok := t.(tools.TopicPosterAware); ok {
+			tp.SetTopicPoster(channelMgr.PostToTopic)
 		}
 		if tc, ok := t.(tools.ChannelTenantCheckerAware); ok {
 			tc.SetChannelTenantChecker(channelMgr.ChannelTenantID)
@@ -627,6 +864,20 @@ func runGateway() {
 	if t, ok := toolsReg.Get("list_group_members"); ok {
 		if gl, ok := t.(tools.GroupMemberListerAware); ok {
 			gl.SetGroupMemberLister(channelMgr.ListGroupMembers)
+		}
+	}
+	// Wire group lister on zalo_list_groups tool
+	if t, ok := toolsReg.Get("zalo_list_groups"); ok {
+		if gl, ok := t.(tools.GroupListerAware); ok {
+			gl.SetGroupLister(channelMgr.ListGroups)
+		}
+	}
+	// Wire Telegram manager on telegram_manager tool.
+	for _, toolName := range []string{"telegram_manager", "create_forum_topic"} {
+		if t, ok := toolsReg.Get(toolName); ok {
+			if tm, ok := t.(tools.TelegramManagerAware); ok {
+				tm.SetTelegramManager(channelMgr.ManageTelegram)
+			}
 		}
 	}
 
@@ -651,8 +902,9 @@ func runGateway() {
 		// the one used by pg.NewPGStores → NewPGBitrixPortalStore.
 		bitrixEncKey := os.Getenv("GOCLAW_ENCRYPTION_KEY")
 		// Use the MCP-aware factory variant so channels that opt into
-		// lazy per-user credential provisioning (via mcp_server_name +
-		// mcp_base_url in their instance config) can reach the partner's
+		// lazy per-user credential provisioning (via mcp_server_id — or
+		// the legacy mcp_server_name + mcp_base_url pair — in their
+		// instance config) can reach the partner's
 		// MCPServerStore. The MCP server authenticates each onboard call
 		// via the caller-supplied Bitrix access_token (the "Bitrix24
 		// OAuth → existing mcp_user_credentials bridge" — Bitrix-specific
@@ -674,6 +926,7 @@ func runGateway() {
 				pgStores.BitrixPortals,
 				pgStores.ChannelInstances,
 				server.PublicURLSnapshot().Get,
+				bitrixEncKey,
 			).Register(server.Router())
 		}
 
@@ -731,6 +984,10 @@ func runGateway() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	go backfillTraceCostsAfterPricingSync(ctx, pgStores, snapshotWorker)
+	usagepricing.StartOpenRouterCatalogAutoSync(ctx, pgStores.UsageCaps, usagepricing.DefaultOpenRouterCatalogSyncInterval, func(syncCtx context.Context, _ int) {
+		backfillTraceCostsAfterPricingSync(syncCtx, pgStores, snapshotWorker)
+	})
 	server.StartUpdateChecker(ctx)
 
 	sigCh := make(chan os.Signal, 1)
@@ -788,6 +1045,7 @@ func runGateway() {
 
 	// Register quota usage RPC.
 	methods.NewQuotaMethods(quotaChecker, pgStores.DB).Register(server.Router())
+	server.SetQuotaChecker(quotaChecker)
 
 	// API key management RPC
 	if pgStores.APIKeys != nil {

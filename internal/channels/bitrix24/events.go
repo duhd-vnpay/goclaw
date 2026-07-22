@@ -43,16 +43,16 @@ type Event struct {
 // reject spoofed webhooks — AppToken is the stable per-install secret,
 // MemberID is the stable portal id (stable across domain renames).
 type EventAuth struct {
-	Domain           string
-	AppToken         string
-	AccessToken      string
-	RefreshToken     string
-	MemberID         string
-	ExpiresIn        int
-	Scope            string
-	ServerEndpoint   string
-	ClientEndpoint   string
-	Status           string
+	Domain         string
+	AppToken       string
+	AccessToken    string
+	RefreshToken   string
+	MemberID       string
+	ExpiresIn      int
+	Scope          string
+	ServerEndpoint string
+	ClientEndpoint string
+	Status         string
 }
 
 // EventParams covers the `data[PARAMS]` section plus resolved bot/user ids.
@@ -69,8 +69,11 @@ type EventParams struct {
 	MessageOriginal string // raw BBCode (`[USER=<id>]…[/USER]`); group chat only, "" on DMs
 	MessageType     string // "private" | "chat"
 	SystemMessage   bool
-	ReplyToMID      string
-	Files           []EventFile
+	// ReplyMessage is the quoted/replied-to message Bitrix24 ships inline on
+	// ONIMBOTMESSAGEADD when the user replies to an earlier message. nil when
+	// the event is not a reply. See EventReplyMessage for field semantics.
+	ReplyMessage *EventReplyMessage
+	Files        []EventFile
 	// MentionedList is the structured map data[PARAMS][MENTIONED_LIST][<id>]=<id>
 	// Bitrix24 emits on group messages. Highest-authority mention source —
 	// no regex / Unicode edge cases. Absent (nil) on DMs.
@@ -90,6 +93,36 @@ type EventParams struct {
 	ChatEntityType string
 	ChatEntityID   string
 
+	// ChatTitle mirrors data[PARAMS][CHAT_TITLE]. Bitrix pre-formats
+	// human-readable names — e.g. "Thân Công Huy - Zalo Synity 0964575404"
+	// for Openline connector chats, "Tích hợp channel bitrix24 vào goclaw"
+	// for Task chats. Absent on 1-1 DMs. Forwarded as metadata so agents
+	// can display / reason about "who am I talking to" without extra RPCs.
+	ChatTitle string
+
+	// ChatType mirrors data[PARAMS][CHAT_TYPE]. Single-letter code that
+	// classifies the chat surface more precisely than ChatEntityType:
+	//   P = private (1-1 DM)      C = group chat / CRM chat
+	//   L = Open Line             X = external chat (Tasks)
+	//   B = collab / workgroup    O = open chat
+	//   S = system/notify         N = channel
+	//   J = open channel          T = comment thread
+	//   A = copilot chat
+	ChatType string
+
+	// ChatEntityData1/2/3 are opaque Bitrix-internal payloads keyed to the
+	// chat entity. For Openline sessions:
+	//   DATA_1 = "Y|DEAL|2054|N|N|1020|1782879518|0|0|0"
+	//            (10 tokens — session state incl. active CRM entity, line id, started_at)
+	//   DATA_2 = "LEAD|0|COMPANY|0|CONTACT|1266|DEAL|2054"
+	//            (4 slots — CRM linkage: LEAD, COMPANY, CONTACT, DEAL ids)
+	//   DATA_3 = "N" (flag, meaning TBD)
+	// Kept as raw strings; decoding lives in entity_context.go so the parse
+	// path stays a pure copy.
+	ChatEntityData1 string
+	ChatEntityData2 string
+	ChatEntityData3 string
+
 	// FromIsConnector mirrors data[USER][IS_CONNECTOR]. In Bitrix24 Open
 	// Channel sessions (MESSAGE_TYPE=L), real customers come in through a
 	// connector (Zalo, FB, etc.) and IS_CONNECTOR=Y. Internal staff who join
@@ -105,6 +138,33 @@ type EventParams struct {
 	// imbot.message.add with SKIP_CONNECTOR=Y instead of the v2 path.
 	// Absent or any value other than "HiddenMessage" → false (public).
 	IsHiddenMessage bool
+}
+
+// EventReplyMessage captures the message a user replied to (quoted). Bitrix24
+// ships it inline on the reply event as `data[PARAMS][REPLY_MESSAGE][...]`:
+//   - ID       — MESSAGE_ID of the quoted message (fallback: PARAMS[REPLY_ID])
+//   - AuthorID — user id who authored the quoted message
+//   - Text     — full quoted body (BBCode); EMPTY when the quoted message is
+//     media-only (image/audio/file/video), in which case the attachment must
+//     be fetched separately via im.dialog.messages.get (see reply_context.go).
+type EventReplyMessage struct {
+	ID       string
+	AuthorID string
+	Text     string
+}
+
+// newReplyMessage builds an EventReplyMessage from the raw REPLY_MESSAGE fields.
+// replyID is the fallback id from the nested PARAMS[REPLY_ID] used when
+// REPLY_MESSAGE[ID] is absent. Returns nil when there is no reply signal at all
+// so callers can treat "not a reply" as the natural zero case.
+func newReplyMessage(id, authorID, text, replyID string) *EventReplyMessage {
+	if id == "" {
+		id = replyID
+	}
+	if id == "" {
+		return nil
+	}
+	return &EventReplyMessage{ID: id, AuthorID: authorID, Text: text}
 }
 
 // EventFile is one attachment element extracted from
@@ -204,9 +264,13 @@ func parseFormEvent(v url.Values) (*Event, error) {
 		Message:         formGet(v, "data", "PARAMS", "MESSAGE"),
 		MessageOriginal: formGet(v, "data", "PARAMS", "MESSAGE_ORIGINAL"),
 		MessageType:     formGet(v, "data", "PARAMS", "MESSAGE_TYPE"),
-		ReplyToMID:      formGet(v, "data", "PARAMS", "REPLY_TO_MESSAGE_ID"),
 		ChatEntityType:  formGet(v, "data", "PARAMS", "CHAT_ENTITY_TYPE"),
 		ChatEntityID:    formGet(v, "data", "PARAMS", "CHAT_ENTITY_ID"),
+		ChatTitle:       formGet(v, "data", "PARAMS", "CHAT_TITLE"),
+		ChatType:        formGet(v, "data", "PARAMS", "CHAT_TYPE"),
+		ChatEntityData1: formGet(v, "data", "PARAMS", "CHAT_ENTITY_DATA_1"),
+		ChatEntityData2: formGet(v, "data", "PARAMS", "CHAT_ENTITY_DATA_2"),
+		ChatEntityData3: formGet(v, "data", "PARAMS", "CHAT_ENTITY_DATA_3"),
 	}
 	if s := formGet(v, "data", "PARAMS", "SYSTEM"); s == "Y" {
 		p.SystemMessage = true
@@ -224,6 +288,17 @@ func parseFormEvent(v url.Values) (*Event, error) {
 	if s := formGet(v, "data", "USER", "IS_CONNECTOR"); strings.EqualFold(s, "Y") {
 		p.FromIsConnector = true
 	}
+
+	// REPLY_MESSAGE: the quoted message when the user replied. Bitrix ships the
+	// full quoted text inline for text originals; media-only originals carry
+	// just ID+AUTHOR_ID (MESSAGE empty) and are resolved later. REPLY_ID lives
+	// in the nested inner PARAMS as a numeric fallback id.
+	p.ReplyMessage = newReplyMessage(
+		formGet(v, "data", "PARAMS", "REPLY_MESSAGE", "ID"),
+		formGet(v, "data", "PARAMS", "REPLY_MESSAGE", "AUTHOR_ID"),
+		formGet(v, "data", "PARAMS", "REPLY_MESSAGE", "MESSAGE"),
+		formGet(v, "data", "PARAMS", "PARAMS", "REPLY_ID"),
+	)
 
 	// MENTIONED_LIST: data[PARAMS][MENTIONED_LIST][<user_id>]=<user_id>.
 	// Iterate all form keys to discover the structured map; key format is
@@ -352,29 +427,42 @@ func parseJSONEvent(body io.ReadCloser) (*Event, error) {
 			Status           string `json:"status"`
 		} `json:"auth"`
 		Data struct {
-			Bot    map[string]map[string]any `json:"BOT"`
-			User   struct {
+			Bot  map[string]map[string]any `json:"BOT"`
+			User struct {
 				IsConnector string `json:"IS_CONNECTOR"`
 			} `json:"USER"`
 			Params struct {
-				MessageID       any              `json:"MESSAGE_ID"`
-				DialogID        any              `json:"DIALOG_ID"`
-				ChatID          any              `json:"CHAT_ID"`
-				FromUserID      any              `json:"FROM_USER_ID"`
-				ToUserID        any              `json:"TO_USER_ID"`
-				Message         string           `json:"MESSAGE"`
-				MessageOriginal string           `json:"MESSAGE_ORIGINAL"`
-				MentionedList   map[string]any   `json:"MENTIONED_LIST"`
-				MessageType     string           `json:"MESSAGE_TYPE"`
-				System          string           `json:"SYSTEM"`
-				ReplyToMID      any              `json:"REPLY_TO_MESSAGE_ID"`
-				ChatEntityType  string           `json:"CHAT_ENTITY_TYPE"`
-				ChatEntityID    string           `json:"CHAT_ENTITY_ID"`
+				MessageID       any            `json:"MESSAGE_ID"`
+				DialogID        any            `json:"DIALOG_ID"`
+				ChatID          any            `json:"CHAT_ID"`
+				FromUserID      any            `json:"FROM_USER_ID"`
+				ToUserID        any            `json:"TO_USER_ID"`
+				Message         string         `json:"MESSAGE"`
+				MessageOriginal string         `json:"MESSAGE_ORIGINAL"`
+				MentionedList   map[string]any `json:"MENTIONED_LIST"`
+				MessageType     string         `json:"MESSAGE_TYPE"`
+				System          string         `json:"SYSTEM"`
+				ChatEntityType  string         `json:"CHAT_ENTITY_TYPE"`
+				ChatEntityID    string         `json:"CHAT_ENTITY_ID"`
+				ChatTitle       string         `json:"CHAT_TITLE"`
+				ChatType        string         `json:"CHAT_TYPE"`
+				ChatEntityData1 string         `json:"CHAT_ENTITY_DATA_1"`
+				ChatEntityData2 string         `json:"CHAT_ENTITY_DATA_2"`
+				ChatEntityData3 string         `json:"CHAT_ENTITY_DATA_3"`
 				// Nested PARAMS holds UI component metadata. COMPONENT_ID=
 				// HiddenMessage marks a whisper / internal-only message.
+				// REPLY_ID is the numeric fallback id of the quoted message.
 				NestedParams struct {
 					ComponentID string `json:"COMPONENT_ID"`
+					ReplyID     any    `json:"REPLY_ID"`
 				} `json:"PARAMS"`
+				// REPLY_MESSAGE is the quoted message on reply events (see
+				// EventReplyMessage). MESSAGE is empty for media-only originals.
+				ReplyMessage struct {
+					ID       any    `json:"ID"`
+					AuthorID any    `json:"AUTHOR_ID"`
+					Message  string `json:"MESSAGE"`
+				} `json:"REPLY_MESSAGE"`
 				// FILES may arrive as an array OR a map keyed by file id — keep
 				// raw and normalize after Decode.
 				Files json.RawMessage `json:"FILES"`
@@ -429,9 +517,19 @@ func parseJSONEvent(body io.ReadCloser) (*Event, error) {
 	p.MessageOriginal = raw.Data.Params.MessageOriginal
 	p.MessageType = raw.Data.Params.MessageType
 	p.SystemMessage = raw.Data.Params.System == "Y"
-	p.ReplyToMID = asString(raw.Data.Params.ReplyToMID)
+	p.ReplyMessage = newReplyMessage(
+		asString(raw.Data.Params.ReplyMessage.ID),
+		asString(raw.Data.Params.ReplyMessage.AuthorID),
+		raw.Data.Params.ReplyMessage.Message,
+		asString(raw.Data.Params.NestedParams.ReplyID),
+	)
 	p.ChatEntityType = raw.Data.Params.ChatEntityType
 	p.ChatEntityID = raw.Data.Params.ChatEntityID
+	p.ChatTitle = raw.Data.Params.ChatTitle
+	p.ChatType = raw.Data.Params.ChatType
+	p.ChatEntityData1 = raw.Data.Params.ChatEntityData1
+	p.ChatEntityData2 = raw.Data.Params.ChatEntityData2
+	p.ChatEntityData3 = raw.Data.Params.ChatEntityData3
 	p.FromIsConnector = strings.EqualFold(raw.Data.User.IsConnector, "Y")
 	p.IsHiddenMessage = raw.Data.Params.NestedParams.ComponentID == "HiddenMessage"
 	if len(raw.Data.Params.MentionedList) > 0 {

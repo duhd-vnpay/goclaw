@@ -27,6 +27,7 @@ backup/
 # Environment
 .env*
 !.env.example
+!.env.cloudflared.example
 
 app
 browser-poc
@@ -63,6 +64,11 @@ tmp
 .claude/
 
 deploy-*.sh
+# ...but the fork-dev deploy helper IS tracked tooling.
+!scripts/deploy-forkdev.sh
+
+# fork-dev integration worktree (created by scripts/deploy-forkdev.sh)
+.goclaw-forkdev/
 
 docs/technical-diaries
 docs/zuey

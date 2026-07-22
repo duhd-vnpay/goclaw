@@ -2,7 +2,8 @@ package upgrade
 
 // RequiredSchemaVersion is the schema migration version this binary requires.
 // Bump this whenever adding a new SQL migration file.
-// v3.15.0-beta.67 merge: upstream added 3 migrations (085-087: webhook_calls_heartbeat,
-// fix_channel_contacts_merged_fk, usage_snapshots_agent_fk). Local 085-103 renumbered
-// to 088-106 to come AFTER upstream new migrations.
-const RequiredSchemaVersion uint = 106
+// v3.15.0-beta.174 merge (2026-07-22): prod DB đã apply local numbering tới 106
+// (schema_migrations.version=106) nên KHÔNG renumber local. 8 upstream-new
+// migrations (theirs 088-095) renumber → 107-114 để chạy sau version hiện hành;
+// 21 migration còn lại trùng nội dung (rename-detected) giữ số local.
+const RequiredSchemaVersion uint = 114

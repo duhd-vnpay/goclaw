@@ -28,7 +28,7 @@ func (s *SQLitePendingMessageStore) AppendBatch(ctx context.Context, msgs []stor
 		return nil
 	}
 
-	const cols = 11
+	const cols = 12
 	placeholders := make([]string, len(msgs))
 	args := make([]any, 0, len(msgs)*cols)
 	now := time.Now()
@@ -38,13 +38,13 @@ func (s *SQLitePendingMessageStore) AppendBatch(ctx context.Context, msgs []stor
 		if msgs[i].ID == uuid.Nil {
 			msgs[i].ID = uuid.Must(uuid.NewV7())
 		}
-		placeholders[i] = "(?,?,?,?,?,?,?,?,?,?,?)"
-		args = append(args, msgs[i].ID, msgs[i].ChannelName, msgs[i].HistoryKey,
+		placeholders[i] = "(?,?,?,?,?,?,?,?,?,?,?,?)"
+		args = append(args, msgs[i].ID, msgs[i].ChannelName, msgs[i].HistoryKey, msgs[i].ParentHistoryKey,
 			msgs[i].Sender, msgs[i].SenderID, msgs[i].Body, msgs[i].PlatformMsgID, msgs[i].IsSummary, now, now, tid)
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO channel_pending_messages (id, channel_name, history_key, sender, sender_id, body, platform_msg_id, is_summary, created_at, updated_at, tenant_id)
+		`INSERT INTO channel_pending_messages (id, channel_name, history_key, parent_history_key, sender, sender_id, body, platform_msg_id, is_summary, created_at, updated_at, tenant_id)
 		 VALUES `+strings.Join(placeholders, ","),
 		args...,
 	)
@@ -58,10 +58,10 @@ func (s *SQLitePendingMessageStore) ListByKey(ctx context.Context, channelName, 
 	}
 	args := append([]any{channelName, historyKey}, tArgs...)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, channel_name, history_key, sender, sender_id, body, platform_msg_id, is_summary, created_at, updated_at
+		`SELECT id, channel_name, history_key, parent_history_key, sender, sender_id, body, platform_msg_id, is_summary, created_at, updated_at
 		 FROM channel_pending_messages
 		 WHERE channel_name = ? AND history_key = ?`+tClause+`
-		 ORDER BY created_at ASC`,
+		 ORDER BY created_at ASC, id ASC`,
 		args...,
 	)
 	if err != nil {
@@ -73,7 +73,7 @@ func (s *SQLitePendingMessageStore) ListByKey(ctx context.Context, channelName, 
 	for rows.Next() {
 		var m store.PendingMessage
 		createdAt, updatedAt := scanTimePair()
-		if err := rows.Scan(&m.ID, &m.ChannelName, &m.HistoryKey, &m.Sender, &m.SenderID, &m.Body, &m.PlatformMsgID, &m.IsSummary, createdAt, updatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ChannelName, &m.HistoryKey, &m.ParentHistoryKey, &m.Sender, &m.SenderID, &m.Body, &m.PlatformMsgID, &m.IsSummary, createdAt, updatedAt); err != nil {
 			return nil, err
 		}
 		m.CreatedAt = createdAt.Time
@@ -132,9 +132,9 @@ func (s *SQLitePendingMessageStore) Compact(ctx context.Context, deleteIDs []uui
 	}
 	now := time.Now()
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO channel_pending_messages (id, channel_name, history_key, sender, sender_id, body, platform_msg_id, is_summary, created_at, updated_at, tenant_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		summary.ID, summary.ChannelName, summary.HistoryKey, summary.Sender, summary.SenderID, summary.Body, summary.PlatformMsgID, true, now, now, tenantIDForInsert(ctx),
+		`INSERT INTO channel_pending_messages (id, channel_name, history_key, parent_history_key, sender, sender_id, body, platform_msg_id, is_summary, created_at, updated_at, tenant_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		summary.ID, summary.ChannelName, summary.HistoryKey, summary.ParentHistoryKey, summary.Sender, summary.SenderID, summary.Body, summary.PlatformMsgID, true, now, now, tenantIDForInsert(ctx),
 	)
 	if err != nil {
 		return fmt.Errorf("compact insert summary: %w", err)
@@ -162,7 +162,7 @@ func (s *SQLitePendingMessageStore) ListGroups(ctx context.Context) ([]store.Pen
 		return nil, err
 	}
 	// SQLite: BOOL_OR → MAX(is_summary), EXISTS subquery logic preserved
-	q := `SELECT channel_name, history_key,
+	q := `SELECT channel_name, history_key, MAX(parent_history_key) AS parent_history_key,
 		        COUNT(*) AS message_count,
 		        MAX(is_summary) AND NOT EXISTS (
 		            SELECT 1 FROM channel_pending_messages n
@@ -192,7 +192,7 @@ func (s *SQLitePendingMessageStore) ListGroups(ctx context.Context) ([]store.Pen
 	var result []store.PendingMessageGroup
 	for rows.Next() {
 		var g store.PendingMessageGroup
-		if err := rows.Scan(&g.ChannelName, &g.HistoryKey, &g.MessageCount, &g.HasSummary, &g.LastActivity); err != nil {
+		if err := rows.Scan(&g.ChannelName, &g.HistoryKey, &g.ParentHistoryKey, &g.MessageCount, &g.HasSummary, &g.LastActivity); err != nil {
 			return nil, err
 		}
 		result = append(result, g)
@@ -232,10 +232,15 @@ func (s *SQLitePendingMessageStore) ResolveGroupTitles(ctx context.Context, grou
 		return nil, nil
 	}
 
+	result, missing := s.resolveGroupTitlesFromContacts(ctx, groups)
+	if len(missing) == 0 {
+		return result, nil
+	}
+
 	// Build OR conditions using LIKE with ? placeholders
-	conditions := make([]string, 0, len(groups))
-	args := make([]any, 0, len(groups)*2)
-	for _, g := range groups {
+	conditions := make([]string, 0, len(missing))
+	args := make([]any, 0, len(missing)*2)
+	for _, g := range missing {
 		conditions = append(conditions, "(session_key LIKE '%:' || ? || ':group:' || ? || '%')")
 		args = append(args, g.ChannelName, g.HistoryKey)
 	}
@@ -265,13 +270,12 @@ func (s *SQLitePendingMessageStore) ResolveGroupTitles(ctx context.Context, grou
 	}
 	defer rows.Close()
 
-	result := make(map[string]string)
 	for rows.Next() {
 		var sessionKey, title string
 		if err := rows.Scan(&sessionKey, &title); err != nil {
 			return nil, err
 		}
-		for _, g := range groups {
+		for _, g := range missing {
 			pattern := ":" + g.ChannelName + ":group:" + g.HistoryKey
 			if strings.Contains(sessionKey, pattern) {
 				mapKey := g.ChannelName + ":" + g.HistoryKey
@@ -283,4 +287,79 @@ func (s *SQLitePendingMessageStore) ResolveGroupTitles(ctx context.Context, grou
 		}
 	}
 	return result, rows.Err()
+}
+
+func (s *SQLitePendingMessageStore) resolveGroupTitlesFromContacts(ctx context.Context, groups []store.PendingMessageGroup) (map[string]string, []store.PendingMessageGroup) {
+	result := make(map[string]string, len(groups))
+	unique := uniquePendingTitleGroups(groups)
+	if len(unique) == 0 {
+		return result, nil
+	}
+
+	conditions := make([]string, 0, len(unique))
+	args := make([]any, 0, len(unique)*2+1)
+	for _, g := range unique {
+		conditions = append(conditions, "(channel_instance = ? AND sender_id = ?)")
+		args = append(args, g.ChannelName, g.HistoryKey)
+	}
+
+	tenantFilter := ""
+	if !store.IsCrossTenant(ctx) {
+		tid := store.TenantIDFromContext(ctx)
+		if tid == uuid.Nil {
+			tid = store.MasterTenantID
+		}
+		tenantFilter = " AND tenant_id = ?"
+		args = append(args, tid.String())
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT channel_instance, sender_id, COALESCE(NULLIF(json_extract(metadata, '$.display_title'), ''), display_name)
+		 FROM channel_contacts
+		 WHERE display_name IS NOT NULL
+		   AND display_name <> ''
+		   AND contact_type IN ('group', 'topic')
+		   AND (`+strings.Join(conditions, " OR ")+`)`+tenantFilter,
+		args...,
+	)
+	if err != nil {
+		return result, unique
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var channelName, senderID, title string
+		if err := rows.Scan(&channelName, &senderID, &title); err != nil {
+			return result, unique
+		}
+		result[channelName+":"+senderID] = title
+	}
+	if err := rows.Err(); err != nil {
+		return result, unique
+	}
+
+	missing := make([]store.PendingMessageGroup, 0, len(unique)-len(result))
+	for _, g := range unique {
+		if result[g.ChannelName+":"+g.HistoryKey] == "" {
+			missing = append(missing, g)
+		}
+	}
+	return result, missing
+}
+
+func uniquePendingTitleGroups(groups []store.PendingMessageGroup) []store.PendingMessageGroup {
+	out := make([]store.PendingMessageGroup, 0, len(groups))
+	seen := make(map[string]struct{}, len(groups))
+	for _, g := range groups {
+		if g.ChannelName == "" || g.HistoryKey == "" {
+			continue
+		}
+		key := g.ChannelName + ":" + g.HistoryKey
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, g)
+	}
+	return out
 }

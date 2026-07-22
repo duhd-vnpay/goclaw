@@ -25,6 +25,7 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
 	"github.com/nextlevelbuilder/goclaw/internal/crypto"
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/security"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
@@ -92,21 +93,52 @@ func decodeAsyncPayload(payload []byte) (asyncPayload, error) {
 
 // callbackPayload is the JSON body POSTed to the receiver's callback_url.
 type callbackPayload struct {
-	CallID     string          `json:"call_id"`
-	DeliveryID string          `json:"delivery_id"`
-	AgentID    string          `json:"agent_id,omitempty"`
-	Status     string          `json:"status"` // "done" | "failed"
-	Output     string          `json:"output,omitempty"`
-	Usage      *callbackUsage  `json:"usage,omitempty"`
-	Metadata   json.RawMessage `json:"metadata,omitempty"`
-	Error      string          `json:"error,omitempty"`
+	CallID       string                `json:"call_id"`
+	DeliveryID   string                `json:"delivery_id"`
+	AgentID      string                `json:"agent_id,omitempty"`
+	Status       string                `json:"status"` // "done" | "failed"
+	Output       string                `json:"output,omitempty"`
+	Usage        *callbackUsage        `json:"usage,omitempty"`
+	Calls        []providers.CallUsage `json:"calls,omitempty"`
+	TotalCostUSD float64               `json:"total_cost_usd,omitempty"`
+	Metadata     json.RawMessage       `json:"metadata,omitempty"`
+	Error        string                `json:"error,omitempty"`
 }
 
 // callbackUsage mirrors providers.Usage for the callback payload.
 type callbackUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens                      int  `json:"prompt_tokens"`
+	CompletionTokens                  int  `json:"completion_tokens"`
+	TotalTokens                       int  `json:"total_tokens"`
+	CacheReadTokens                   int  `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationTokens               int  `json:"cache_creation_input_tokens,omitempty"`
+	PromptTokensIncludeCachedSegments bool `json:"prompt_tokens_include_cached_segments,omitempty"`
+}
+
+// newCallbackUsage maps a provider usage record onto the callback envelope.
+// Returns nil when u is nil (usage omitted from the payload).
+func newCallbackUsage(u *providers.Usage) *callbackUsage {
+	if u == nil {
+		return nil
+	}
+	return &callbackUsage{
+		PromptTokens:                      u.PromptTokens,
+		CompletionTokens:                  u.CompletionTokens,
+		TotalTokens:                       u.TotalTokens,
+		CacheReadTokens:                   u.CacheReadTokens,
+		CacheCreationTokens:               u.CacheCreationTokens,
+		PromptTokensIncludeCachedSegments: u.PromptTokensIncludeCachedSegments,
+	}
+}
+
+// callbackBreakdown derives the aggregate usage (sum of all calls) and total
+// cost from a run's per-call breakdown. Returns (nil, 0) for an empty slice.
+func callbackBreakdown(calls []providers.CallUsage) (*callbackUsage, float64) {
+	if len(calls) == 0 {
+		return nil, 0
+	}
+	sum := providers.SumCallUsage(calls)
+	return newCallbackUsage(&sum), providers.SumCallCost(calls)
 }
 
 // WorkerConfig holds tunable parameters for WebhookWorker.
@@ -342,9 +374,11 @@ func (w *WebhookWorker) execute(ctx context.Context, call *store.WebhookCallData
 	var output string
 	var usageVal *callbackUsage
 	var agentErrMsg string
+	var payloadCalls []providers.CallUsage
+	var payloadCost float64
 
 	if len(call.Response) == 0 && call.AgentID != nil {
-		out, usage, invokeErr := w.invokeAgentWithHeartbeat(tctx, call, req, lease)
+		out, usage, calls, invokeErr := w.invokeAgentWithHeartbeat(tctx, call, req, lease)
 		if invokeErr != nil {
 			agentErrMsg = invokeErr.Error()
 			slog.Warn("webhook.worker.agent_invoke_failed",
@@ -355,6 +389,11 @@ func (w *WebhookWorker) execute(ctx context.Context, call *store.WebhookCallData
 		} else {
 			output = out
 			usageVal = usage
+			if bd, cost := callbackBreakdown(calls); bd != nil {
+				usageVal = bd // usage = sum of all calls (includes tool-internal LLM)
+				payloadCalls = calls
+				payloadCost = cost
+			}
 		}
 	} else if len(call.Response) > 0 {
 		// Prior attempt stored a partial response; extract output for re-delivery.
@@ -362,6 +401,8 @@ func (w *WebhookWorker) execute(ctx context.Context, call *store.WebhookCallData
 		if err := json.Unmarshal(call.Response, &prevResp); err == nil {
 			output = prevResp.Output
 			usageVal = prevResp.Usage
+			payloadCalls = prevResp.Calls
+			payloadCost = prevResp.TotalCostUSD
 		}
 	}
 
@@ -396,14 +437,16 @@ func (w *WebhookWorker) execute(ctx context.Context, call *store.WebhookCallData
 	}
 
 	payload := callbackPayload{
-		CallID:     call.ID.String(),
-		DeliveryID: call.DeliveryID.String(),
-		AgentID:    agentIDStr,
-		Status:     statusStr,
-		Output:     output,
-		Usage:      usageVal,
-		Metadata:   req.Metadata,
-		Error:      agentErrMsg,
+		CallID:       call.ID.String(),
+		DeliveryID:   call.DeliveryID.String(),
+		AgentID:      agentIDStr,
+		Status:       statusStr,
+		Output:       output,
+		Usage:        usageVal,
+		Calls:        payloadCalls,
+		TotalCostUSD: payloadCost,
+		Metadata:     req.Metadata,
+		Error:        agentErrMsg,
 	}
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -738,7 +781,7 @@ func (w *WebhookWorker) invokeAgentWithHeartbeat(
 	call *store.WebhookCallData,
 	req asyncPayload,
 	lease string,
-) (string, *callbackUsage, error) {
+) (string, *callbackUsage, []providers.CallUsage, error) {
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 
@@ -786,29 +829,29 @@ func (w *WebhookWorker) heartbeatLoop(
 	}
 }
 
-// invokeAgent runs the agent for an async call and returns (output, usage, error).
+// invokeAgent runs the agent for an async call and returns (output, usage, calls, error).
 func (w *WebhookWorker) invokeAgent(
 	ctx context.Context,
 	call *store.WebhookCallData,
 	req asyncPayload,
-) (string, *callbackUsage, error) {
+) (string, *callbackUsage, []providers.CallUsage, error) {
 	if call.AgentID == nil {
-		return "", nil, fmt.Errorf("call has no agent_id")
+		return "", nil, nil, fmt.Errorf("call has no agent_id")
 	}
 
 	agentIDStr := call.AgentID.String()
 	ag, err := w.router.Get(ctx, agentIDStr)
 	if err != nil {
-		return "", nil, fmt.Errorf("agent lookup %s: %w", agentIDStr, err)
+		return "", nil, nil, fmt.Errorf("agent lookup %s: %w", agentIDStr, err)
 	}
 
 	// Parse input.
 	userMessage, extraSystem, err := parseAsyncInput(req.Input)
 	if err != nil {
-		return "", nil, fmt.Errorf("parse input: %w", err)
+		return "", nil, nil, fmt.Errorf("parse input: %w", err)
 	}
 	if userMessage == "" {
-		return "", nil, fmt.Errorf("empty user message in stored payload")
+		return "", nil, nil, fmt.Errorf("empty user message in stored payload")
 	}
 
 	runID := uuid.NewString()
@@ -840,18 +883,11 @@ func (w *WebhookWorker) invokeAgent(
 
 	result, runErr := ag.Run(agentCtx, rr)
 	if runErr != nil {
-		return "", nil, runErr
+		return "", nil, nil, runErr
 	}
 
-	var usage *callbackUsage
-	if result.Usage != nil {
-		usage = &callbackUsage{
-			PromptTokens:     result.Usage.PromptTokens,
-			CompletionTokens: result.Usage.CompletionTokens,
-			TotalTokens:      result.Usage.TotalTokens,
-		}
-	}
-	return result.Content, usage, nil
+	usage := newCallbackUsage(result.Usage)
+	return result.Content, usage, result.Calls, nil
 }
 
 // reclaimStale resets stale running rows back to queued.

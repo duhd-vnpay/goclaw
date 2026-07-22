@@ -13,8 +13,25 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
+	"github.com/nextlevelbuilder/goclaw/internal/tracing"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
+
+// recordToolCallUsage appends a tool's internal LLM call to the run breakdown.
+// No-op unless the tool actually made an LLM call (result.Usage != nil).
+func (l *Loop) recordToolCallUsage(ctx context.Context, state *pipeline.RunState, toolName string, result *tools.Result) {
+	if result == nil || result.Usage == nil {
+		return
+	}
+	state.AppendCall(providers.CallUsage{
+		Type:     "tool_call",
+		Name:     toolName,
+		Provider: result.Provider,
+		Model:    result.Model,
+		Usage:    *result.Usage,
+		CostUSD:  l.calculateLLMCost(ctx, result.Provider, result.Model, result.Usage),
+	})
+}
 
 // makeExecuteToolCall wraps tool execution: name resolution, execute, process result.
 // Uses bridgeRS to share loop detection state between the pipeline and agent's processToolResult.
@@ -33,9 +50,17 @@ func (l *Loop) makeExecuteToolCall(req *RunRequest, bridgeRS *runState) func(ctx
 			Payload: map[string]any{"name": tc.Name, "id": tc.ID, "arguments": tc.Arguments},
 		})
 
-		// Emit tool span start for tracing.
+		// Emit tool span start for tracing. Parent the tool span to the current
+		// LLM-call span so the trace tree nests tool calls under the model turn.
 		toolStart := time.Now().UTC()
-		toolSpanID := l.emitToolSpanStart(ctx, toolStart, registryName, tc.ID, string(argsJSON))
+		toolCtx := ctx
+		if state.CurrentLLMSpanID != nil {
+			toolCtx = tracing.WithParentSpanID(ctx, *state.CurrentLLMSpanID)
+		}
+		toolSpanID := l.emitToolSpanStart(toolCtx, toolStart, registryName, tc.ID, string(argsJSON))
+		if toolSpanID != uuid.Nil {
+			state.CurrentToolSpanID = &toolSpanID
+		}
 
 		// Inject agent audio snapshot so TTS tool (and any future audio consumers)
 		// can read agent-level voice/model config without an extra DB lookup.
@@ -56,6 +81,7 @@ func (l *Loop) makeExecuteToolCall(req *RunRequest, bridgeRS *runState) func(ctx
 		toolDuration := time.Since(toolStart)
 
 		l.emitToolSpanEnd(ctx, toolSpanID, toolStart, result)
+		l.recordToolCallUsage(ctx, state, registryName, result)
 		l.recordToolUsageEvent(ctx, req, registryName, tc.Name, tc.ID, tc.Arguments, toolStart, result, toolSpanID)
 
 		// v3 evolution metrics: record tool execution non-blocking (best-effort).
@@ -181,6 +207,7 @@ func (l *Loop) makeProcessToolResult(req *RunRequest, bridgeRS *runState) func(c
 		if result == nil {
 			return []providers.Message{rawMsg}
 		}
+		l.recordToolCallUsage(ctx, state, registryName, result)
 		if rawName == "" {
 			rawName = tc.Name
 		}

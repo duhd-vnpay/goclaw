@@ -56,6 +56,12 @@ type Channel struct {
 	mentionMu sync.Mutex
 	mentionRe *mentionMatcher
 
+	// reactions tracks the current status-reaction emoji per user message so
+	// OnReactionEvent can replace the previous one as the agent's status
+	// progresses (thinking → tool → done). Keyed by "<chatID>:<messageID>";
+	// values are *reactionState. See reactions.go.
+	reactions sync.Map
+
 	// MCP lazy provisioner (Phase C). All fields nil / zero when
 	// provisioning is disabled — channel then works exactly as before
 	// (messages flow through without trying to mint MCP credentials).
@@ -89,6 +95,13 @@ type Channel struct {
 	// Bitrix Send() can't stall the next provisioning decision.
 	notifyMu       sync.Mutex
 	notifyDebounce map[string]time.Time
+
+	// OAuth re-authorization DM debounce. Deliberately separate map/mutex
+	// from notifyDebounce above — the two notice types (generic MCP failure
+	// vs "please re-authorize") are independent; one must never suppress
+	// the other. Same TTL value (mcpUserNotifyDebounceTTL) but its own state.
+	oauthInviteMu       sync.Mutex
+	oauthInviteDebounce map[string]time.Time
 
 	// Contact-name enrichment cache. Bitrix24 webhooks don't carry
 	// display_name / username, so the channel lazily resolves them via

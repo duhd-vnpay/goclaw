@@ -29,13 +29,13 @@ import {
   ArrowLeftRight,
   FileArchive,
   DatabaseBackup,
+  Webhook,
+  Cable,
+  MonitorCog,
   Route,
   CheckSquare,
   Layers,
   LogOut,
-  Webhook,
-  Cable,
-  MonitorCog,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SidebarGroup } from "./sidebar-group";
@@ -46,20 +46,18 @@ import { cn } from "@/lib/utils";
 import { usePendingPairingsCount } from "@/hooks/use-pending-pairings-count";
 import { useAuthStore } from "@/stores/use-auth-store";
 import { useTenants } from "@/hooks/use-tenants";
+import { getRuntimeBranding } from "@/lib/branding";
 import { useOidcAuth } from "@/hooks/use-oidc-auth";
 
 function UserProfileBadge({ collapsed }: { collapsed: boolean }) {
   const { oidcUser, oidcEnabled, logoutOidc } = useOidcAuth();
-
   if (!oidcEnabled || !oidcUser) return null;
-
   const initials = (oidcUser.display_name || oidcUser.email || "?")
     .split(" ")
     .map((w) => w[0])
     .join("")
     .toUpperCase()
     .slice(0, 2);
-
   if (collapsed) {
     return (
       <div className="flex flex-col items-center gap-2 border-t px-2 py-3">
@@ -84,7 +82,6 @@ function UserProfileBadge({ collapsed }: { collapsed: boolean }) {
       </div>
     );
   }
-
   return (
     <div className="flex items-center gap-3 border-t px-4 py-3">
       {oidcUser.avatar_url ? (
@@ -130,6 +127,7 @@ export function Sidebar({ collapsed, onNavItemClick }: SidebarProps) {
   const role = useAuthStore((s) => s.role);
   const { isOwner } = useTenants();
   const isAdmin = role === "admin" || role === "owner";
+  const branding = getRuntimeBranding();
 
   return (
     <aside
@@ -148,14 +146,14 @@ export function Sidebar({ collapsed, onNavItemClick }: SidebarProps) {
       <div className="flex h-14 items-center border-b px-4">
         {!collapsed && (
           <div className="flex items-center gap-2.5">
-            <img src="/goclaw-icon.svg" alt="GoClaw" className="h-8 w-8" />
+            <img src={branding.logoUrl} alt={branding.appName} className="h-8 w-8" />
             <span className="text-lg font-bold tracking-tight text-sidebar-primary">
-              GoClaw
+              {branding.appShortName}
             </span>
           </div>
         )}
         {collapsed && (
-          <img src="/goclaw-icon.svg" alt="GoClaw" className="mx-auto h-7 w-7" />
+          <img src={branding.logoUrl} alt={branding.appName} className="mx-auto h-7 w-7" />
         )}
       </div>
 

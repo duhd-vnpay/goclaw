@@ -70,7 +70,7 @@ func (h *ProvidersHandler) handleListProviderModels(w http.ResponseWriter, r *ht
 	// Ollama: use native /api/tags for richer metadata (parameter size, quantization, family).
 	// ProviderOllama has no API key; ProviderOllamaCloud requires one but both use the same endpoint.
 	if p.ProviderType == store.ProviderOllama || p.ProviderType == store.ProviderOllamaCloud {
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(loadProviderRequestTimeoutSec(r.Context(), h.sysConfigStore))*time.Second)
 		defer cancel()
 		apiBase := h.resolveAPIBase(p)
 		if apiBase == "" {
@@ -91,7 +91,7 @@ func (h *ProvidersHandler) handleListProviderModels(w http.ResponseWriter, r *ht
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(loadProviderRequestTimeoutSec(r.Context(), h.sysConfigStore))*time.Second)
 	defer cancel()
 
 	var models []ModelInfo
@@ -109,6 +109,8 @@ func (h *ProvidersHandler) handleListProviderModels(w http.ResponseWriter, r *ht
 		models = minimaxModels()
 	case store.ProviderZai, store.ProviderZaiCoding:
 		models = zaiModels()
+	case store.ProviderAIMLAPI:
+		models = aimlapiModels()
 	default:
 		// All other types use OpenAI-compatible /models endpoint
 		apiBase := openAIModelsAPIBase(p.ProviderType, h.resolveAPIBase(p))
@@ -123,6 +125,15 @@ func (h *ProvidersHandler) handleListProviderModels(w http.ResponseWriter, r *ht
 	}
 
 	respond(withReasoningCapabilities(models))
+}
+
+func aimlapiModels() []ModelInfo {
+	models := providers.AIMLAPIChatModels()
+	result := make([]ModelInfo, 0, len(models))
+	for _, model := range models {
+		result = append(result, ModelInfo{ID: model, Name: model})
+	}
+	return result
 }
 
 func openAIModelsAPIBase(providerType, apiBase string) string {

@@ -83,7 +83,8 @@ COPY docker/requirements-base.txt docker/requirements-skills.txt /tmp/
 # Install ca-certificates + wget (healthcheck) + tzdata + optional runtimes.
 # tzdata: required for `date` command + subprocess TZ inheritance (psql, agent reports).
 #         Go binary embeds tzdata via `_ "time/tzdata"` in main.go, but OS-level tzdata
-#         needed for system commands. Default TZ set below via ENV block.
+#         needed for system commands (and Python zoneinfo in skill scripts).
+#         Default TZ set below via ENV block.
 # ENABLE_FULL_SKILLS=true pre-installs all skill deps (larger image, no on-demand install needed).
 # Otherwise, skill packages are installed on-demand via the admin UI.
 RUN set -eux; \

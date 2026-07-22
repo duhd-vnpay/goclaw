@@ -219,8 +219,6 @@ func (h *TTSConfigHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // ttsConfigSaveRequest is the request body for POST /v1/tts/config.
-// Provider is *string so the handler can distinguish "field omitted" (nil)
-// from "explicitly set to empty" (disable TTS — UI's "None" button).
 type ttsConfigSaveRequest struct {
 	Provider   *string                 `json:"provider"`
 	Auto       string                  `json:"auto"`
@@ -409,11 +407,11 @@ func (h *TTSConfigHandler) handleSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var providerLog string
+	provider := ""
 	if req.Provider != nil {
-		providerLog = *req.Provider
+		provider = *req.Provider
 	}
-	slog.Info("tts.config: saved", "tenant", tid, "provider", providerLog)
+	slog.Info("tts.config: saved", "tenant", tid, "provider", provider)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }

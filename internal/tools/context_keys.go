@@ -21,17 +21,19 @@ import (
 type toolContextKey string
 
 const (
-	ctxChannel     toolContextKey = "tool_channel"
-	ctxChannelType toolContextKey = "tool_channel_type"
-	ctxChatID      toolContextKey = "tool_chat_id"
-	ctxPeerKind    toolContextKey = "tool_peer_kind"
-	ctxLocalKey    toolContextKey = "tool_local_key" // composite key with topic/thread suffix for routing
-	ctxSandboxKey  toolContextKey = "tool_sandbox_key"
-	ctxAsyncCB     toolContextKey = "tool_async_cb"
-	ctxWorkspace   toolContextKey = "tool_workspace"
-	ctxAgentKey    toolContextKey = "tool_agent_key"
-	ctxSessionKey  toolContextKey = "tool_session_key" // origin session key for announce routing
-	ctxRunKind     toolContextKey = "tool_run_kind"    // "notification", "announce", "delegation"
+	ctxChannel                    toolContextKey = "tool_channel"
+	ctxChannelType                toolContextKey = "tool_channel_type"
+	ctxChatID                     toolContextKey = "tool_chat_id"
+	ctxPeerKind                   toolContextKey = "tool_peer_kind"
+	ctxLocalKey                   toolContextKey = "tool_local_key" // composite key with topic/thread suffix for routing
+	ctxSandboxKey                 toolContextKey = "tool_sandbox_key"
+	ctxAsyncCB                    toolContextKey = "tool_async_cb"
+	ctxWorkspace                  toolContextKey = "tool_workspace"
+	ctxAgentKey                   toolContextKey = "tool_agent_key"
+	ctxAgentPolicy                toolContextKey = "tool_agent_policy" // per-agent tool policy for MCP bridge enforcement
+	ctxSessionKey                 toolContextKey = "tool_session_key"  // origin session key for announce routing
+	ctxRunKind                    toolContextKey = "tool_run_kind"     // "notification", "announce", "delegation"
+	ctxTelegramManagerPermissions toolContextKey = "telegram_manager_permissions"
 )
 
 // ctxRateLimitOverride carries a per-agent tool rate limit (calls/hour) that
@@ -72,6 +74,15 @@ func ToolChannelTypeFromCtx(ctx context.Context) string {
 		return rc.ChannelType
 	}
 	return ""
+}
+
+func WithTelegramManagerPermissions(ctx context.Context, permissions []string) context.Context {
+	return context.WithValue(ctx, ctxTelegramManagerPermissions, permissions)
+}
+
+func TelegramManagerPermissionsFromCtx(ctx context.Context) []string {
+	v, _ := ctx.Value(ctxTelegramManagerPermissions).([]string)
+	return v
 }
 
 func WithToolChatID(ctx context.Context, chatID string) context.Context {
@@ -150,6 +161,22 @@ func ToolAgentKeyFromCtx(ctx context.Context) string {
 		return rc.AgentToolKey
 	}
 	return ""
+}
+
+// WithToolAgentPolicy injects the calling agent's per-agent tool policy into
+// context, so the MCP bridge server (internal/mcp/bridge_server.go) can
+// enforce the same policy-filtered tool allowlist the normal agent loop uses,
+// instead of exposing its full BridgeToolNames set unconditionally to every
+// caller regardless of agent identity.
+func WithToolAgentPolicy(ctx context.Context, policy *config.ToolPolicySpec) context.Context {
+	return context.WithValue(ctx, ctxAgentPolicy, policy)
+}
+
+// ToolAgentPolicyFromCtx returns the calling agent's per-agent tool policy, or
+// nil if none was injected (e.g. no verified agent context on the request).
+func ToolAgentPolicyFromCtx(ctx context.Context) *config.ToolPolicySpec {
+	policy, _ := ctx.Value(ctxAgentPolicy).(*config.ToolPolicySpec)
+	return policy
 }
 
 // WithToolSessionKey injects the parent's session key so subagent announce

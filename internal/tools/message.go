@@ -23,11 +23,15 @@ var embeddedMediaPattern = regexp.MustCompile(`MEDIA:\S+`)
 
 // MessageTool allows the agent to proactively send messages to channels.
 type MessageTool struct {
-	workspace     string
-	restrict      bool
-	sender        ChannelSender
-	msgBus        *bus.MessageBus
-	tenantChecker ChannelTenantChecker
+	workspace      string
+	restrict       bool
+	sender         ChannelSender
+	editor         ChannelEditor
+	topicResolver  TopicResolver
+	topicPoster    TopicPoster
+	reactionSetter ReactionSetter
+	msgBus         *bus.MessageBus
+	tenantChecker  ChannelTenantChecker
 }
 
 func NewMessageTool(workspace string, restrict bool) *MessageTool {
@@ -35,6 +39,10 @@ func NewMessageTool(workspace string, restrict bool) *MessageTool {
 }
 
 func (t *MessageTool) SetChannelSender(s ChannelSender)               { t.sender = s }
+func (t *MessageTool) SetChannelEditor(e ChannelEditor)               { t.editor = e }
+func (t *MessageTool) SetTopicResolver(r TopicResolver)               { t.topicResolver = r }
+func (t *MessageTool) SetTopicPoster(p TopicPoster)                   { t.topicPoster = p }
+func (t *MessageTool) SetReactionSetter(r ReactionSetter)             { t.reactionSetter = r }
 func (t *MessageTool) SetMessageBus(b *bus.MessageBus)                { t.msgBus = b }
 func (t *MessageTool) SetChannelTenantChecker(c ChannelTenantChecker) { t.tenantChecker = c }
 
@@ -49,8 +57,20 @@ func (t *MessageTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"description": "Action to perform: 'send'",
-				"enum":        []string{"send"},
+				"description": "Action: 'send' a new message, 'edit' an existing one (change its text in place), or 'react' (set an emoji reaction on an existing message — e.g. mark your own status post as done). To edit, the user usually replies to the target message — use its id from reply_to_message_id in your context.",
+				"enum":        []string{"send", "edit", "react"},
+			},
+			"message_id": map[string]any{
+				"type":        "integer",
+				"description": "For action='edit' or 'react': the id of the target message. For 'react' this is usually your OWN earlier post (the message_id returned when you sent it). For 'edit' take it from reply_to_message_id when the user replied to the message they want edited.",
+			},
+			"emoji": map[string]any{
+				"type":        "string",
+				"description": "For action='react': the reaction emoji to set on message_id. Telegram allows only a fixed set (e.g. 👍 👎 🔥 🎉 💯 🤝) — ✅ and ❌ are NOT valid reactions. Use 👍 for done/paid.",
+			},
+			"topic": map[string]any{
+				"type":        "string",
+				"description": "For action='send' in a forum group: the name of the target topic to post into (e.g. 'Announcements'). Posts into that topic of the CURRENT group and returns the sent message_id in the result — remember it if you may need to edit that post later. Omit to reply in the current topic/chat.",
 			},
 			"channel": map[string]any{
 				"type":        "string",
@@ -58,7 +78,7 @@ func (t *MessageTool) Parameters() map[string]any {
 			},
 			"target": map[string]any{
 				"type":        "string",
-				"description": "Chat ID to send to (default: current chat from context)",
+				"description": "Chat ID to send to (default: current chat from context). Must be a real chat/group ID, NOT a display name — passing a human-readable name here will fail (or silently go nowhere). If you only know a group by its display name, resolve the real ID first (e.g. zalo_list_groups on Zalo) instead of guessing.",
 			},
 			"message": map[string]any{
 				"type":        "string",
@@ -79,8 +99,19 @@ func (t *MessageTool) Parameters() map[string]any {
 
 func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *Result {
 	action := argString(args, "action")
+	if action == "edit" {
+		return t.executeEdit(ctx, args)
+	}
+	if action == "react" {
+		return t.executeReact(ctx, args)
+	}
 	if action != "send" {
-		return ErrorResult(fmt.Sprintf("unsupported action: %s (only 'send' is supported)", action))
+		return ErrorResult(fmt.Sprintf("unsupported action: %s (only 'send', 'edit' and 'react' are supported)", action))
+	}
+
+	// Posting into a named forum topic of the current group.
+	if topic := argString(args, "topic"); topic != "" {
+		return t.executeTopicSend(ctx, args, topic)
 	}
 
 	message := argString(args, "message")
@@ -191,13 +222,11 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *Result 
 	// If we found embedded media and bus is available, prefer bus path (supports media attachments).
 	if len(embeddedMedia) > 0 && t.msgBus != nil {
 		outMsg := bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  target,
-			Content: message,
-			Media:   embeddedMedia,
-		}
-		if isGroupContext(ctx) {
-			outMsg.Metadata = map[string]string{"group_id": target}
+			Channel:  channel,
+			ChatID:   target,
+			Content:  message,
+			Media:    embeddedMedia,
+			Metadata: t.buildOutboundMetadata(ctx, target, forwardReason),
 		}
 		t.msgBus.PublishOutbound(outMsg)
 		// Mark each embedded media path as delivered.
@@ -223,12 +252,10 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *Result 
 	// can distinguish group sends from DMs.
 	if t.msgBus != nil {
 		outMsg := bus.OutboundMessage{
-			Channel: channel,
-			ChatID:  target,
-			Content: message,
-		}
-		if isGroupContext(ctx) {
-			outMsg.Metadata = map[string]string{"group_id": target}
+			Channel:  channel,
+			ChatID:   target,
+			Content:  message,
+			Metadata: t.buildOutboundMetadata(ctx, target, forwardReason),
 		}
 		t.msgBus.PublishOutbound(outMsg)
 		return noticeOnSuccess(SilentResult(fmt.Sprintf(`{"status":"sent","channel":"%s","target":"%s"}`, channel, target)))
@@ -243,6 +270,175 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *Result 
 	}
 
 	return ErrorResult("no channel sender or message bus available")
+}
+
+// buildOutboundMetadata merges group-context routing metadata with
+// forward-origin tracking. The bus consumer (dispatchOutbound) runs async
+// with no path back to this call, so when forwardReason is non-empty we
+// stash the origin channel/chat here — that's the only way a downstream
+// delivery failure can be reported back to the chat that requested the
+// forward instead of vanishing silently.
+func (t *MessageTool) buildOutboundMetadata(ctx context.Context, target, forwardReason string) map[string]string {
+	var meta map[string]string
+	if isGroupContext(ctx) {
+		meta = map[string]string{"group_id": target}
+	}
+	if forwardReason == "" {
+		return meta
+	}
+	origCh := ToolChannelFromCtx(ctx)
+	origChat := ToolChatIDFromCtx(ctx)
+	if origCh == "" || origChat == "" {
+		return meta
+	}
+	if meta == nil {
+		meta = make(map[string]string, 2)
+	}
+	meta[bus.MetaForwardOriginChannel] = origCh
+	meta[bus.MetaForwardOriginChatID] = origChat
+	return meta
+}
+
+// executeTopicSend posts a message into a named forum topic of the current group.
+// The topic is always in the current chat, so channel/chat come from context
+// (reliable) — this also sidesteps the self-send guard, since a topic post is a
+// deliberate cross-topic delivery, not a reply loop.
+func (t *MessageTool) executeTopicSend(ctx context.Context, args map[string]any, topicName string) *Result {
+	message := argString(args, "message")
+	if message == "" {
+		return ErrorResult("message is required")
+	}
+	channel := ToolChannelFromCtx(ctx)
+	if channel == "" {
+		channel = argString(args, "channel")
+	}
+	target := ToolChatIDFromCtx(ctx)
+	if target == "" {
+		target = argString(args, "target")
+	}
+	if channel == "" || target == "" {
+		return ErrorResult("posting to a topic needs the current channel/chat context")
+	}
+	if t.topicResolver == nil {
+		return ErrorResult("topic posting is not supported in this context")
+	}
+	threadID, ok := t.topicResolver(ctx, channel, target, topicName)
+	if !ok {
+		return ErrorResult(fmt.Sprintf("topic %q not found in this group — I only know topics created while I'm in the group. Ask an admin to (re)create it, or tell me the topic differently.", topicName))
+	}
+	if err := t.validateChannelTenant(ctx, channel, target); err != nil {
+		return err
+	}
+
+	// Preferred path: post synchronously and return the sent message_id so the
+	// agent can remember it and later edit that exact post (no duplicates).
+	if t.topicPoster != nil {
+		threadNum, _ := strconv.Atoi(threadID)
+		msgID, err := t.topicPoster(ctx, channel, target, threadNum, message)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("failed to post to topic %q: %v", topicName, err))
+		}
+		return SilentResult(fmt.Sprintf(`{"status":"sent","channel":"%s","target":"%s","topic":"%s","thread_id":%d,"message_id":%d}`, channel, target, topicName, threadNum, msgID))
+	}
+
+	// Fallback: async via the bus (no message_id available).
+	if t.msgBus == nil {
+		return ErrorResult("topic posting requires the message bus")
+	}
+	t.msgBus.PublishOutbound(bus.OutboundMessage{
+		Channel: channel,
+		ChatID:  target,
+		Content: message,
+		Metadata: map[string]string{
+			"group_id":          target,
+			"message_thread_id": threadID,
+		},
+	})
+	return SilentResult(fmt.Sprintf(`{"status":"sent","channel":"%s","target":"%s","topic":"%s","thread_id":"%s"}`, channel, target, topicName, threadID))
+}
+
+// executeEdit edits an existing message in a channel (e.g. flip a ❌ to a ✅ in a
+// status post). The message_id is typically the id of the message the user
+// replied to — surfaced to the agent as reply_to_message_id in context.
+func (t *MessageTool) executeEdit(ctx context.Context, args map[string]any) *Result {
+	if t.editor == nil {
+		return ErrorResult("editing messages is not supported in this context")
+	}
+	messageID := argInt(args, "message_id")
+	if messageID == 0 {
+		return ErrorResult("message_id is required for edit (use the id of the message to change — usually the one the user replied to)")
+	}
+	message := argString(args, "message")
+	if message == "" {
+		return ErrorResult("message (the new full text) is required for edit")
+	}
+
+	// Edits target the message the user replied to in the CURRENT chat, so prefer
+	// the context channel/chat (reliable) over LLM-supplied args — models often
+	// pass the platform name ("telegram") instead of the channel instance, or a
+	// null target. Fall back to args only when context is absent.
+	channel := ToolChannelFromCtx(ctx)
+	if channel == "" {
+		channel = argString(args, "channel")
+	}
+	if channel == "" {
+		return ErrorResult("channel is required (no current channel in context)")
+	}
+	target := ToolChatIDFromCtx(ctx)
+	if target == "" {
+		target = argString(args, "target")
+	}
+	if target == "" {
+		return ErrorResult("target chat ID is required (no current chat in context)")
+	}
+
+	if err := t.validateChannelTenant(ctx, channel, target); err != nil {
+		return err
+	}
+	if err := t.editor(ctx, channel, target, messageID, message); err != nil {
+		return ErrorResult(fmt.Sprintf("failed to edit message: %v", err))
+	}
+	return SilentResult(fmt.Sprintf(`{"status":"edited","channel":"%s","target":"%s","message_id":%d}`, channel, target, messageID))
+}
+
+// executeReact sets an emoji reaction on an existing message (e.g. 👍 on the
+// bot's own status post once it's fully paid). Targets message_id in the current
+// channel/chat. Only platform-supported reaction emojis are allowed.
+func (t *MessageTool) executeReact(ctx context.Context, args map[string]any) *Result {
+	if t.reactionSetter == nil {
+		return ErrorResult("reactions are not supported in this context")
+	}
+	messageID := argInt(args, "message_id")
+	if messageID == 0 {
+		return ErrorResult("message_id is required for react (the id of the message to react to — usually your own earlier post)")
+	}
+	emoji := argString(args, "emoji")
+	if emoji == "" {
+		return ErrorResult("emoji is required for react (e.g. 👍 — note ✅/❌ are not valid Telegram reactions)")
+	}
+
+	channel := ToolChannelFromCtx(ctx)
+	if channel == "" {
+		channel = argString(args, "channel")
+	}
+	if channel == "" {
+		return ErrorResult("channel is required (no current channel in context)")
+	}
+	target := ToolChatIDFromCtx(ctx)
+	if target == "" {
+		target = argString(args, "target")
+	}
+	if target == "" {
+		return ErrorResult("target chat ID is required (no current chat in context)")
+	}
+
+	if err := t.validateChannelTenant(ctx, channel, target); err != nil {
+		return err
+	}
+	if err := t.reactionSetter(ctx, channel, target, messageID, emoji); err != nil {
+		return ErrorResult(fmt.Sprintf("failed to set reaction: %v", err))
+	}
+	return SilentResult(fmt.Sprintf(`{"status":"reacted","channel":"%s","target":"%s","message_id":%d,"emoji":"%s"}`, channel, target, messageID, emoji))
 }
 
 // validateChannelTenant checks the target channel belongs to the current tenant.

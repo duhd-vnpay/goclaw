@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
@@ -17,14 +18,11 @@ import (
 // buildMessages constructs the full message list for an LLM request.
 // Returns the messages and whether BOOTSTRAP.md was present in context files
 // (used by the caller for auto-cleanup without an extra DB roundtrip).
-func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, summary, userMessage, extraSystemPrompt, sessionKey, channel, channelType, bitrixPortalDomain, chatTitle, chatID, peerKind, userID, senderName string, historyLimit int, skillFilter []string, lightContext bool) ([]providers.Message, bool) {
+func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, summary, userMessage, extraSystemPrompt, sessionKey, channel, channelType, bitrixPortalDomain, chatTitle, chatID, peerKind, userID, senderName string, historyLimit int, skillFilter []string, lightContext bool, telegramManagerPermissions []string) ([]providers.Message, bool) {
 	var messages []providers.Message
 
-	// Build full system prompt using the new builder (matching TS buildAgentSystemPrompt)
-	mode := PromptFull
-	if bootstrap.IsSubagentSession(sessionKey) || bootstrap.IsCronSession(sessionKey) || bootstrap.IsHeartbeatSession(sessionKey) {
-		mode = PromptMinimal
-	}
+	// Build system prompt — 3-layer mode resolution: runtime > auto-detect > config
+	mode := resolvePromptMode("", sessionKey, l.promptMode)
 
 	_, hasSpawn := l.tools.Get("spawn")
 	_, hasTeamTools := l.tools.Get("team_tasks")
@@ -32,6 +30,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 	_, hasSkillManage := l.tools.Get("skill_manage")
 	_, hasMCPToolSearch := l.tools.Get("mcp_tool_search")
 	_, hasKG := l.tools.Get("knowledge_graph_search")
+	_, hasMemoryExpand := l.tools.Get("memory_expand")
 
 	// Per-user workspace: show the user's subdirectory in the system prompt.
 	// Uses cached workspace from userSetups (includes channel isolation).
@@ -113,7 +112,6 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		}
 	}
 
-
 	// Group writer restrictions: filter context files + inject prompt
 	if l.configPermStore != nil && (strings.HasPrefix(userID, "group:") || strings.HasPrefix(userID, "guild:")) {
 		senderID := store.SenderIDFromContext(ctx)
@@ -140,7 +138,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 	// Build tool list, filtering out skill_manage when skill_evolve is off.
 	// Also applies ChannelAware filtering so channel-specific tools don't
 	// appear in ## Tooling when the current channel doesn't support them.
-	toolNames := l.filteredToolNamesForChannel(channelType)
+	toolNames := l.filteredToolNamesForChannel(channelType, telegramManagerPermissions)
 	if !l.skillEvolve {
 		filtered := toolNames[:0:0]
 		for _, n := range toolNames {
@@ -202,6 +200,17 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		contextFiles = filtered
 	}
 
+	// Mode-aware context file filtering: each mode loads different files.
+	if allowlist := bootstrap.ModeAllowlist(string(mode)); allowlist != nil {
+		filtered := make([]bootstrap.ContextFile, 0, len(contextFiles))
+		for _, cf := range contextFiles {
+			if allowlist[cf.Path] {
+				filtered = append(filtered, cf)
+			}
+		}
+		contextFiles = filtered
+	}
+
 	// Resolve team members so agent knows who to assign tasks to.
 	// Only resolve when team context is active — avoids unnecessary DB query for member-only inbound chats.
 	var teamMembers []store.TeamMemberData
@@ -213,6 +222,8 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 
 	systemPrompt := BuildSystemPrompt(SystemPromptConfig{
 		AgentID:                l.id,
+		AgentUUID:              l.agentUUID.String(),
+		DisplayName:            l.displayName,
 		Model:                  l.model,
 		Workspace:              promptWorkspace,
 		Channel:                channel,
@@ -227,6 +238,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		Mode:                   mode,
 		ToolNames:              toolNames,
 		SkillsSummary:          l.resolveSkillsSummary(ctx, skillFilter),
+		PinnedSkillsSummary:    l.resolvePinnedSkillsSummary(ctx),
 		HasMemory:              l.hasMemory,
 		HasSpawn:               l.tools != nil && hasSpawn,
 		IsTeamContext:          injectTeamContext,
@@ -237,6 +249,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		HasSkillManage:         l.skillEvolve && hasSkillManage,
 		HasMCPToolSearch:       hasMCPToolSearch,
 		HasKnowledgeGraph:      hasKG,
+		HasMemoryExpand:        hasMemoryExpand,
 		MCPToolDescs:           mcpToolDescs,
 		ContextFiles:           contextFiles,
 		AgentType:              l.agentType,
@@ -250,6 +263,9 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		ProviderType:           providerTypeOf(l.provider),
 		CredentialCLIContext:   l.buildCredentialCLIContext(ctx),
 		IsBootstrap:            hadBootstrap && l.agentType != store.AgentTypePredefined,
+		DelegateTargets:        l.delegateTargets,
+		OrchMode:               l.orchMode,
+		ProviderContribution:   l.providerContribution(),
 	})
 
 	messages = append(messages, providers.Message{
@@ -299,14 +315,14 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 // but base-only files (like auto-injected delegation info) are preserved.
 func (l *Loop) resolveContextFiles(ctx context.Context, userID string) []bootstrap.ContextFile {
 	if l.contextFileLoader == nil || userID == "" {
-		return l.contextFiles
+		return dropBuiltinUserFileIfPredefined(l.agentType, l.contextFiles)
 	}
 	userFiles := l.contextFileLoader(ctx, l.agentUUID, userID, l.agentType)
 	if len(userFiles) == 0 {
-		return l.contextFiles
+		return dropBuiltinUserFileIfPredefined(l.agentType, l.contextFiles)
 	}
 	if len(l.contextFiles) == 0 {
-		return userFiles
+		return dropBuiltinUserFileIfPredefined(l.agentType, userFiles)
 	}
 
 	// Merge: start with per-user files, then append base-only files
@@ -321,7 +337,36 @@ func (l *Loop) resolveContextFiles(ctx context.Context, userID string) []bootstr
 			merged = append(merged, base)
 		}
 	}
-	return merged
+	return dropBuiltinUserFileIfPredefined(l.agentType, merged)
+}
+
+// dropBuiltinUserFileIfPredefined removes the built-in USER.md entry from the
+// merged context files when the agent is predefined AND has an operator-authored
+// USER_PREDEFINED.md. The operator owns the entire user-context portion of the
+// system prompt in that case, so the built-in USER.md template must never be
+// injected alongside it (per-turn name/timezone/pronoun nag).
+func dropBuiltinUserFileIfPredefined(agentType string, files []bootstrap.ContextFile) []bootstrap.ContextFile {
+	if agentType != store.AgentTypePredefined {
+		return files
+	}
+	hasUserPredefined := false
+	for _, f := range files {
+		if filepath.Base(f.Path) == bootstrap.UserPredefinedFile {
+			hasUserPredefined = true
+			break
+		}
+	}
+	if !hasUserPredefined {
+		return files
+	}
+	filtered := make([]bootstrap.ContextFile, 0, len(files))
+	for _, f := range files {
+		if filepath.Base(f.Path) == bootstrap.UserFile {
+			continue
+		}
+		filtered = append(filtered, f)
+	}
+	return filtered
 }
 
 // mergeContextFallback adds fallback (in-memory) files into contextFiles,
@@ -338,4 +383,3 @@ func (l *Loop) mergeContextFallback(contextFiles, fallback []bootstrap.ContextFi
 	}
 	return contextFiles
 }
-

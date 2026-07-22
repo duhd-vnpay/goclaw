@@ -8,10 +8,37 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
-// imageGenToolDef is the native image_generation tool sentinel. Its Type-only form
-// is passed through by the Codex/OpenAI request builder as a bare {"type":"image_generation"}
-// object — no "function" wrapper, no parameters.
-var imageGenToolDef = providers.ToolDefinition{Type: "image_generation"}
+// imageGenToolDef is the native image_generation tool sentinel. The request
+// builder keys off Type (Codex emits a bare {"type":"image_generation"} object,
+// no function wrapper). Function is populated with a name-only schema so the many
+// pipeline/provider sites that read td.Function.Name (think_stage allowlist,
+// shouldRetryTaskMCP, history tool names, non-codex request builders) never
+// nil-deref — the v3.14.0 crash was one such site.
+var imageGenToolDef = providers.ToolDefinition{
+	Type:     "image_generation",
+	Function: &providers.ToolFunctionSchema{Name: "image_generation"},
+}
+
+func (l *Loop) toolVisibleForChannel(name, channelType string, telegramManagerPermissions []string) bool {
+	if name == "telegram_manager" {
+		return channelType == "telegram" && len(telegramManagerPermissions) > 0
+	}
+	if l.tools == nil {
+		return true
+	}
+	tool, ok := l.tools.Get(name)
+	if !ok {
+		return true
+	}
+	ca, ok := tool.(tools.ChannelAware)
+	if !ok {
+		return true
+	}
+	if channelType == "" {
+		return false
+	}
+	return slices.Contains(ca.RequiredChannelTypes(), channelType)
+}
 
 // buildFilteredTools resolves the per-iteration tool definitions based on policy,
 // disabled tools, bootstrap mode, skill visibility, channel type, and iteration budget.
@@ -119,23 +146,20 @@ func (l *Loop) buildFilteredTools(req *RunRequest, hadBootstrap bool, iteration,
 		toolDefs = filtered
 	}
 
-	// Hide channel-specific tools when channel type doesn't match.
-	if req.ChannelType != "" {
-		filtered := toolDefs[:0:0]
-		for _, td := range toolDefs {
-			if td.Function != nil {
-				if tool, ok := l.tools.Get(td.Function.Name); ok {
-					if ca, ok := tool.(tools.ChannelAware); ok {
-						if !slices.Contains(ca.RequiredChannelTypes(), req.ChannelType) {
-							continue
-						}
-					}
-				}
+	// Hide channel-specific tools when channel type doesn't match. Channel-aware
+	// tools are hidden when there is no channel context; telegram_manager also
+	// requires explicit channel permissions before it is visible to the LLM.
+	filtered := toolDefs[:0:0]
+	for _, td := range toolDefs {
+		if td.Function != nil && !l.toolVisibleForChannel(td.Function.Name, req.ChannelType, req.TelegramManagerPermissions) {
+			if allowedTools != nil {
+				delete(allowedTools, td.Function.Name)
 			}
-			filtered = append(filtered, td)
+			continue
 		}
-		toolDefs = filtered
+		filtered = append(filtered, td)
 	}
+	toolDefs = filtered
 
 	// Final iteration: strip all tools to force a text-only response.
 	// Without this the model may keep requesting tools and exit with "...".

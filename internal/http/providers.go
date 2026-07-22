@@ -158,33 +158,43 @@ func providerCacheTenantID(ctx context.Context, tenantID uuid.UUID) uuid.UUID {
 
 // RegisterRoutes registers all provider management routes on the given mux.
 func (h *ProvidersHandler) RegisterRoutes(mux *http.ServeMux) {
-	// Provider CRUD
-	mux.HandleFunc("GET /v1/providers", h.auth(h.handleListProviders))
+	// Provider CRUD — reads are needed by /setup for browser-paired Operators
+	// (issue #1075), so GET routes use read-level auth (GET→Viewer) while
+	// mutations stay Admin-only.
+	mux.HandleFunc("GET /v1/providers", h.readAuth(h.handleListProviders))
 	mux.HandleFunc("POST /v1/providers", h.auth(h.handleCreateProvider))
-	mux.HandleFunc("GET /v1/providers/{id}", h.auth(h.handleGetProvider))
+	mux.HandleFunc("GET /v1/providers/{id}", h.readAuth(h.handleGetProvider))
 	mux.HandleFunc("PUT /v1/providers/{id}", h.auth(h.handleUpdateProvider))
 	mux.HandleFunc("DELETE /v1/providers/{id}", h.auth(h.handleDeleteProvider))
 
 	// Model listing (proxied to upstream provider API)
-	mux.HandleFunc("GET /v1/providers/{id}/models", h.auth(h.handleListProviderModels))
+	mux.HandleFunc("GET /v1/providers/{id}/models", h.readAuth(h.handleListProviderModels))
 
-	// Provider + model verification (pre-flight check)
+	// Provider + model verification (pre-flight check) — mutating actions, Admin.
 	mux.HandleFunc("POST /v1/providers/{id}/reconnect", h.auth(h.handleReconnectProvider))
 	mux.HandleFunc("POST /v1/providers/{id}/verify", h.auth(h.handleVerifyProvider))
 	mux.HandleFunc("POST /v1/providers/{id}/verify-embedding", h.auth(h.handleVerifyEmbedding))
 
-	// Provider-scoped Codex pool activity monitor
-	mux.HandleFunc("GET /v1/providers/{id}/codex-pool-activity", h.auth(h.handleProviderCodexPoolActivity))
+	// Provider-scoped Codex pool activity monitor (read-only status)
+	mux.HandleFunc("GET /v1/providers/{id}/codex-pool-activity", h.readAuth(h.handleProviderCodexPoolActivity))
 
-	// Embedding system status
-	mux.HandleFunc("GET /v1/embedding/status", h.auth(h.handleEmbeddingStatus))
+	// Embedding system status (read-only)
+	mux.HandleFunc("GET /v1/embedding/status", h.readAuth(h.handleEmbeddingStatus))
 
-	// Claude CLI auth status (global — not per-provider)
-	mux.HandleFunc("GET /v1/providers/claude-cli/auth-status", h.auth(h.handleClaudeCLIAuthStatus))
+	// Claude CLI auth status (global — not per-provider; read-only status)
+	mux.HandleFunc("GET /v1/providers/claude-cli/auth-status", h.readAuth(h.handleClaudeCLIAuthStatus))
 }
 
+// auth gates provider mutations at Admin.
 func (h *ProvidersHandler) auth(next http.HandlerFunc) http.HandlerFunc {
 	return requireAuth(permissions.RoleAdmin, next)
+}
+
+// readAuth gates read-only provider endpoints at the method-derived minimum
+// (GET→Viewer), so browser-paired Operators can complete /setup (issue #1075).
+// Responses already mask API keys, and provider queries stay tenant-scoped.
+func (h *ProvidersHandler) readAuth(next http.HandlerFunc) http.HandlerFunc {
+	return requireAuth("", next)
 }
 
 // maskAPIKey replaces non-empty API keys with "***".
@@ -255,7 +265,8 @@ func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) providerRu
 		}
 		dockerHost := config.DockerLocalhost(host)
 		numCtx := h.resolveOllamaNumCtx(p, dockerHost, "")
-		prov := providers.NewOllamaProvider(p.Name, dockerHost, "llama3.3", numCtx, nil)
+		prov := providers.NewOllamaProvider(p.Name, dockerHost, "llama3.3", numCtx, nil).
+			WithThinkingEnabled(store.ParseThinkingEnabled(p.Settings))
 		h.providerReg.RegisterForTenant(p.TenantID, prov)
 		return providerRuntimeRegistered
 	}
@@ -342,17 +353,23 @@ func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) providerRu
 			"User-Agent": store.KimiCodingRequiredUserAgent,
 		})
 		h.providerReg.RegisterForTenant(p.TenantID, prov)
+	case store.ProviderAIMLAPI:
+		prov := providers.NewAIMLAPIProvider(p.Name, p.APIKey, apiBase)
+		prov.WithProviderType(p.ProviderType)
+		h.providerReg.RegisterForTenant(p.TenantID, prov)
 	case store.ProviderOllamaCloud:
 		base := apiBase
 		if base == "" {
 			base = "https://ollama.com"
 		}
 		numCtx := h.resolveOllamaNumCtx(p, base, p.APIKey)
-		prov := providers.NewOllamaProvider(p.Name, base, "llama3.3", numCtx, nil)
+		prov := providers.NewOllamaProvider(p.Name, base, "llama3.3", numCtx, nil).
+			WithThinkingEnabled(store.ParseThinkingEnabled(p.Settings))
 		h.providerReg.RegisterForTenant(p.TenantID, prov)
 	default:
 		base, model := openAIProviderDefaults(p.ProviderType, apiBase)
 		prov := providers.NewOpenAIProvider(p.Name, p.APIKey, base, model)
+		prov.WithThinkingEnabled(store.ParseThinkingEnabled(p.Settings))
 		h.providerReg.RegisterForTenant(p.TenantID, prov)
 	}
 	return providerRuntimeRegistered
@@ -429,6 +446,27 @@ var allowPrivateProviderURLsFn = sync.OnceValue(func() bool {
 	return v == "1" || v == "true" || v == "yes"
 })
 
+// ollamaAllowedHostsFn returns the operator-configured extra hosts permitted
+// for local provider types (ollama, acp) via GOCLAW_OLLAMA_ALLOWED_HOSTS
+// (comma-separated hostnames/IPs, e.g. "192.168.3.31,ollama.lan"). These are
+// added on top of allowedLocalHosts, allowing LAN-hosted Ollama servers.
+// Evaluated once at first call so tests can override the variable before that happens.
+var ollamaAllowedHostsFn = sync.OnceValue(func() []string {
+	raw := os.Getenv("GOCLAW_OLLAMA_ALLOWED_HOSTS")
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	hosts := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			hosts = append(hosts, p)
+		}
+	}
+	return hosts
+})
+
 // validateProviderURL rejects provider base URLs pointing to internal/private networks.
 // Defense-in-depth: prevents SSRF when providers are later used for API calls.
 //
@@ -437,9 +475,10 @@ var allowPrivateProviderURLsFn = sync.OnceValue(func() bool {
 //  2. Claude CLI → api_base is an executable path/command, not a URL.
 //  3. Scheme check (http/https only) → enforced for URL-based types, including
 //     local URL types. Blocks file://, gopher://, dict://, etc.
-//  4. Local URL types (ollama, acp) → host must be in allowedLocalHosts
-//     (explicit allowlist prevents reaching 169.254.169.254 or internal services
-//     via the local-type bypass).
+//  4. Local URL types (ollama, acp) → host must be in allowedLocalHosts, or in
+//     the operator-configured GOCLAW_OLLAMA_ALLOWED_HOSTS list (explicit
+//     allowlist prevents reaching 169.254.169.254 or internal services via the
+//     local-type bypass, while still allowing LAN-hosted Ollama servers).
 //  5. Remote types → if GOCLAW_ALLOW_PRIVATE_PROVIDER_URLS is set, allow and log.
 //     Otherwise: resolve DNS hostname; reject if ANY resolved IP satisfies
 //     security.IsBlocked (covers loopback, link-local, private, multicast,
@@ -476,8 +515,13 @@ func validateProviderURL(rawURL string, providerType string) error {
 				return nil
 			}
 		}
+		for _, a := range ollamaAllowedHostsFn() {
+			if strings.EqualFold(host, a) {
+				return nil
+			}
+		}
 		slog.Warn("security.provider_url.local_type_denied", "host", host, "provider_type", providerType)
-		return fmt.Errorf("provider type %q only allows localhost URLs (localhost, 127.0.0.1, ::1, host.docker.internal), got host %q", providerType, host)
+		return fmt.Errorf("provider type %q only allows localhost URLs (localhost, 127.0.0.1, ::1, host.docker.internal, or GOCLAW_OLLAMA_ALLOWED_HOSTS), got host %q", providerType, host)
 	}
 
 	// Operator opt-in to allow private-network provider URLs (e.g. LAN-hosted vLLM).

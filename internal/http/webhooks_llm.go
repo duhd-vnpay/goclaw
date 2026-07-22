@@ -14,6 +14,7 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
 	"github.com/nextlevelbuilder/goclaw/internal/security"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
@@ -70,18 +71,23 @@ type webhookInputMessage struct {
 
 // webhookLLMSyncResp is the 200 response for synchronous LLM calls.
 type webhookLLMSyncResp struct {
-	CallID       string           `json:"call_id"`
-	AgentID      string           `json:"agent_id"`
-	Output       string           `json:"output"`
-	Usage        *webhookLLMUsage `json:"usage,omitempty"`
-	FinishReason string           `json:"finish_reason"`
+	CallID       string                `json:"call_id"`
+	AgentID      string                `json:"agent_id"`
+	Output       string                `json:"output"`
+	Usage        *webhookLLMUsage      `json:"usage,omitempty"`
+	FinishReason string                `json:"finish_reason"`
+	Calls        []providers.CallUsage `json:"calls,omitempty"`
+	TotalCostUSD float64               `json:"total_cost_usd,omitempty"`
 }
 
 // webhookLLMUsage mirrors providers.Usage for the response envelope.
 type webhookLLMUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens                      int  `json:"prompt_tokens"`
+	CompletionTokens                  int  `json:"completion_tokens"`
+	TotalTokens                       int  `json:"total_tokens"`
+	CacheReadTokens                   int  `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationTokens               int  `json:"cache_creation_input_tokens,omitempty"`
+	PromptTokensIncludeCachedSegments bool `json:"prompt_tokens_include_cached_segments,omitempty"`
 }
 
 // webhookLLMAsyncResp is the 202 response for asynchronous LLM calls.
@@ -415,11 +421,26 @@ func (h *WebhookLLMHandler) handleSync(
 		Output:       out.result.Content,
 		FinishReason: "stop",
 	}
-	if out.result.Usage != nil {
+	if len(out.result.Calls) > 0 {
+		resp.Calls = out.result.Calls
+		resp.TotalCostUSD = providers.SumCallCost(out.result.Calls)
+		sum := providers.SumCallUsage(out.result.Calls)
 		resp.Usage = &webhookLLMUsage{
-			PromptTokens:     out.result.Usage.PromptTokens,
-			CompletionTokens: out.result.Usage.CompletionTokens,
-			TotalTokens:      out.result.Usage.TotalTokens,
+			PromptTokens:                      sum.PromptTokens,
+			CompletionTokens:                  sum.CompletionTokens,
+			TotalTokens:                       sum.TotalTokens,
+			CacheReadTokens:                   sum.CacheReadTokens,
+			CacheCreationTokens:               sum.CacheCreationTokens,
+			PromptTokensIncludeCachedSegments: sum.PromptTokensIncludeCachedSegments,
+		}
+	} else if out.result.Usage != nil {
+		resp.Usage = &webhookLLMUsage{
+			PromptTokens:                      out.result.Usage.PromptTokens,
+			CompletionTokens:                  out.result.Usage.CompletionTokens,
+			TotalTokens:                       out.result.Usage.TotalTokens,
+			CacheReadTokens:                   out.result.Usage.CacheReadTokens,
+			CacheCreationTokens:               out.result.Usage.CacheCreationTokens,
+			PromptTokensIncludeCachedSegments: out.result.Usage.PromptTokensIncludeCachedSegments,
 		}
 	}
 
@@ -630,11 +651,26 @@ func (h *WebhookLLMHandler) RunTest(ctx context.Context, wh *store.WebhookData, 
 		Output:       out.result.Content,
 		FinishReason: "stop",
 	}
-	if out.result.Usage != nil {
+	if len(out.result.Calls) > 0 {
+		resp.Calls = out.result.Calls
+		resp.TotalCostUSD = providers.SumCallCost(out.result.Calls)
+		sum := providers.SumCallUsage(out.result.Calls)
 		resp.Usage = &webhookLLMUsage{
-			PromptTokens:     out.result.Usage.PromptTokens,
-			CompletionTokens: out.result.Usage.CompletionTokens,
-			TotalTokens:      out.result.Usage.TotalTokens,
+			PromptTokens:                      sum.PromptTokens,
+			CompletionTokens:                  sum.CompletionTokens,
+			TotalTokens:                       sum.TotalTokens,
+			CacheReadTokens:                   sum.CacheReadTokens,
+			CacheCreationTokens:               sum.CacheCreationTokens,
+			PromptTokensIncludeCachedSegments: sum.PromptTokensIncludeCachedSegments,
+		}
+	} else if out.result.Usage != nil {
+		resp.Usage = &webhookLLMUsage{
+			PromptTokens:                      out.result.Usage.PromptTokens,
+			CompletionTokens:                  out.result.Usage.CompletionTokens,
+			TotalTokens:                       out.result.Usage.TotalTokens,
+			CacheReadTokens:                   out.result.Usage.CacheReadTokens,
+			CacheCreationTokens:               out.result.Usage.CacheCreationTokens,
+			PromptTokensIncludeCachedSegments: out.result.Usage.PromptTokensIncludeCachedSegments,
 		}
 	}
 

@@ -70,6 +70,7 @@ export function ChannelDetailPage({
     deleteContextGrant,
     setContextCredentials,
     deleteContextCredentials,
+    refreshDiscordMetadata,
   } = useChannelDetail(instanceId);
   const { agents } = useAgents();
   const { channels } = useChannels();
@@ -170,7 +171,7 @@ export function ChannelDetailPage({
       />
 
       <div className="p-3 sm:p-4">
-        <div className="max-w-4xl space-y-4">
+        <div className="w-full space-y-4">
           {showDiagnosticsCard && status && (
             <ChannelDiagnosticsCard
               status={status}
@@ -190,7 +191,7 @@ export function ChannelDetailPage({
             </div>
           )}
 
-          <PassiveMemorySection instanceId={instance.id} />
+          <PassiveMemorySection instanceId={instance.id} channelType={instance.channel_type} />
 
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="w-full justify-start overflow-x-auto overflow-y-hidden">
@@ -289,6 +290,7 @@ export function ChannelDetailPage({
         supportsReauth={supportsReauth}
         onDelete={onDelete}
         onUpdate={updateInstance}
+        onRefreshDiscordMetadata={refreshDiscordMetadata}
       />
     </div>
   );

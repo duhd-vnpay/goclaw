@@ -144,7 +144,7 @@ func handleSubagentAnnounce(
 			// Fetch live roster for merged announce context.
 			roster := deps.SubagentMgr.RosterForParent(parentAgent)
 
-			processSubagentAnnounceLoop(ctx, routing, roster, deps.SubagentMgr, deps.Sched, deps.MsgBus, deps.Cfg)
+			processSubagentAnnounceLoop(ctx, routing, roster, deps.SubagentMgr, deps.Sched, deps.MsgBus, deps.Cfg, deps.ChannelMgr)
 		})
 	}
 
@@ -246,6 +246,7 @@ func handleTeammateMessage(
 		Channel:         origChannel,
 		ChannelType:     origChannelType,
 		ChatID:          origChatID,
+		ChatTitle:       resolveGroupDisplayTitle(schedCtx, deps.ChannelMgr, origChannel, origChatID, origPeerKind, ""),
 		PeerKind:        origPeerKind,
 		LocalKey:        origLocalKey,
 		UserID:          announceUserID,
@@ -285,11 +286,6 @@ func handleTeammateMessage(
 		// Stop lock renewal now that the agent has finished.
 		if lockStop != nil {
 			lockStop()
-		}
-
-		// Ardenn: resolve agent completion if dispatched by Ardenn engine.
-			if outcome.Err != nil {
-			} else if outcome.Result != nil {
 		}
 
 		// Auto-complete/fail the associated team task (v2 only).
@@ -388,7 +384,7 @@ func handleTeammateMessage(
 			ParentRootSpanID: parentRootSpanID,
 			OutMeta:          outMeta,
 		}
-		processAnnounceLoop(ctx, routing, deps.Sched, deps.MsgBus, deps.TeamStore, deps.PostTurn, deps.Cfg)
+		processAnnounceLoop(ctx, routing, deps.Sched, deps.MsgBus, deps.TeamStore, deps.PostTurn, deps.Cfg, deps.ChannelMgr)
 	}(origChannel, origChatID, msg.SenderID, taskIDStr, outMeta, msg.Metadata)
 
 	return true
@@ -406,7 +402,8 @@ func handleResetCommand(
 
 	agentID := msg.AgentID
 	if agentID == "" {
-		agentID = resolveAgentRoute(deps.Cfg, msg.Channel, msg.ChatID, msg.PeerKind)
+		ctx := inboundMessageTenantContext(context.Background(), msg)
+		agentID = resolveAgentRouteForInbound(ctx, deps.Cfg, deps.AgentStore, msg.Channel, msg.ChatID, msg.PeerKind)
 	}
 	peerKind := msg.PeerKind
 	if peerKind == "" {
@@ -442,7 +439,8 @@ func handleStopCommand(
 
 	agentID := msg.AgentID
 	if agentID == "" {
-		agentID = resolveAgentRoute(deps.Cfg, msg.Channel, msg.ChatID, msg.PeerKind)
+		ctx := inboundMessageTenantContext(context.Background(), msg)
+		agentID = resolveAgentRouteForInbound(ctx, deps.Cfg, deps.AgentStore, msg.Channel, msg.ChatID, msg.PeerKind)
 	}
 	peerKind := msg.PeerKind
 	if peerKind == "" {

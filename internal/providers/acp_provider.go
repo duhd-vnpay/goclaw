@@ -487,6 +487,7 @@ func (p *ACPProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 	})
 	if err != nil {
 		slog.Error("acp: chat error", "session", sessionKey, "sid", acpSessionID, "error", err)
+		p.purgeIfContextOverflow(sessionKey, acpSessionID, err)
 		return &ChatResponse{
 			Content:      fmt.Sprintf("[ACP Error] %v", err),
 			FinishReason: "error",
@@ -568,6 +569,7 @@ func (p *ACPProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk f
 	})
 	if err != nil {
 		slog.Error("acp: chat error", "session", sessionKey, "sid", acpSessionID, "error", err)
+		p.purgeIfContextOverflow(sessionKey, acpSessionID, err)
 		return &ChatResponse{
 			Content:      fmt.Sprintf("[ACP Error] %v", err),
 			FinishReason: "error",
@@ -583,6 +585,21 @@ func (p *ACPProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk f
 		FinishReason: mapStopReason(promptResp),
 		Usage:        &Usage{},
 	}, nil
+}
+
+// purgeIfContextOverflow drops the goclaw→ACP session mapping when the agent
+// reports a context overflow ("Prompt is too long", ...). The oversized
+// transcript lives on the ACP agent side and never crosses the wire, so
+// goclaw-side compaction cannot shrink it — retrying on the same ACP session
+// fails forever. Purging forces resolveSession to create a fresh session on
+// the next attempt.
+func (p *ACPProvider) purgeIfContextOverflow(sessionKey, acpSessionID string, err error) {
+	if err == nil || !IsContextOverflowMessage(strings.ToLower(err.Error())) {
+		return
+	}
+	p.purgeSession(sessionKey)
+	slog.Warn("acp: purged session after context overflow",
+		"session", sessionKey, "sid", acpSessionID, "error", err)
 }
 
 // purgeSession removes a session entry from both tracking maps.

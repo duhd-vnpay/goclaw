@@ -201,3 +201,39 @@ func TestNonKimi_ReasoningContentNotAddedWhenEmpty(t *testing.T) {
 		t.Error("non-kimi providers must not inject empty reasoning_content; key should be absent")
 	}
 }
+
+// TestDeepSeek_ReasoningContentEchoedAfterThinkingActive reproduces the
+// api.deepseek.com (openai-native) strict-echo contract: once an earlier
+// assistant message carried reasoning_content (thinking mode active), a later
+// assistant message with no captured Thinking MUST still carry the field
+// (empty string) — otherwise upstream returns 400 "reasoning_content in the
+// thinking mode must be passed back". This is conditional (not always-on like
+// kimi_coding): the trailing tool message keeps the empty-Thinking assistant
+// from being stripped as a trailing prefill.
+func TestDeepSeek_ReasoningContentEchoedAfterThinkingActive(t *testing.T) {
+	p := NewOpenAIProvider("api-llm", "sk", "https://api.deepseek.com/", "deepseek-v4-flash")
+
+	body := p.buildRequestBody("deepseek-v4-flash", ChatRequest{
+		Messages: []Message{
+			{Role: "user", Content: "q1"},
+			{Role: "assistant", Content: "a1", Thinking: "reasoned step 1"},
+			{Role: "user", Content: "q2"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Name: "exec", Arguments: map[string]any{}}}},
+			{Role: "tool", Content: "...", ToolCallID: "call_1"},
+		},
+	}, true)
+
+	msgs := body["messages"].([]map[string]any)
+	// Earlier assistant preserves its real reasoning_content.
+	if got := msgs[1]["reasoning_content"]; got != "reasoned step 1" {
+		t.Errorf("msgs[1].reasoning_content = %q, want %q", got, "reasoned step 1")
+	}
+	// Later assistant (empty Thinking) must still carry the key, empty string.
+	rc, present := msgs[3]["reasoning_content"]
+	if !present {
+		t.Fatalf("deepseek assistant after thinking-active must include reasoning_content key; got %v", msgs[3])
+	}
+	if rc != "" {
+		t.Errorf("msgs[3].reasoning_content = %q, want empty string", rc)
+	}
+}

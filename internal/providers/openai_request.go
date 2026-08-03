@@ -45,6 +45,10 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 	// the OpenAI API format (tool_calls need type+function wrapper, arguments as JSON string).
 	// Also omits empty content on assistant messages with tool_calls (Gemini compatibility).
 	msgs := make([]map[string]any, 0, len(inputMessages))
+	// Tracks whether thinking mode has been active earlier in this conversation
+	// (a prior assistant message carried reasoning_content). DeepSeek's openai-native
+	// endpoint then requires every later assistant message to echo reasoning_content.
+	thinkingModeActive := false
 	for _, m := range inputMessages {
 		role := m.Role
 		// Map "system" → "developer" for native OpenAI endpoints (GPT-4o+).
@@ -63,13 +67,25 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 		// kimi-k2-turbo-preview), assistant tool-call messages MUST carry
 		// reasoning_content even if empty — otherwise upstream returns 400 "thinking
 		// is enabled but reasoning_content is missing in assistant tool call message".
+		//
+		// DeepSeek (openai-native api.deepseek.com) is conditional, NOT always-on:
+		// once thinking mode has been active earlier (a prior assistant carried
+		// reasoning_content), every later assistant message must echo the field
+		// (empty string accepted) or upstream returns 400 "reasoning_content in the
+		// thinking mode must be passed back". A conversation that never entered
+		// thinking must NOT inject the field — hence the thinkingModeActive gate.
 		if m.Role == "assistant" && openAIWireAssistantReasoningContent(model) {
 			switch {
 			case m.Thinking != "":
 				msg["reasoning_content"] = m.Thinking
+				thinkingModeActive = true
 			case p.providerType == "kimi_coding":
 				// Send empty string rather than omit the field — satisfies Kimi's
 				// "must be present" check without inventing reasoning content.
+				msg["reasoning_content"] = ""
+			case thinkingModeActive && strings.Contains(strings.ToLower(model), "deepseek"):
+				// DeepSeek strict-echo: thinking already active earlier → the field
+				// must be present on this assistant message too (empty is fine).
 				msg["reasoning_content"] = ""
 			}
 		}

@@ -122,6 +122,12 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *Resul
 	if path == "" {
 		return ErrorResult("path is required")
 	}
+	if err := rejectDelegationInputMutation(ctx, path); err != nil {
+		return ErrorResult(err.Error())
+	}
+	if IsDelegationArtifactRun(ctx) {
+		deliver = false
+	}
 
 	// Group write permission check
 	if t.permStore != nil {
@@ -131,7 +137,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *Resul
 	}
 
 	// Virtual FS: route context files to DB
-	if t.contextFileIntc != nil {
+	if !IsDelegationArtifactRun(ctx) && t.contextFileIntc != nil {
 		if handled, err := t.contextFileIntc.WriteFile(ctx, path, content); handled {
 			if err != nil {
 				return ErrorResult(fmt.Sprintf("failed to write context file: %v", err))
@@ -141,7 +147,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *Resul
 	}
 
 	// Virtual FS: route memory files to DB
-	if t.memIntc != nil {
+	if !IsDelegationArtifactRun(ctx) && t.memIntc != nil {
 		if mwr, err := t.memIntc.WriteFile(ctx, path, content, appendMode); mwr.Handled {
 			if err != nil {
 				return ErrorResult(fmt.Sprintf("failed to write memory file: %v", err))
@@ -252,7 +258,7 @@ func (t *WriteFileTool) executeInSandbox(ctx context.Context, path, content, san
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	containerCwd, cwdErr := sandboxCwdForHostPath(mountWorkspace, mountWorkspace, sandbox.DefaultContainerWorkdir)
+	containerCwd, cwdErr := sandboxCwdForHostPath(mountWorkspace, mountWorkspace, sandboxContainerWorkdir(ctx))
 	if cwdErr != nil {
 		return ErrorResult(fmt.Sprintf("sandbox path mapping: %v", cwdErr))
 	}
@@ -296,7 +302,7 @@ func (t *WriteFileTool) executeInSandbox(ctx context.Context, path, content, san
 }
 
 func (t *WriteFileTool) getFsBridge(ctx context.Context, sandboxKey, mountWorkspace, containerCwd string) (*sandbox.FsBridge, error) {
-	sb, err := t.sandboxMgr.Get(ctx, sandboxKey, mountWorkspace, SandboxConfigFromCtx(ctx))
+	sb, err := acquireToolSandbox(ctx, t.sandboxMgr, sandboxKey, mountWorkspace)
 	if err != nil {
 		return nil, err
 	}

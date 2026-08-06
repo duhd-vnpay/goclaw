@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nextlevelbuilder/goclaw/internal/hooks"
+	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
@@ -42,9 +43,16 @@ func (s *FinalizeStage) Execute(ctx context.Context, state *RunState) error {
 	// Must run BEFORE session flush so the agent message is persisted even if suppressed.
 	isSilent := s.deps.IsSilentReply != nil && s.deps.IsSilentReply(state.Observe.FinalContent)
 
-	// 2b. Fallback for empty content (matching v2: channels need non-empty content to deliver).
-	if state.Observe.FinalContent == "" && !isSilent {
-		state.Observe.FinalContent = "..."
+	// 2b. Fallback for empty content (matching v2: channels need non-empty content
+	// to deliver). Media-only runs stay media-only — no text caption (matching v2
+	// hasDeliverableOutput). The placeholder is a meaningful localized message, not
+	// a bare "..." — ThinkStage already nudges the model for empty text responses,
+	// so this only fires when the model truly produced nothing.
+	hasDeliverableOutput := len(state.Tool.MediaResults) > 0 ||
+		len(state.Input.ForwardMedia) > 0 ||
+		state.Input.ContentSuffix != ""
+	if state.Observe.FinalContent == "" && !isSilent && !hasDeliverableOutput {
+		state.Observe.FinalContent = i18n.T(store.LocaleFromContext(ctx), i18n.MsgEmptyReplyFallback)
 	}
 
 	// 2c. Append content suffix (e.g. image markdown for WS) with dedup.
@@ -120,7 +128,9 @@ func (s *FinalizeStage) Execute(ctx context.Context, state *RunState) error {
 		state.Tool.MediaResults = append(state.Tool.MediaResults, mr)
 	}
 
-	// 4. Flush remaining pending messages to session store
+	// 4. Flush remaining pending messages to session store.
+	// Capture the pre-flush history length so metadata msgCount reflects
+	// history + newly-persisted pending (matches upstream calibration).
 	historyCountBeforeFlush := len(state.Messages.History())
 	pending := state.Messages.FlushPending()
 	persistablePending := persistableMessages(pending)
@@ -133,7 +143,7 @@ func (s *FinalizeStage) Execute(ctx context.Context, state *RunState) error {
 	// 5. Update session metadata (token usage)
 	if s.deps.UpdateMetadata != nil {
 		msgCount := historyCountBeforeFlush + len(persistablePending)
-		if err := s.deps.UpdateMetadata(ctx, state.Input.SessionKey, state.Think.TotalUsage, msgCount); err != nil {
+		if err := s.deps.UpdateMetadata(ctx, state.Input.SessionKey, state.Think.TotalUsage, state.Think.LastUsage, msgCount); err != nil {
 			slog.Warn("finalize metadata update failed", "err", err)
 		}
 	}
@@ -145,9 +155,15 @@ func (s *FinalizeStage) Execute(ctx context.Context, state *RunState) error {
 		}
 	}
 
-	// 7. Post-run summarization (async background)
+	// 7. Post-run summarization (async background).
+	// Pass the mid-loop pressure flag: when the guard had to compact mid-loop this
+	// run, maybeSummarize uses a lower, unit-aligned threshold so the compaction is
+	// PERSISTED to the session (TruncateHistory + IncrementCompaction) instead of
+	// being thrown away — which both breaks the per-turn re-compaction loop (Việc 2)
+	// and advances the cumulative compaction count so episodic can progress (Việc 1-B).
+	// Both mid-loop paths (prune_stage + compactForFinalRequestBudget) set this flag.
 	if s.deps.MaybeSummarize != nil {
-		s.deps.MaybeSummarize(ctx, state.Input.SessionKey)
+		s.deps.MaybeSummarize(ctx, state.Input.SessionKey, state.Prune.MidLoopCompacted)
 	}
 
 	// 8. Emit session.completed for consolidation pipeline (episodic → semantic → dreaming).

@@ -43,6 +43,7 @@ import (
 	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	mcpoauth "github.com/nextlevelbuilder/goclaw/internal/mcp/oauth"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
+	"github.com/nextlevelbuilder/goclaw/internal/orchestration"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/providers/acp/mcp_shim"
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
@@ -97,6 +98,29 @@ type snapshotCostBackfiller interface {
 
 type snapshotBucketRefresher interface {
 	RefreshBuckets(context.Context, []time.Time) (int, error)
+}
+
+func recoverInterruptedSubagentTasks(
+	ctx context.Context,
+	stores *store.Stores,
+	retryDelay time.Duration,
+) (int64, error) {
+	recoveryCtx := store.WithTenantID(ctx, store.MasterTenantID)
+	for {
+		recovered, err := stores.SubagentTaskRecovery.RecoverInterrupted(recoveryCtx)
+		if err == nil {
+			return recovered, nil
+		}
+		slog.Warn("subagent_tasks.recover_interrupted_retrying", "err", err)
+
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return 0, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func backfillTraceCostsAfterPricingSync(ctx context.Context, stores *store.Stores, snapshots snapshotBucketRefresher) {
@@ -296,6 +320,24 @@ func runGateway() {
 		}
 	}
 
+	// Accepted async child runs are process-owned and cannot resume after a
+	// restart. Reconcile their durable rows before wiring tools or accepting
+	// traffic so completion lookups never remain queued/running forever.
+	if pgStores.SubagentTaskRecovery != nil {
+		startupCtx, stopStartup := signal.NotifyContext(
+			context.Background(), syscall.SIGINT, syscall.SIGTERM,
+		)
+		n, err := recoverInterruptedSubagentTasks(startupCtx, pgStores, time.Second)
+		stopStartup()
+		if err != nil {
+			slog.Info("subagent_tasks.recover_interrupted_aborted", "err", err)
+			return
+		}
+		if n > 0 {
+			slog.Info("subagent_tasks.recover_interrupted", "count", n)
+		}
+	}
+
 	if traceCollector != nil {
 		defer traceCollector.Stop()
 		// OTel OTLP export: compiled via build tags. Build with 'go build -tags otel' to enable.
@@ -480,7 +522,8 @@ func runGateway() {
 	}
 
 	// Subagent system (secureCLI store wired so subagent ExecTools enforce the gate)
-	subagentMgr := setupSubagents(providerRegistry, cfg, msgBus, toolsReg, workspace, sandboxMgr, pgStores.SecureCLI, usageCapSvc)
+	childRunAdmission := orchestration.NewChildRunAdmission(edition.Current().ChildRunLimit(), 128)
+	subagentMgr := setupSubagents(providerRegistry, cfg, msgBus, toolsReg, workspace, sandboxMgr, pgStores.SecureCLI, usageCapSvc, childRunAdmission)
 	if subagentMgr != nil {
 		// Wire announce queue for batched subagent result delivery (matching TS debounce pattern).
 		announceQueue := tools.NewAnnounceQueue(1000, 20, makeDelegateAnnounceCallback(subagentMgr, msgBus))
@@ -601,7 +644,7 @@ func runGateway() {
 	var mcpPool *mcpbridge.Pool
 	var mediaStore *media.Store
 	var postTurn tools.PostTurnProcessor
-	contextFileInterceptor, mcpPool, mediaStore, postTurn = wireExtras(pgStores, agentRouter, providerRegistry, modelReg, msgBus, pgStores.Sessions, toolsReg, toolPE, skillsLoader, hasMemory, traceCollector, workspace, cfg.Gateway.InjectionAction, cfg, sandboxMgr, redisClient, domainBus, usageCapSvc, mcpOAuthRefresher, acpDeps)
+	contextFileInterceptor, mcpPool, mediaStore, postTurn = wireExtras(pgStores, agentRouter, providerRegistry, modelReg, msgBus, pgStores.Sessions, toolsReg, toolPE, skillsLoader, hasMemory, traceCollector, workspace, cfg.Gateway.InjectionAction, cfg, sandboxMgr, redisClient, domainBus, usageCapSvc, mcpOAuthRefresher, childRunAdmission, acpDeps)
 	if mcpPool != nil {
 		defer mcpPool.Stop()
 	}
@@ -880,6 +923,14 @@ func runGateway() {
 			}
 		}
 	}
+	// Wire MCP server store on mcp_credential_manager tool.
+	if pgStores != nil && pgStores.MCP != nil {
+		if t, ok := toolsReg.Get("mcp_credential_manager"); ok {
+			if ms, ok := t.(tools.MCPServerStoreAware); ok {
+				ms.SetMCPServerStore(pgStores.MCP)
+			}
+		}
+	}
 
 	// Load channel instances from DB.
 	var instanceLoader *channels.InstanceLoader
@@ -890,7 +941,7 @@ func runGateway() {
 		instanceLoader.SetUsageCapService(usageCapSvc)
 		instanceLoader.RegisterFactory(channels.TypeTelegram, telegram.FactoryWithStoresAndAudio(pgStores.Agents, pgStores.ConfigPermissions, pgStores.Teams, pgStores.SubagentTasks, pgStores.PendingMessages, audioMgr))
 		instanceLoader.RegisterFactory(channels.TypeDiscord, discord.FactoryWithStoresAndAudio(pgStores.Agents, pgStores.ConfigPermissions, pgStores.PendingMessages, audioMgr))
-		instanceLoader.RegisterFactory(channels.TypeFeishu, feishu.FactoryWithPendingStoreAndAudio(pgStores.PendingMessages, audioMgr))
+		instanceLoader.RegisterFactory(channels.TypeFeishu, feishu.FactoryWithStoresAndAudio(pgStores.Agents, pgStores.ConfigPermissions, pgStores.PendingMessages, audioMgr))
 		instanceLoader.RegisterFactory(channels.TypeZaloOA, zalo.Factory)
 		instanceLoader.RegisterFactory(channels.TypeZaloPersonal, zalopersonal.FactoryWithPendingStore(pgStores.PendingMessages))
 		instanceLoader.RegisterFactory(channels.TypeWhatsApp, whatsapp.FactoryWithDBAudio(pgStores.DB, pgStores.PendingMessages, "pgx", audioMgr, pgStores.BuiltinTools))
@@ -1081,9 +1132,11 @@ func runGateway() {
 		sandboxMgr:        sandboxMgr,
 		postTurn:          postTurn,
 		subagentMgr:       subagentMgr,
+		childRunAdmission: childRunAdmission,
 		consumerTeamStore: consumerTeamStore,
 		auditCh:           auditCh,
 		sigCh:             sigCh,
+		terminateProcess:  os.Exit,
 	})
 }
 

@@ -389,7 +389,8 @@ type AgentDefaults struct {
 // Matching TS agents.defaults.compaction.
 type CompactionConfig struct {
 	ReserveTokensFloor int                `json:"reserveTokensFloor,omitempty"` // min reserve tokens (default 20000)
-	MaxHistoryShare    float64            `json:"maxHistoryShare,omitempty"`    // max share of context for history (default 0.85)
+	MaxHistoryShare    float64            `json:"maxHistoryShare,omitempty"`    // max share of context for history-only post-turn compaction (default 0.85)
+	MaxRequestShare    float64            `json:"maxRequestShare,omitempty"`    // max share of context for the final request sent to the model (default 0.85)
 	KeepLastMessages   int                `json:"keepLastMessages,omitempty"`   // messages to keep after compaction (default 4)
 	TimeoutSeconds     int                `json:"timeoutSeconds,omitempty"`     // summarization timeout in seconds (default 120)
 	MemoryFlush        *MemoryFlushConfig `json:"memoryFlush,omitempty"`        // pre-compaction flush
@@ -664,10 +665,10 @@ func (cc CronConfig) ToRetryConfig() cron.RetryConfig {
 	return cfg
 }
 
-// SubagentsConfig configures the subagent system (matching TS agents.defaults.subagents).
+// SubagentsConfig configures the GoClaw subagent system.
 // All fields optional — zero values mean "use default".
 type SubagentsConfig struct {
-	MaxConcurrent       int    `json:"maxConcurrent,omitempty"`       // default 8 (TS: DEFAULT_SUBAGENT_MAX_CONCURRENT)
+	MaxConcurrent       int    `json:"maxConcurrent,omitempty"`       // executing descendants per root agent; default 20
 	MaxSpawnDepth       int    `json:"maxSpawnDepth,omitempty"`       // default 1, range 1-5
 	MaxChildrenPerAgent int    `json:"maxChildrenPerAgent,omitempty"` // default 5, range 1-20
 	ArchiveAfterMinutes int    `json:"archiveAfterMinutes,omitempty"` // default 60

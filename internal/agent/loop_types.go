@@ -152,9 +152,11 @@ type Loop struct {
 	// Context pruning config (trim old tool results in-memory)
 	contextPruningCfg *config.ContextPruningConfig
 
-	// tokenCounter provides accurate per-model token counting for context pruning.
-	// Nil means the legacy char-based heuristic is used.
+	// tokenCounter is retained for legacy compaction/pruning estimates.
 	tokenCounter tokencount.TokenCounter
+	// budgetCounter is the fixed local, model-independent complete-input counter
+	// used by the request-budget invariant.
+	budgetCounter tokencount.BudgetCounter
 
 	// Sandbox info
 	sandboxEnabled         bool
@@ -480,6 +482,12 @@ func (l *Loop) effectiveMaxTokens() int {
 	return defaultMaxTokens
 }
 
+// ContextWindow returns the operator-configured agent context window.
+func (l *Loop) ContextWindow() int { return l.contextWindow }
+
+// MaxTokens returns the operator-configured effective agent max_tokens.
+func (l *Loop) MaxTokens() int { return l.effectiveMaxTokens() }
+
 // resolveReserveTokens returns the reserve token buffer from compaction config.
 // Issue 958: Wire ReserveTokensFloor to prevent context overflow before compaction.
 func (l *Loop) resolveReserveTokens() int {
@@ -559,6 +567,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		compactionCfg:          cfg.CompactionCfg,
 		contextPruningCfg:      cfg.ContextPruningCfg,
 		tokenCounter:           tokencount.NewTiktokenCounter(),
+		budgetCounter:          tokencount.NewBudgetCounter(),
 		sandboxEnabled:         cfg.SandboxEnabled,
 		sandboxContainerDir:    cfg.SandboxContainerDir,
 		sandboxWorkspaceAccess: cfg.SandboxWorkspaceAccess,
@@ -657,11 +666,13 @@ type RunRequest struct {
 	OnTraceCreated func(traceID uuid.UUID)
 
 	// Delegation context (set when running as a delegate agent)
-	DelegationID  string // delegation ID for event correlation
-	TeamID        string // team ID (if delegation is team-scoped)
-	TeamTaskID    string // team task ID (if delegation has an associated task)
-	ParentAgentID string // parent agent key that initiated the delegation
-	LeaderAgentID string // leader agent UUID for member memory read fallback
+	DelegationID        string // delegation ID for event correlation
+	DelegateInputsPath  string // runtime-only read-only staged inputs root
+	DelegateOutputsPath string // runtime-only writable exchange workspace
+	TeamID              string // team ID (if delegation is team-scoped)
+	TeamTaskID          string // team task ID (if delegation has an associated task)
+	ParentAgentID       string // parent agent key that initiated the delegation
+	LeaderAgentID       string // leader agent UUID for member memory read fallback
 
 	// Workspace scope propagation (set by delegation, read by workspace tools)
 	WorkspaceChannel string
@@ -669,6 +680,12 @@ type RunRequest struct {
 	// TeamWorkspace overrides the member agent's workspace with the team's workspace
 	// so file operations (read/write/image/audio) use the shared team directory.
 	TeamWorkspace string
+
+	// enrichedInputMessage is populated by the media stage and consumed by the
+	// first persistence checkpoint. It keeps current-turn MediaRefs and logical
+	// tags durable without storing inline image bytes.
+	enrichedInputMessage    providers.Message
+	hasEnrichedInputMessage bool
 }
 
 // RunResult is the output of a completed agent run.
@@ -678,6 +695,7 @@ type RunResult struct {
 	RunID          string                `json:"runId"`
 	Iterations     int                   `json:"iterations"`
 	Usage          *providers.Usage      `json:"usage,omitempty"`
+	LastUsage      *providers.Usage      `json:"lastUsage,omitempty"`
 	Media          []MediaResult         `json:"media,omitempty"`          // media files from tool results (MEDIA: prefix)
 	Deliverables   []string              `json:"deliverables,omitempty"`   // actual content from tool outputs (for team task results)
 	BlockReplies   int                   `json:"blockReplies,omitempty"`   // number of block.reply events emitted
@@ -703,10 +721,12 @@ type MediaResult struct {
 // on *runState without passing 20+ individual variables.
 type runState struct {
 	// Loop control
-	loopDetector   toolLoopState
-	totalUsage     providers.Usage
-	iteration      int
-	totalToolCalls int
+	loopDetector      toolLoopState
+	totalUsage        providers.Usage
+	lastUsage         providers.Usage
+	lastUsageMsgCount int
+	iteration         int
+	totalToolCalls    int
 
 	// Output accumulators
 	finalContent   string

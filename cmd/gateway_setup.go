@@ -96,9 +96,12 @@ func setupToolRegistry(
 	// Browser automation tool
 	if cfg.Tools.Browser.Enabled {
 		var opts []browser.Option
+		if cfg.Tools.Browser.Backend != "" {
+			opts = append(opts, browser.WithBackend(browser.Backend(cfg.Tools.Browser.Backend)))
+		}
 		if cfg.Tools.Browser.RemoteURL != "" {
 			opts = append(opts, browser.WithRemoteURL(cfg.Tools.Browser.RemoteURL))
-			slog.Info("browser tool enabled", "remote", cfg.Tools.Browser.RemoteURL)
+			slog.Info("browser tool enabled", "remote", cfg.Tools.Browser.RemoteURL, "backend", cfg.Tools.Browser.Backend)
 		} else {
 			opts = append(opts, browser.WithHeadless(cfg.Tools.Browser.Headless))
 			slog.Info("browser tool enabled", "headless", cfg.Tools.Browser.Headless)
@@ -420,16 +423,61 @@ func setupMemoryEmbeddings(
 			}
 
 			// Wire embedding provider into vault store for semantic document search.
+			var vaultStore *pg.PGVaultStore
 			if pgStores.Vault != nil {
 				pgStores.Vault.SetEmbeddingProvider(embProvider)
 				slog.Info("vault embeddings enabled", "provider", embProvider.Name())
+				vaultStore, _ = pgStores.Vault.(*pg.PGVaultStore)
 			}
 
 			// V3: Wire embedding provider into episodic store for semantic search.
+			var episodicStore *pg.PGEpisodicStore
 			if pgStores.Episodic != nil {
 				pgStores.Episodic.SetEmbeddingProvider(embProvider)
 				slog.Info("episodic embeddings enabled", "provider", embProvider.Name())
+				episodicStore, _ = pgStores.Episodic.(*pg.PGEpisodicStore)
 			}
+
+			// Agent create/update embedding hooks require the provider to be wired.
+			var agentStore *pg.PGAgentStore
+			if pgAgentStore, ok := pgStores.Agents.(*pg.PGAgentStore); ok {
+				agentStore = pgAgentStore
+				agentStore.SetEmbeddingProvider(embProvider)
+				slog.Info("agent embeddings enabled", "provider", embProvider.Name())
+			}
+
+			// Recover the remaining semantic indexes sequentially to avoid a burst
+			// of concurrent batch requests during gateway startup. Each surface gets
+			// its own deadline so a large agent backlog cannot starve later stores.
+			go func() {
+				if agentStore != nil {
+					bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+					if count, err := agentStore.BackfillAgentEmbeddings(bgCtx); err != nil {
+						slog.Warn("agent embeddings backfill failed", "error", err)
+					} else if count > 0 {
+						slog.Info("agent embeddings recovery complete", "agents_updated", count)
+					}
+					cancel()
+				}
+				if episodicStore != nil {
+					bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+					if count, err := episodicStore.BackfillEpisodicEmbeddings(bgCtx); err != nil {
+						slog.Warn("episodic embeddings backfill failed", "error", err)
+					} else if count > 0 {
+						slog.Info("episodic embeddings backfill complete", "summaries_updated", count)
+					}
+					cancel()
+				}
+				if vaultStore != nil {
+					bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+					if count, err := vaultStore.BackfillVaultEmbeddings(bgCtx); err != nil {
+						slog.Warn("vault embeddings backfill failed", "error", err)
+					} else if count > 0 {
+						slog.Info("vault embeddings backfill complete", "documents_updated", count)
+					}
+					cancel()
+				}
+			}()
 		} else {
 			slog.Warn("memory embeddings disabled (no API key), chunks stored without vectors")
 		}
@@ -571,6 +619,24 @@ func setupSkillsSystem(
 					if len(seededSkills) > 0 {
 						seeder.CheckDepsAsync(seededSkills, msgBus)
 					}
+				}
+			}
+
+			// Register on-disk managed skills (skills-store) that are missing from
+			// the database. A skill placed directly into the tenant's skills-store
+			// without a skills row is invisible to agents (skill visibility is
+			// DB-driven), which manifests as goclaw not detecting a skill the user
+			// typed triggers for. Reconcile closes that gap idempotently.
+			if reconcileStore, ok := pgStores.Skills.(skills.ManagedSkillStore); ok {
+				reconciler := skills.NewReconciler(reconcileStore)
+				if n, err := reconciler.Reconcile(
+					context.Background(),
+					store.MasterTenantID,
+					storeDirs[0],
+				); err != nil {
+					slog.Warn("skills-store reconcile failed", "error", err)
+				} else if n > 0 {
+					slog.Info("skills-store reconcile complete", "registered", n)
 				}
 			}
 		}

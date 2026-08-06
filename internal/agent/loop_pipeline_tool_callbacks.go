@@ -75,7 +75,12 @@ func (l *Loop) makeExecuteToolCall(req *RunRequest, bridgeRS *runState) func(ctx
 		// C2 fix: route through executeToolForActor so per-user MCP tools
 		// resolve to the calling user's BridgeTool (not the first user's
 		// BridgeTool leaked via shared registry).
-		actorUserID := resolveActorUserID(req.UserID, req.SenderID, req.PeerKind, req.ChannelType)
+		// Prefer CredentialUserID (merged tenant_user identity) over raw
+		// resolveActorUserID so the cache key matches what getUserMCPTools used.
+		actorUserID := store.CredentialUserIDFromContext(ctx)
+		if actorUserID == "" {
+			actorUserID = resolveActorUserID(req.UserID, req.SenderID, req.PeerKind, req.ChannelType)
+		}
 		result := l.executeToolForActor(ctx, registryName, tc.Arguments,
 			req.Channel, req.ChatID, req.PeerKind, req.SessionKey, actorUserID)
 		toolDuration := time.Since(toolStart)
@@ -146,7 +151,12 @@ func (l *Loop) makeExecuteToolRaw(req *RunRequest) func(ctx context.Context, tc 
 
 		// C2 fix (parallel path): route through executeToolForActor for per-user
 		// MCP tool isolation. Same rationale as makeExecuteToolCall above.
-		actorUserID := resolveActorUserID(req.UserID, req.SenderID, req.PeerKind, req.ChannelType)
+		// Prefer CredentialUserID (merged tenant_user identity) over raw
+		// resolveActorUserID so the cache key matches what getUserMCPTools used.
+		actorUserID := store.CredentialUserIDFromContext(ctx)
+		if actorUserID == "" {
+			actorUserID = resolveActorUserID(req.UserID, req.SenderID, req.PeerKind, req.ChannelType)
+		}
 		result := l.executeToolForActor(ctx, registryName, tc.Arguments,
 			req.Channel, req.ChatID, req.PeerKind, req.SessionKey, actorUserID)
 		dur := time.Since(start)
@@ -158,6 +168,7 @@ func (l *Loop) makeExecuteToolRaw(req *RunRequest) func(ctx context.Context, tc 
 			Role:       "tool",
 			Content:    result.ForLLM,
 			ToolCallID: tc.ID,
+			ToolName:   tc.Name,
 			IsError:    result.IsError,
 		}
 		return msg, &toolRawResult{result: result, duration: dur, start: start, spanID: spanID, toolName: registryName, rawName: tc.Name}, nil
@@ -374,6 +385,6 @@ func makeToolEmitRun(l *Loop, req *RunRequest) func(AgentEvent) {
 		event.Channel = req.Channel
 		event.ChatID = req.ChatID
 		event.TenantID = l.tenantID
-		l.emit(event)
+		l.emit(redactDelegationAgentEvent(req, event))
 	}
 }

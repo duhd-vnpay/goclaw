@@ -55,6 +55,16 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 	if actualWs := tools.ToolWorkspaceFromCtx(ctx); actualWs != "" {
 		promptWorkspace = actualWs
 	}
+	// Delegation artifact runs execute in an isolated workspace: force "." and add
+	// guidance. Checked after the team override so isolation wins if both apply.
+	if tools.IsDelegationArtifactRun(ctx) {
+		promptWorkspace = "."
+		const artifactGuidance = "Delegation workspace: write outputs using ordinary relative paths in the current workspace. Read staged inputs only through inputs/... . Files are returned to the caller only after runtime validation and publication."
+		if extraSystemPrompt != "" {
+			extraSystemPrompt += "\n\n"
+		}
+		extraSystemPrompt += artifactGuidance
+	}
 
 	// Resolve context files once — also detect BOOTSTRAP.md presence.
 	// lightContext: skip loading context files, only inject ExtraSystemPrompt (heartbeat checklist).
@@ -169,8 +179,13 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 	// tools. Otherwise lookupMCPDescFromUserTools surfaces descriptions from
 	// any user's cache → LLM sees tools it can't actually call (executeToolForActor
 	// scoped to actorUserID returns "tool not found"). Compute actor via
-	// resolveActorUserID — same key the agent loop uses to fetch per-user MCP creds.
-	actorUserID := resolveActorUserID(userID, store.SenderIDFromContext(ctx), peerKind, channelType)
+	// CredentialUserID (merged tenant_user identity) to match the cache key
+	// used by getUserMCPTools. Fall back to resolveActorUserID for channels
+	// without merge resolution.
+	actorUserID := store.CredentialUserIDFromContext(ctx)
+	if actorUserID == "" {
+		actorUserID = resolveActorUserID(userID, store.SenderIDFromContext(ctx), peerKind, channelType)
+	}
 	mcpToolDescs := l.buildMCPToolDescs(toolNames, actorUserID)
 
 	// Bootstrap DM mode: only restrict tools for open agents (identity being created).

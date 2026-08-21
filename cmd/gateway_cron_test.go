@@ -304,6 +304,53 @@ func TestCronJobHandler_StatelessResetsSession(t *testing.T) {
 		})
 	}
 }
+func TestNormalizeHeartbeatCronOutput(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+		bad  bool
+	}{
+		{
+			name: "failed counts replace OK",
+			in:   "| HNI: 5/6 | HCM: 4/4 |\n\n✅ Heartbeat OK — HNI: 5/6 | HCM: 4/4 | Failback: standby",
+			want: "| HNI: 5/6 | HCM: 4/4 |\n\n⚠️ Heartbeat anomaly — HNI: 5/6 | HCM: 4/4 | Failback: standby",
+		},
+		{
+			name: "warn replaces OK",
+			in:   "HN5 ⚠️ WARN\n✅ Heartbeat OK — HNI: 6/6 | HCM: 4/4 | Failback: ready",
+			want: "HN5 ⚠️ WARN\n⚠️ Heartbeat anomaly — HNI: 6/6 | HCM: 4/4 | Failback: ready",
+		},
+		{
+			name: "all checks keeps OK",
+			in:   "| HNI: 6/6 | HCM: 4/4 |\n✅ Heartbeat OK — HNI: 6/6 | HCM: 4/4 | Failback: ready",
+			want: "| HNI: 6/6 | HCM: 4/4 |\n✅ Heartbeat OK — HNI: 6/6 | HCM: 4/4 | Failback: ready",
+		},
+		{
+			name: "malformed output is rejected",
+			in:   "✅ Heartbeat OK — HNI: 6/6",
+			bad:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeHeartbeatCronOutput(tc.in)
+			if tc.bad {
+				if err == nil {
+					t.Fatalf("normalizeHeartbeatCronOutput() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeHeartbeatCronOutput() error = %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("normalizeHeartbeatCronOutput() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 // fakeTenantStore implements only GetTenant; embedding the interface satisfies
 // the rest (calling any other method would nil-panic, which none of these tests do).

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -31,6 +32,43 @@ var cronHeartbeatWakeFn func(agentID string)
 // for a session key, mirroring the sessions.reset RPC. Indirected through a var
 // so the stateless-reset behavior can be unit-tested without filesystem effects.
 var cronCLISessionReset = providers.ResetCLISession
+
+var heartbeatCountsRe = regexp.MustCompile(`(?i)HNI:\s*(\d+)\s*/\s*6\s*\|\s*HCM:\s*(\d+)\s*/\s*4`)
+
+// normalizeHeartbeatCronOutput enforces the heartbeat status contract at the
+// cron boundary. The model owns evidence, but it cannot publish an OK token
+// when the same response reports failed or warning checks.
+func normalizeHeartbeatCronOutput(content string) (string, error) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return "", fmt.Errorf("heartbeat output is empty")
+	}
+	matches := heartbeatCountsRe.FindStringSubmatch(trimmed)
+	if len(matches) != 3 {
+		return "", fmt.Errorf("heartbeat output missing HNI/HCM check counts")
+	}
+	var hni, hcm int
+	if _, err := fmt.Sscanf(matches[1], "%d", &hni); err != nil {
+		return "", fmt.Errorf("invalid HNI heartbeat count: %w", err)
+	}
+	if _, err := fmt.Sscanf(matches[2], "%d", &hcm); err != nil {
+		return "", fmt.Errorf("invalid HCM heartbeat count: %w", err)
+	}
+	lastLine := strings.TrimSpace(trimmed[strings.LastIndex(trimmed, "\n")+1:])
+	if hni == 6 && hcm == 4 && !strings.Contains(trimmed, "FAIL") && !strings.Contains(trimmed, "WARN") && !strings.Contains(trimmed, "UNVERIFIED") && !strings.Contains(strings.ToLower(trimmed), "anomaly") {
+		return trimmed, nil
+	}
+	if strings.Contains(lastLine, "Heartbeat OK") {
+		lastLine = strings.Replace(lastLine, "✅ Heartbeat OK", "⚠️ Heartbeat anomaly", 1)
+		parts := strings.Split(trimmed, "\n")
+		parts[len(parts)-1] = lastLine
+		return strings.Join(parts, "\n"), nil
+	}
+	if strings.Contains(trimmed, "Heartbeat anomaly") || strings.Contains(trimmed, "Heartbeat partial") {
+		return trimmed, nil
+	}
+	return trimmed + fmt.Sprintf("\n⚠️ Heartbeat anomaly — HNI: %d/6 | HCM: %d/4", hni, hcm), nil
+}
 
 // cronTenantContext scopes a context to the job's tenant. It sets BOTH the
 // tenant ID and the tenant SLUG: tenant-scoped filesystem paths
@@ -202,6 +240,14 @@ func makeCronJobHandler(sched *scheduler.Scheduler, msgBus *bus.MessageBus, cfg 
 		}
 
 		result := outcome.Result
+
+		if job.Name == "litellm-ops-heartbeat" {
+			normalized, normalizeErr := normalizeHeartbeatCronOutput(result.Content)
+			if normalizeErr != nil {
+				return nil, fmt.Errorf("cron job %s returned invalid heartbeat output: %w", job.Name, normalizeErr)
+			}
+			result.Content = normalized
+		}
 
 		// If job wants delivery to a channel, send the agent response to the target chat.
 		deliverCronOutput(msgBus, job, result.Content, result.Media, peerKind)

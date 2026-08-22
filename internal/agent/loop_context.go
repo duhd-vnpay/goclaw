@@ -12,10 +12,15 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 	"github.com/nextlevelbuilder/goclaw/internal/workspace"
 )
+
+// litellmGatewayProviderName is the `llm_providers.name` of the internal LiteLLM
+// gateway. Only runs routed through it carry agent-run attribution headers.
+const litellmGatewayProviderName = "api-llm"
 
 // contextSetupResult holds the outputs of injectContext that are needed by the main loop.
 type contextSetupResult struct {
@@ -493,6 +498,19 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 		TenantAllowedPaths:  tenantAllowedPaths,
 	}
 	ctx = store.WithRunContext(ctx, rc)
+
+	// Agent-run attribution for the internal LiteLLM gateway. Gated on provider
+	// name so run ids and agent keys never leave for third-party endpoints; the
+	// name is the `llm_providers` DB row (docs/sdlc-101/02-architecture.md:
+	// name=api-llm, type=openai, base http://litellm.litellm.svc.cluster.local:4000/v1).
+	if providerName == litellmGatewayProviderName {
+		ctx = providers.WithGatewayRunIdentity(ctx, providers.GatewayRunIdentity{
+			RunID:      req.RunID,
+			AgentKey:   l.id,
+			AgentType:  l.agentType,
+			SessionKey: req.SessionKey,
+		})
+	}
 
 	return contextSetupResult{
 		ctx:                  ctx,

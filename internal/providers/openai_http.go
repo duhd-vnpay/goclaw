@@ -56,6 +56,10 @@ func (p *OpenAIProvider) doRequest(ctx context.Context, body any) (io.ReadCloser
 	for k, v := range p.extraHeaders {
 		httpReq.Header.Set(k, v)
 	}
+	// Agent-run attribution for the internal LiteLLM gateway. Applied last so a
+	// per-run id always wins over a stale static header; no-op when the caller
+	// did not attach a GatewayRunIdentity.
+	applyGatewayIdentityHeaders(ctx, httpReq)
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {

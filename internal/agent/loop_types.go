@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -87,6 +88,9 @@ type Loop struct {
 	// Copied once at Loop construction; used to build AgentAudioSnapshot at tool dispatch.
 	agentOtherConfig json.RawMessage
 	agentType        string // "open" or "predefined"
+	// agentVersion is the run-level cohort dimension sent to the LiteLLM gateway.
+	// Computed once at construction so every call of one run reports the same value.
+	agentVersion     string
 	defaultTimezone  string // system default timezone for bootstrap pre-fill
 	provider         providers.Provider
 	model            string
@@ -366,8 +370,14 @@ type LoopConfig struct {
 	TenantID         uuid.UUID       // agent's owning tenant — injected into execution context
 	AgentOtherConfig json.RawMessage // raw other_config JSONB — copied defensively in NewLoop
 	AgentType        string          // "open" or "predefined"
-	DisplayName      string          // human-readable agent display name (for runtime section)
-	IsTeamLead       bool            // agent leads a team (from resolver detection)
+	// AgentUpdatedAt is agents.updated_at, hashed into the agent_version that
+	// rides on gateway attribution headers. Using the row timestamp rather than a
+	// hand-picked field list is deliberate: a cosmetic edit over-splits cohorts,
+	// which only costs sample size, whereas a forgotten field would merge two
+	// genuinely different configurations and produce a wrong comparison.
+	AgentUpdatedAt time.Time
+	DisplayName    string // human-readable agent display name (for runtime section)
+	IsTeamLead     bool   // agent leads a team (from resolver detection)
 
 	// Per-user profile + file seeding + dynamic context loading
 	EnsureUserProfile EnsureUserProfileFunc // preferred: separate profile + workspace
@@ -527,6 +537,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		tenantID:               cfg.TenantID,
 		agentOtherConfig:       append([]byte(nil), cfg.AgentOtherConfig...), // defensive copy
 		agentType:              cfg.AgentType,
+		agentVersion:           agentConfigVersion(cfg.ID, cfg.AgentUpdatedAt),
 		provider:               cfg.Provider,
 		model:                  cfg.Model,
 		modelRegistry:          cfg.ModelRegistry,
@@ -613,6 +624,16 @@ func NewLoop(cfg LoopConfig) *Loop {
 		skillStore:             cfg.SkillStore,
 		userResolver:           cfg.UserResolver,
 	}
+}
+
+// agentConfigVersion derives the run-level cohort dimension. Empty when the
+// timestamp is unknown, so a caller that does not populate it reports no version
+// rather than a hash of the zero time, which would look like a real cohort.
+func agentConfigVersion(agentKey string, updatedAt time.Time) string {
+	if updatedAt.IsZero() {
+		return ""
+	}
+	return providers.ShortConfigHash(agentKey, updatedAt.UTC().Format(time.RFC3339Nano))
 }
 
 // RunRequest is the input for processing a message through the agent.

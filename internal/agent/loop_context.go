@@ -505,10 +505,11 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 	// name=api-llm, type=openai, base http://litellm.litellm.svc.cluster.local:4000/v1).
 	if providerName == litellmGatewayProviderName {
 		ctx = providers.WithGatewayRunIdentity(ctx, providers.GatewayRunIdentity{
-			RunID:      req.RunID,
-			AgentKey:   l.id,
-			AgentType:  l.agentType,
-			SessionKey: req.SessionKey,
+			RunID:        req.RunID,
+			AgentKey:     l.id,
+			AgentType:    l.agentType,
+			AgentVersion: l.agentVersion,
+			SessionKey:   req.SessionKey,
 		})
 	}
 

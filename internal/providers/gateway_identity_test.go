@@ -29,6 +29,96 @@ func TestApplyGatewayIdentityHeadersNoIdentityIsNoOp(t *testing.T) {
 	}
 }
 
+const testSkillsBlock = "<available_skills><skill><name>incident-analysis</name></skill></available_skills>"
+
+func testPrompt(skills, stableExtra, dynamic string) string {
+	return "## Tooling\n" + stableExtra + "\n" + skills + "\n" + CacheBoundaryMarker + "\nCurrent date: " + dynamic
+}
+
+// The part below the cache boundary changes every request (date, chat context).
+// If it fed the hash, prompt_version would be a new value on every call and
+// would measure nothing.
+func TestDeriveSystemPromptVersionsIgnoresDynamicTail(t *testing.T) {
+	a, aSkill := DeriveSystemPromptVersions(testPrompt(testSkillsBlock, "", "2026-08-22"))
+	b, bSkill := DeriveSystemPromptVersions(testPrompt(testSkillsBlock, "", "2026-08-23"))
+
+	if a != b {
+		t.Errorf("prompt_version must ignore content below the boundary: %q vs %q", a, b)
+	}
+	if aSkill != bSkill {
+		t.Errorf("skill_version must ignore content below the boundary: %q vs %q", aSkill, bSkill)
+	}
+	if a == "" || aSkill == "" {
+		t.Fatalf("expected both dimensions populated, got prompt=%q skill=%q", a, aSkill)
+	}
+}
+
+// The two dimensions must move independently, otherwise "same skill_version,
+// different prompt_version" — the comparison the whole cohort design rests on —
+// can never be expressed.
+func TestDeriveSystemPromptVersionsSeparatesSkillsFromPrompt(t *testing.T) {
+	basePrompt, baseSkill := DeriveSystemPromptVersions(testPrompt(testSkillsBlock, "", "d"))
+	otherSkills := "<available_skills><skill><name>deploy-runbook</name></skill></available_skills>"
+
+	skillChanged, skillChangedSkill := DeriveSystemPromptVersions(testPrompt(otherSkills, "", "d"))
+	if skillChanged != basePrompt {
+		t.Errorf("changing skills must not move prompt_version: %q vs %q", skillChanged, basePrompt)
+	}
+	if skillChangedSkill == baseSkill {
+		t.Error("changing skills must move skill_version")
+	}
+
+	promptChanged, promptChangedSkill := DeriveSystemPromptVersions(testPrompt(testSkillsBlock, "## Safety", "d"))
+	if promptChanged == basePrompt {
+		t.Error("changing stable prompt content must move prompt_version")
+	}
+	if promptChangedSkill != baseSkill {
+		t.Errorf("changing prompt must not move skill_version: %q vs %q", promptChangedSkill, baseSkill)
+	}
+}
+
+func TestDeriveSystemPromptVersionsNoSkillsLeavesSkillVersionEmpty(t *testing.T) {
+	_, skill := DeriveSystemPromptVersions("## Tooling\n" + CacheBoundaryMarker + "\nCurrent date: x")
+	if skill != "" {
+		t.Errorf("expected empty skill_version without a skills block, got %q", skill)
+	}
+}
+
+func TestWithGatewayCallVersionsWithoutIdentityIsNoOp(t *testing.T) {
+	ctx := WithGatewayCallVersions(context.Background(), []Message{{Role: "system", Content: "x"}})
+	if _, ok := GatewayRunIdentityFromContext(ctx); ok {
+		t.Error("must not fabricate an identity for non-agent traffic")
+	}
+}
+
+func TestApplyGatewayIdentityHeadersCarriesVersionDimensions(t *testing.T) {
+	req := newTestRequest(t)
+	ctx := WithGatewayRunIdentity(context.Background(), GatewayRunIdentity{
+		RunID:        "run-1",
+		AgentKey:     "litellm-ops-agent",
+		AgentVersion: "abc123abc123",
+	})
+	ctx = WithGatewayCallVersions(ctx, []Message{
+		{Role: "system", Content: testPrompt(testSkillsBlock, "", "2026-08-22")},
+		{Role: "user", Content: "ignored"},
+	})
+
+	applyGatewayIdentityHeaders(ctx, req)
+
+	var meta map[string]string
+	if err := json.Unmarshal([]byte(req.Header.Get("x-litellm-spend-logs-metadata")), &meta); err != nil {
+		t.Fatalf("metadata header is not JSON: %v", err)
+	}
+	if meta["agent_version"] != "abc123abc123" {
+		t.Errorf("agent_version = %q", meta["agent_version"])
+	}
+	for _, k := range []string{"skill_version", "prompt_version"} {
+		if len(meta[k]) != 12 {
+			t.Errorf("%s = %q, want a 12-char digest", k, meta[k])
+		}
+	}
+}
+
 func TestApplyGatewayIdentityHeadersSetsAttribution(t *testing.T) {
 	req := newTestRequest(t)
 	ctx := WithGatewayRunIdentity(context.Background(), GatewayRunIdentity{

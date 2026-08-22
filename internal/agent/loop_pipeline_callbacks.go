@@ -478,6 +478,10 @@ func (l *Loop) makeCallLLM(req *RunRequest, emitRun func(AgentEvent)) func(ctx c
 		}
 		fallbackTraceClassifier := providers.NewDefaultClassifier()
 		callProvider := func(attempt string, request providers.ChatRequest) (*providers.ChatResponse, error) {
+			// Skill set and prompt mode are resolved per turn, so these two cohort
+			// dimensions belong to the call, not to the run. Shadowing ctx here
+			// covers every provider path below, fallback hooks included.
+			ctx := providers.WithGatewayCallVersions(ctx, request.Messages)
 			if fallbackProvider, ok := provider.(*providers.ModelFallbackProvider); ok {
 				before := func(callCtx context.Context, entry providers.FallbackCandidate, actualReq providers.ChatRequest) (providers.FallbackAfterCall, error) {
 					candidateAttempt := fmt.Sprintf("%s:%s:%s", attempt, entry.ProviderName, actualReq.Model)

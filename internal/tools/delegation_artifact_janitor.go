@@ -640,7 +640,9 @@ func (t *DelegateTool) sweepRetainedDelegationExchanges(now time.Time) {
 
 	for _, item := range due {
 		if err := t.cleanupRetainedDelegationArtifact(item); err != nil {
-			slog.Warn("delegate.artifact_retention_cleanup_failed")
+			slog.Warn("delegate.artifact_retention_cleanup_failed",
+				"delegation_id", item.delegationID.String(),
+				"error", err)
 			continue
 		}
 		t.retainedMu.Lock()
@@ -653,10 +655,10 @@ func (t *DelegateTool) sweepRetainedDelegationExchanges(now time.Time) {
 }
 
 func (t *DelegateTool) cleanupRetainedDelegationArtifact(item retainedDelegationArtifact) error {
-	if item.publicationTempPath != "" && !item.publicationDurable {
-		if item.callerLocation == nil {
-			return ErrArtifactState
-		}
+	// A nil caller location or missing caller root means there is no
+	// publication temp path left to clean; treating either as fatal would pin
+	// the item in the retained registry and re-warn every sweep.
+	if item.publicationTempPath != "" && !item.publicationDurable && item.callerLocation != nil {
 		if err := validateDelegationPublicationTempPath(item.delegationID, item.publicationTempPath); err != nil {
 			return err
 		}
@@ -666,6 +668,9 @@ func (t *DelegateTool) cleanupRetainedDelegationArtifact(item retainedDelegation
 		}
 		callerRoot, err := openArtifactSecureRoot(callerRootPath)
 		if err != nil {
+			if isArtifactNotExist(err) {
+				return t.tryRemoveDelegationExchange(item.tenantWorkspace, item.delegationID)
+			}
 			return err
 		}
 		err = callerRoot.removeTree(item.publicationTempPath)

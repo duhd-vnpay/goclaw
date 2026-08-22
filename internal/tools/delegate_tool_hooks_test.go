@@ -1556,6 +1556,66 @@ func TestDelegateTool_SweeperDeletesOnlyRegisteredExpiredExchange(t *testing.T) 
 	}
 }
 
+func TestDelegateTool_SweeperCleansExpiredExchangeWithoutCallerLocation(t *testing.T) {
+	tenantWorkspace := t.TempDir()
+	delegationID := uuid.New()
+	exchangeRoot := filepath.Join(tenantWorkspace, "collaboration", "delegations", delegationID.String())
+	if err := os.MkdirAll(exchangeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewDelegateTool(noopAgentLink{}, noopAgentCRUD{}, nil, func(_ context.Context, _ DelegateRequest) (DelegateResult, error) {
+		return DelegateResult{}, nil
+	})
+	item := retainedDelegationArtifact{
+		tenantWorkspace:     tenantWorkspace,
+		tenantID:            store.MasterTenantID,
+		delegationID:        delegationID,
+		retainUntil:         time.Now().Add(-time.Minute),
+		publicationTempPath: ".delegations/.tmp-" + delegationID.String() + "-" + uuid.New().String(),
+	}
+	tool.retained[retainedDelegationArtifactKey(tenantWorkspace, delegationID)] = item
+	tool.sweepRetainedDelegationExchanges(time.Now())
+
+	if _, err := os.Stat(exchangeRoot); !os.IsNotExist(err) {
+		t.Fatalf("expired exchange without caller location still exists: %v", err)
+	}
+	if len(tool.retained) != 0 {
+		t.Fatalf("retained registry = %#v, want empty", tool.retained)
+	}
+}
+
+func TestDelegateTool_SweeperCleansExpiredExchangeWithMissingCallerRoot(t *testing.T) {
+	tenantWorkspace := t.TempDir()
+	delegationID := uuid.New()
+	exchangeRoot := filepath.Join(tenantWorkspace, "collaboration", "delegations", delegationID.String())
+	if err := os.MkdirAll(exchangeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewDelegateTool(noopAgentLink{}, noopAgentCRUD{}, nil, func(_ context.Context, _ DelegateRequest) (DelegateResult, error) {
+		return DelegateResult{}, nil
+	})
+	item := retainedDelegationArtifact{
+		tenantWorkspace: tenantWorkspace,
+		tenantID:        store.MasterTenantID,
+		delegationID:    delegationID,
+		retainUntil:     time.Now().Add(-time.Minute),
+		callerLocation: &delegationArtifactCallerLocation{
+			Base:         "workspace",
+			RelativePath: "collaboration/delegations/" + uuid.New().String() + "/outputs",
+		},
+		publicationTempPath: ".delegations/.tmp-" + delegationID.String() + "-" + uuid.New().String(),
+	}
+	tool.retained[retainedDelegationArtifactKey(tenantWorkspace, delegationID)] = item
+	tool.sweepRetainedDelegationExchanges(time.Now())
+
+	if _, err := os.Stat(exchangeRoot); !os.IsNotExist(err) {
+		t.Fatalf("expired exchange with missing caller root still exists: %v", err)
+	}
+	if len(tool.retained) != 0 {
+		t.Fatalf("retained registry = %#v, want empty", tool.retained)
+	}
+}
+
 func TestDelegateTool_RecoversRetainedExchangeAfterRestart(t *testing.T) {
 	tenantWorkspace := t.TempDir()
 	callerWorkspace := filepath.Join(tenantWorkspace, "agents", "caller")

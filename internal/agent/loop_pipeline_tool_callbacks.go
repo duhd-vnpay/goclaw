@@ -139,6 +139,7 @@ func (l *Loop) makeExecuteToolRaw(req *RunRequest) func(ctx context.Context, tc 
 		// Emit tool span start (goroutine-safe: channel send only).
 		start := time.Now().UTC()
 		spanID := l.emitToolSpanStart(ctx, start, registryName, tc.ID, string(argsJSON))
+		l.emitWorkflowToolCalled(ctx, req.RunID, registryName, string(argsJSON))
 
 		// Inject agent audio snapshot (parallel path — same as sequential makeExecuteToolCall).
 		if l.agentUUID != uuid.Nil {
@@ -163,6 +164,7 @@ func (l *Loop) makeExecuteToolRaw(req *RunRequest) func(ctx context.Context, tc 
 
 		// Emit tool span end inside goroutine to prevent orphaned spans on ctx cancellation.
 		l.emitToolSpanEnd(ctx, spanID, start, result)
+		l.emitWorkflowToolReturned(ctx, req.RunID, registryName, int(dur.Milliseconds()), result.IsError)
 
 		msg := providers.Message{
 			Role:       "tool",

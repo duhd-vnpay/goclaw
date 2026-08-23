@@ -198,6 +198,9 @@ func (l *Loop) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 				}
 				l.traceCollector.FinishTrace(traceCtx, traceID, traceStatus, tracing.RedactText(traceCtx, err.Error()), "")
 			}
+			// Terminal state closes the run so `outcome` is a fact rather than an
+			// inference from the absence of later calls.
+			l.emitWorkflowRunFinished(ctx, req.RunID, true)
 			return nil, err
 		}
 		// Structured performance log for v3 pipeline runs.
@@ -216,6 +219,7 @@ func (l *Loop) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 			logAttrs = append(logAttrs, "last_usage_prompt_tokens", result.LastUsage.PromptTokens)
 		}
 		slog.Info("v3.run.completed", logAttrs...)
+		l.emitWorkflowRunFinished(ctx, req.RunID, false)
 
 		if agentSpanID != uuid.Nil {
 			l.emitAgentSpanEnd(ctx, agentSpanID, runStart, result, nil)

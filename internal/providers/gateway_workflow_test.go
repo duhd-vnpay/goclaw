@@ -248,3 +248,41 @@ func TestEmptyRunIdEmitsNothing(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 }
+
+// The api base ends in /v1 by convention, so a route that also starts with /v1
+// must not be concatenated onto it. Prod returned 404 on every event before this
+// was fixed.
+func TestWorkflowURLDoesNotDoubleTheVersionPrefix(t *testing.T) {
+	cases := []struct {
+		base string
+		want string
+	}{
+		{"http://litellm.litellm.svc.cluster.local:4000/v1", "http://litellm.litellm.svc.cluster.local:4000/v1/workflows/runs"},
+		{"http://litellm:4000/v1/", "http://litellm:4000/v1/workflows/runs"},
+		{"http://litellm:4000", "http://litellm:4000/v1/workflows/runs"},
+		{"https://gw.example.com/openai/v1", "https://gw.example.com/v1/workflows/runs"},
+	}
+	for _, c := range cases {
+		got := NewOpenAIProvider(internalGatewayProviderName, "sk", c.base, "m").workflowURL("/v1/workflows/runs")
+		if got != c.want {
+			t.Errorf("base %q -> %q, want %q", c.base, got, c.want)
+		}
+	}
+}
+
+func TestEnsureRunPostsToTheResolvedUrl(t *testing.T) {
+	rec := newRecorder()
+	srv := httptest.NewServer(rec.handler())
+	defer srv.Close()
+	// Mirrors production: the base carries the /v1 suffix.
+	p := newGatewayProvider(srv.URL + "/v1")
+
+	workflowRunsSeen.Delete("cron:url")
+	p.EnsureRun(context.Background(), "cron:url", "goclaw", nil)
+
+	calls := rec.wait(t, 1)
+	if calls[0].path != "/v1/workflows/runs" {
+		t.Errorf("path = %q, want /v1/workflows/runs", calls[0].path)
+	}
+	workflowRunsSeen.Delete("cron:url")
+}

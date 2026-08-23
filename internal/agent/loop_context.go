@@ -511,6 +511,9 @@ func (l *Loop) injectContext(ctx context.Context, req *RunRequest) (contextSetup
 			AgentVersion: l.agentVersion,
 			SessionKey:   req.SessionKey,
 		})
+		// Registers the run under the same id the header carries, so tool events
+		// and spend logs land on one row without a second identity.
+		l.emitWorkflowRunStart(ctx, req.RunID)
 	}
 
 	return contextSetupResult{

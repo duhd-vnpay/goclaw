@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -93,7 +95,7 @@ func (p *OpenAIProvider) workflowPost(ctx context.Context, path string, body any
 			slog.Warn("workflow events: marshal failed", "path", path, "error", err)
 			return
 		}
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, p.apiBase+path, bytes.NewReader(payload))
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, p.workflowURL(path), bytes.NewReader(payload))
 		if err != nil {
 			slog.Warn("workflow events: build request failed", "path", path, "error", err)
 			return
@@ -189,7 +191,7 @@ func (p *OpenAIProvider) workflowPatch(ctx context.Context, path string, body an
 		if err != nil {
 			return
 		}
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodPatch, p.apiBase+path, bytes.NewReader(payload))
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPatch, p.workflowURL(path), bytes.NewReader(payload))
 		if err != nil {
 			return
 		}
@@ -214,4 +216,18 @@ func (p *OpenAIProvider) workflowAuthPrefix() string {
 		return "Bearer "
 	}
 	return p.authPrefix
+}
+
+// workflowURL builds an absolute proxy route from the provider's api base.
+// apiBase points at the OpenAI-compatible surface and ends in /v1 by convention
+// (GITNEXUS_LLM_BASE_URL=http://litellm:4000/v1), so concatenating a route that
+// also starts with /v1 yields /v1/v1/workflows and a 404 on every event —
+// measured on prod within minutes of the first rollout, which is what the
+// rejection warning above is for.
+func (p *OpenAIProvider) workflowURL(path string) string {
+	if u, err := url.Parse(p.apiBase); err == nil && u.Scheme != "" && u.Host != "" {
+		return u.Scheme + "://" + u.Host + path
+	}
+	// Malformed base: strip a trailing /v1 so the common case still works.
+	return strings.TrimSuffix(strings.TrimSuffix(p.apiBase, "/"), "/v1") + path
 }

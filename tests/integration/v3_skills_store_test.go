@@ -594,3 +594,96 @@ func TestStoreSkill_TenantIsolation(t *testing.T) {
 		t.Error("GetSkill from tenant B returned true for tenant A's skill")
 	}
 }
+
+// TestStoreSkill_UpsertSystemSkillMetadataDrift verifies the merged behavior:
+// 1. Initial SELECT uses tenant_id + is_system filtering (multi-tenant isolation)
+// 2. When hash is unchanged but description/name differ, metadata is updated
+// 3. Returns the existing file_path (not the new one from params)
+func TestStoreSkill_UpsertSystemSkillMetadataDrift(t *testing.T) {
+	s := newSkillStore(t)
+	ctx := store.WithTenantID(context.Background(), store.MasterTenantID)
+	slug := "metadata-drift-" + uuid.NewString()[:8]
+	hash := "stable-hash-" + uuid.NewString()[:8]
+	origDesc := "original description"
+	origFilePath := "/skills/" + slug + "/1"
+
+	// Insert a system skill with known hash + description.
+	id, changed, filePath, err := s.UpsertSystemSkill(ctx, store.SkillCreateParams{
+		Name:        "Original Name",
+		Slug:        slug,
+		Status:      "active",
+		Version:     1,
+		FilePath:    origFilePath,
+		FileHash:    &hash,
+		Description: &origDesc,
+		Visibility:  "public",
+	})
+	if err != nil {
+		t.Fatalf("initial UpsertSystemSkill: %v", err)
+	}
+	if !changed {
+		t.Fatal("initial insert should report changed=true")
+	}
+	if filePath != origFilePath {
+		t.Fatalf("initial filePath = %q, want %q", filePath, origFilePath)
+	}
+
+	// Upsert again with SAME hash but DIFFERENT description and name.
+	// This exercises the metadata-drift path (merged conflict resolution).
+	newDesc := "updated description"
+	id2, changed2, filePath2, err := s.UpsertSystemSkill(ctx, store.SkillCreateParams{
+		Name:        "Updated Name",
+		Slug:        slug,
+		Status:      "active",
+		Version:     2,
+		FilePath:    "/skills/" + slug + "/2", // should be IGNORED
+		FileHash:    &hash,                    // same hash
+		Description: &newDesc,
+		Visibility:  "public",
+	})
+	if err != nil {
+		t.Fatalf("metadata-drift UpsertSystemSkill: %v", err)
+	}
+	if changed2 {
+		t.Error("metadata-drift upsert should report changed=false (hash unchanged)")
+	}
+	if id2 != id {
+		t.Errorf("ID changed: got %s, want %s", id2, id)
+	}
+	if filePath2 != origFilePath {
+		t.Errorf("filePath = %q, want original %q (hash unchanged)", filePath2, origFilePath)
+	}
+
+	// Verify the metadata was actually updated in the DB.
+	got, ok := s.GetSkillByID(ctx, id)
+	if !ok {
+		t.Fatal("skill disappeared after metadata drift update")
+	}
+	if got.Name != "Updated Name" {
+		t.Errorf("Name = %q, want %q", got.Name, "Updated Name")
+	}
+	if got.Description != "updated description" {
+		t.Errorf("Description = %q, want %q", got.Description, "updated description")
+	}
+
+	// Upsert with same hash AND same metadata — should NOT trigger any update.
+	id3, changed3, _, err := s.UpsertSystemSkill(ctx, store.SkillCreateParams{
+		Name:        "Updated Name",
+		Slug:        slug,
+		Status:      "active",
+		Version:     2,
+		FilePath:    "/skills/" + slug + "/3",
+		FileHash:    &hash,
+		Description: &newDesc,
+		Visibility:  "public",
+	})
+	if err != nil {
+		t.Fatalf("no-drift UpsertSystemSkill: %v", err)
+	}
+	if changed3 {
+		t.Error("no-drift upsert should report changed=false")
+	}
+	if id3 != id {
+		t.Errorf("ID changed on no-drift: got %s, want %s", id3, id)
+	}
+}

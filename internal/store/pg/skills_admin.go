@@ -21,22 +21,42 @@ func (s *PGSkillStore) UpsertSystemSkill(ctx context.Context, p store.SkillCreat
 	var existingID uuid.UUID
 	var existingHash *string
 	var existingFilePath string
+	var existingDesc *string
+	var existingName string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, file_hash, file_path FROM skills
+		`SELECT id, file_hash, file_path, description, name FROM skills
 		 WHERE slug = $1 AND tenant_id = $2 AND is_system = true`,
 		p.Slug, store.MasterTenantID,
-	).Scan(&existingID, &existingHash, &existingFilePath)
+	).Scan(&existingID, &existingHash, &existingFilePath, &existingDesc, &existingName)
 
 	if err == nil {
 		// Skill exists — check if hash changed
 		if existingHash != nil && p.FileHash != nil && *existingHash == *p.FileHash {
-			return existingID, false, existingFilePath, nil // unchanged, use existing path
+			// Hash unchanged — but check if metadata (description/name) diverged.
+			// This happens when the bundled SKILL.md description is updated without
+			// changing file content (e.g. whitespace-only changes were later reverted),
+			// or when an old record was seeded before description was populated.
+			newDesc := ""
+			if p.Description != nil {
+				newDesc = *p.Description
+			}
+			oldDesc := ""
+			if existingDesc != nil {
+				oldDesc = *existingDesc
+			}
+			if oldDesc != newDesc || existingName != p.Name {
+				_, _ = s.db.ExecContext(ctx,
+					`UPDATE skills SET description = $1, name = $2, updated_at = NOW() WHERE id = $3`,
+					p.Description, p.Name, existingID,
+				)
+			}
+			return existingID, false, existingFilePath, nil // file unchanged, use existing path
 		}
 		// existingHash is nil (old record without hash) — backfill hash without bumping version
 		if existingHash == nil && p.FileHash != nil {
 			_, _ = s.db.ExecContext(ctx,
-				`UPDATE skills SET file_hash = $1, updated_at = NOW() WHERE id = $2`,
-				p.FileHash, existingID,
+				`UPDATE skills SET file_hash = $1, description = $2, name = $3, updated_at = NOW() WHERE id = $4`,
+				p.FileHash, p.Description, p.Name, existingID,
 			)
 			return existingID, false, existingFilePath, nil
 		}

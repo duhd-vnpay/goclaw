@@ -249,15 +249,10 @@ func (s *SQLiteSkillStore) UpsertSystemSkill(ctx context.Context, p store.SkillC
 	var existingDesc *string
 	var existingName string
 	err := s.db.QueryRowContext(ctx,
-<<<<<<< Updated upstream
-		`SELECT id, file_hash, file_path FROM skills
+		`SELECT id, file_hash, file_path, description, name FROM skills
 		 WHERE slug = ? AND tenant_id = ? AND is_system = 1`,
 		p.Slug, store.MasterTenantID,
-	).Scan(&existingID, &existingHash, &existingFilePath)
-=======
-		"SELECT id, file_hash, file_path, description, name FROM skills WHERE slug = ?", p.Slug,
 	).Scan(&existingID, &existingHash, &existingFilePath, &existingDesc, &existingName)
->>>>>>> Stashed changes
 
 	if err == nil {
 		if existingHash != nil && p.FileHash != nil && *existingHash == *p.FileHash {

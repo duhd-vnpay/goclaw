@@ -40,15 +40,24 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 	// Matching OpenClaw TS: model-compat.ts → isOpenAINativeEndpoint().
 	useDevRole := isOpenAINativeEndpoint(p.apiBase)
 
+	// A conversation where some assistant turn captured reasoning is running in
+	// thinking mode, so every replayed assistant message must carry the field —
+	// turns that produced no reasoning of their own included. DeepSeek rejects
+	// the gap with HTTP 400 "The `reasoning_content` in the thinking mode must
+	// be passed back to the API." Trace: 01a04c34-a74b-7be7-973e-2cb66ea68f3d.
+	historyHasReasoning := false
+	for _, m := range inputMessages {
+		if m.Role == "assistant" && m.Thinking != "" {
+			historyHasReasoning = true
+			break
+		}
+	}
+
 	// Convert messages to proper OpenAI wire format.
 	// This is necessary because our internal Message/ToolCall structs don't match
 	// the OpenAI API format (tool_calls need type+function wrapper, arguments as JSON string).
 	// Also omits empty content on assistant messages with tool_calls (Gemini compatibility).
 	msgs := make([]map[string]any, 0, len(inputMessages))
-	// Tracks whether thinking mode has been active earlier in this conversation
-	// (a prior assistant message carried reasoning_content). DeepSeek's openai-native
-	// endpoint then requires every later assistant message to echo reasoning_content.
-	thinkingModeActive := false
 	for _, m := range inputMessages {
 		role := m.Role
 		// Map "system" → "developer" for native OpenAI endpoints (GPT-4o+).
@@ -67,25 +76,15 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 		// kimi-k2-turbo-preview), assistant tool-call messages MUST carry
 		// reasoning_content even if empty — otherwise upstream returns 400 "thinking
 		// is enabled but reasoning_content is missing in assistant tool call message".
-		//
-		// DeepSeek (openai-native api.deepseek.com) is conditional, NOT always-on:
-		// once thinking mode has been active earlier (a prior assistant carried
-		// reasoning_content), every later assistant message must echo the field
-		// (empty string accepted) or upstream returns 400 "reasoning_content in the
-		// thinking mode must be passed back". A conversation that never entered
-		// thinking must NOT inject the field — hence the thinkingModeActive gate.
+		// DeepSeek enforces the same rule, but only once the conversation is in
+		// thinking mode (historyHasReasoning).
 		if m.Role == "assistant" && openAIWireAssistantReasoningContent(model) {
 			switch {
 			case m.Thinking != "":
 				msg["reasoning_content"] = m.Thinking
-				thinkingModeActive = true
-			case p.providerType == "kimi_coding":
-				// Send empty string rather than omit the field — satisfies Kimi's
+			case p.providerType == "kimi_coding" || historyHasReasoning:
+				// Send empty string rather than omit the field — satisfies the
 				// "must be present" check without inventing reasoning content.
-				msg["reasoning_content"] = ""
-			case thinkingModeActive && strings.Contains(strings.ToLower(model), "deepseek"):
-				// DeepSeek strict-echo: thinking already active earlier → the field
-				// must be present on this assistant message too (empty is fine).
 				msg["reasoning_content"] = ""
 			}
 		}
@@ -266,8 +265,14 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 		// Certain model families don't support custom temperature (locked to default).
 		// This is a model-level constraint, not provider-specific — applies to both OpenAI and Azure.
 		// Note: gpt-5.X flagship models (gpt-5.1, gpt-5.4, gpt-5.5) DO support temperature;
-		// only the mini/nano reasoning variants reject it.
-		skipTemp := strings.HasPrefix(capabilityModel, "gpt-5-mini") || strings.HasPrefix(capabilityModel, "gpt-5-nano") || strings.HasPrefix(capabilityModel, "o1") || strings.HasPrefix(capabilityModel, "o3") || strings.HasPrefix(capabilityModel, "o4")
+		// the locked ones are the base gpt-5, gpt-5-chat, and the mini/nano reasoning variants.
+		skipTemp := capabilityModel == "gpt-5" ||
+			strings.HasPrefix(capabilityModel, "gpt-5-chat") ||
+			strings.HasPrefix(capabilityModel, "gpt-5-mini") ||
+			strings.HasPrefix(capabilityModel, "gpt-5-nano") ||
+			strings.HasPrefix(capabilityModel, "o1") ||
+			strings.HasPrefix(capabilityModel, "o3") ||
+			strings.HasPrefix(capabilityModel, "o4")
 		// Kimi Coding rejects any temperature override — `invalid temperature: only
 		// 1 is allowed for this model`. Skip sending so the upstream applies its
 		// own default (1). Matches the model-locked behavior of o1/o3/o4.

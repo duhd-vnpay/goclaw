@@ -202,38 +202,55 @@ func TestNonKimi_ReasoningContentNotAddedWhenEmpty(t *testing.T) {
 	}
 }
 
-// TestDeepSeek_ReasoningContentEchoedAfterThinkingActive reproduces the
-// api.deepseek.com (openai-native) strict-echo contract: once an earlier
-// assistant message carried reasoning_content (thinking mode active), a later
-// assistant message with no captured Thinking MUST still carry the field
-// (empty string) — otherwise upstream returns 400 "reasoning_content in the
-// thinking mode must be passed back". This is conditional (not always-on like
-// kimi_coding): the trailing tool message keeps the empty-Thinking assistant
-// from being stripped as a trailing prefill.
-func TestDeepSeek_ReasoningContentEchoedAfterThinkingActive(t *testing.T) {
-	p := NewOpenAIProvider("api-llm", "sk", "https://api.deepseek.com/", "deepseek-v4-flash")
+// TestDeepSeek_ReasoningContentPresentOnLaterToolCallTurns reproduces upstream
+// "The `reasoning_content` in the thinking mode must be passed back to the API."
+// — once a DeepSeek turn has emitted reasoning, a later assistant tool-call turn
+// that emitted none must still carry the key, or the next request is rejected.
+// Trace: 01a04c34-a74b-7be7-973e-2cb66ea68f3d.
+func TestDeepSeek_ReasoningContentPresentOnLaterToolCallTurns(t *testing.T) {
+	p := NewOpenAIProvider("deepseek", "sk", "https://api.deepseek.com/v1", "deepseek-v4-pro").
+		WithProviderType("deepseek")
 
-	body := p.buildRequestBody("deepseek-v4-flash", ChatRequest{
+	body := p.buildRequestBody("deepseek-v4-pro", ChatRequest{
 		Messages: []Message{
-			{Role: "user", Content: "q1"},
-			{Role: "assistant", Content: "a1", Thinking: "reasoned step 1"},
-			{Role: "user", Content: "q2"},
+			{Role: "user", Content: "thêm khoản thu 300k"},
+			{Role: "assistant", Thinking: "the user wants an income entry", ToolCalls: []ToolCall{{ID: "call_1", Name: "edit", Arguments: map[string]any{}}}},
+			{Role: "tool", Content: "old_string not found in file", ToolCallID: "call_1"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_2", Name: "read_file", Arguments: map[string]any{}}}},
+			{Role: "tool", Content: "# Sổ sách chi tiêu", ToolCallID: "call_2"},
+		},
+	}, true)
+
+	msgs := body["messages"].([]map[string]any)
+	if got := msgs[1]["reasoning_content"]; got != "the user wants an income entry" {
+		t.Errorf("captured reasoning clobbered: got %q", got)
+	}
+	rc, present := msgs[3]["reasoning_content"]
+	if !present {
+		t.Fatalf("assistant turn without reasoning must still carry reasoning_content; got %v", msgs[3])
+	}
+	if rc != "" {
+		t.Errorf("reasoning_content = %q, want empty string when Thinking unset", rc)
+	}
+}
+
+// TestDeepSeek_ReasoningContentAbsentWithoutThinkingMode is the negative control:
+// a conversation that never carried reasoning is not in thinking mode, so the
+// empty-string key must not be injected.
+func TestDeepSeek_ReasoningContentAbsentWithoutThinkingMode(t *testing.T) {
+	p := NewOpenAIProvider("deepseek", "sk", "https://api.deepseek.com/v1", "deepseek-chat").
+		WithProviderType("deepseek")
+
+	body := p.buildRequestBody("deepseek-chat", ChatRequest{
+		Messages: []Message{
+			{Role: "user", Content: "hi"},
 			{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Name: "exec", Arguments: map[string]any{}}}},
 			{Role: "tool", Content: "...", ToolCallID: "call_1"},
 		},
 	}, true)
 
 	msgs := body["messages"].([]map[string]any)
-	// Earlier assistant preserves its real reasoning_content.
-	if got := msgs[1]["reasoning_content"]; got != "reasoned step 1" {
-		t.Errorf("msgs[1].reasoning_content = %q, want %q", got, "reasoned step 1")
-	}
-	// Later assistant (empty Thinking) must still carry the key, empty string.
-	rc, present := msgs[3]["reasoning_content"]
-	if !present {
-		t.Fatalf("deepseek assistant after thinking-active must include reasoning_content key; got %v", msgs[3])
-	}
-	if rc != "" {
-		t.Errorf("msgs[3].reasoning_content = %q, want empty string", rc)
+	if _, present := msgs[1]["reasoning_content"]; present {
+		t.Error("non-thinking conversation must not inject empty reasoning_content")
 	}
 }

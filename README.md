@@ -223,7 +223,7 @@ When `GOCLAW_*_API_KEY` environment variables are set, the gateway auto-onboards
 > | Image | Description |
 > |-------|-------------|
 > | `latest` | Backend + embedded web UI + Python (**recommended**) |
-> | `latest-base` | Backend API-only, no web UI, no runtimes |
+> | `latest-base` | Backend API-only, no web UI, no runtimes, no media probes (`read_video` and `read_audio` refuse without `ffprobe`; `read_document` falls back to the 1000-page ceiling without `pdfinfo`) |
 > | `latest-full` | All runtimes + skill dependencies pre-installed |
 > | `latest-otel` | Latest + OpenTelemetry tracing |
 > | `goclaw-web` | Standalone nginx + React SPA (for custom reverse proxy) |
@@ -370,10 +370,10 @@ GoClaw was originally inspired by the [OpenClaw](https://github.com/openclaw/ope
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=nextlevelbuilder%2Fgoclaw&type=date&legend=top-left">
+<a href="https://star-history.dera.page/#nextlevelbuilder/goclaw&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=nextlevelbuilder/goclaw&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=nextlevelbuilder/goclaw&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=nextlevelbuilder/goclaw&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=nextlevelbuilder/goclaw&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=nextlevelbuilder/goclaw&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=nextlevelbuilder/goclaw&type=date&legend=top-left" />
  </picture>
 </a>

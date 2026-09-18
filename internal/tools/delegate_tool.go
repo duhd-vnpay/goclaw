@@ -74,6 +74,7 @@ type DelegateTool struct {
 	msgBus         *bus.MessageBus         // for async announce back to parent
 	taskStore      store.SubagentTaskStore // durable async completion ledger
 	hookDispatcher hooks.Dispatcher        // optional; nil-safe
+	postTurn       PostTurnProcessor       // optional; dispatches team tasks a detached delegatee creates
 	admission      *orchestration.ChildRunAdmission
 	workspace      string
 	dataDir        string
@@ -101,6 +102,9 @@ func (t *DelegateTool) SetMsgBus(mb *bus.MessageBus) { t.msgBus = mb }
 
 // SetTaskStore configures the durable ledger used by async delegations.
 func (t *DelegateTool) SetTaskStore(s store.SubagentTaskStore) { t.taskStore = s }
+
+// SetPostTurnProcessor wires post-turn team-task dispatch for async delegations.
+func (t *DelegateTool) SetPostTurnProcessor(p PostTurnProcessor) { t.postTurn = p }
 
 // SetHookDispatcher sets the hook dispatcher for SubagentStart/Stop events.
 func (t *DelegateTool) SetHookDispatcher(d hooks.Dispatcher) { t.hookDispatcher = d }
@@ -222,12 +226,12 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"delegate", "get"},
-				"description": "delegate (default) starts work; get retrieves a durable async result",
+				"enum":        []string{"delegate", "get", "list"},
+				"description": "delegate (default) starts work; get retrieves a durable async result by id; list shows the delegations started in this chat, newest first — use it when you no longer have the id",
 			},
 			"delegation_id": map[string]any{
 				"type":        "string",
-				"description": "Delegation UUID returned by async mode (required for action=get)",
+				"description": "Delegation UUID returned by async mode (required for action=get). If you no longer have it, call action=list rather than guessing — a wrong id cannot be recovered from",
 			},
 			"task": map[string]any{
 				"type":        "string",
@@ -259,6 +263,9 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *Result
 	}
 	if action == "get" {
 		return t.executeGetCompletion(ctx, args)
+	}
+	if action == "list" {
+		return t.executeListCompletions(ctx)
 	}
 	if action != "delegate" {
 		return ErrorResult(fmt.Sprintf("unknown delegate action %q", action))
@@ -489,12 +496,18 @@ func (t *DelegateTool) executeAsyncMode(ctx context.Context, job *delegateArtifa
 	// thinking + 15-20KB JS gen) can need 5-8min per iter × 6-10 iter for
 	// parse+render+validate+send workflows.
 	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Minute)
+	// The delegatee runs after the caller's turn has ended, so the caller's
+	// post-turn drain has already fired by the time it calls team_tasks. Give
+	// this run its own tracker, drained when the delegatee finishes, so tasks it
+	// creates are dispatched and the team create lock it takes is released.
+	bgCtx, drainTeamDispatch := InjectTeamDispatch(bgCtx, t.postTurn)
 	announceCtx := context.WithoutCancel(ctx)
 	var dr DelegateResult
 	var runErr error
 	runStarted := make(chan struct{})
 	ticket, err := t.admission.Enqueue(bgCtx, delegateAdmissionConstraints(ctx, req), func(runCtx context.Context, lease *orchestration.ChildRunLease) {
 		defer job.closeCallerRoot()
+		defer drainTeamDispatch()
 		close(runStarted)
 		runCtx = withDelegatedAgentExecution(runCtx, lease)
 		dr, runErr = t.runArtifactExchange(runCtx, job)

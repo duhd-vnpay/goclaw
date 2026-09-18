@@ -9,4 +9,7 @@ package upgrade
 // v3.15.0-beta.192 merge (2026-08-06): prod ở 114 (CASE A) — local giữ số.
 // 1 upstream-new migration (theirs 000096 subagent_tasks_root_agent_scope)
 // renumber → 000115. Còn lại trùng nội dung (rename-detected) giữ số local.
-const RequiredSchemaVersion uint = 115
+// v3.15.0-beta.212 merge (2026-09-18): prod ở 115 (CASE A) — local giữ số.
+// 1 upstream-new migration (theirs 000097 channel_message_archive)
+// renumber → 000116. Còn lại trùng nội dung (rename-detected) giữ số local.
+const RequiredSchemaVersion uint = 116

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -158,9 +159,7 @@ func (s *recordingSubagentTaskStore) UpdateMetadata(_ context.Context, rootAgent
 		if task.Metadata == nil {
 			task.Metadata = make(map[string]any)
 		}
-		for key, value := range metadata {
-			task.Metadata[key] = value
-		}
+		maps.Copy(task.Metadata, metadata)
 		s.rows[id] = task
 	}
 	s.mu.Unlock()

@@ -627,3 +627,26 @@ jobs:
             exit 1
           fi
           echo "$health_json"
+
+      - name: Reseed bundled skills
+        run: |
+          base_url="${GOCLAW_DEPLOY_URL%/}"
+          # Trigger server to re-seed bundled skills from the new image.
+          # This ensures description/name updates in SKILL.md are applied even when
+          # file hash is unchanged (server restart alone doesn't re-seed metadata).
+          # Non-fatal: warn and continue if endpoint is unavailable.
+          reseed_body="$(mktemp)"
+          reseed_status="$(curl -sS --retry 2 --retry-delay 3 \
+            -o "$reseed_body" \
+            -w "%{http_code}" \
+            -X POST "${base_url}/v1/system/skills/reseed" \
+            -H "Authorization: Bearer ${GOCLAW_GATEWAY_TOKEN}" \
+            -H "Content-Type: application/json")"
+          if [[ "$reseed_status" == "200" || "$reseed_status" == "202" ]]; then
+            echo "skills reseed triggered (HTTP ${reseed_status})"
+            cat "$reseed_body"
+          else
+            echo "::warning::skills reseed returned HTTP ${reseed_status} (non-fatal)"
+            cat "$reseed_body" || true
+          fi
+

@@ -729,6 +729,13 @@ func (s *Server) SetGatewayUpgradeHandler(h *httpapi.GatewayUpgradeHandler) {
 	s.handlers = append(s.handlers, h)
 }
 
+// SetSkillReseedHandler sets the bundled-skills reseed handler.
+// Called by the CI deploy pipeline after a gateway upgrade completes to ensure
+// skill metadata (name, description) is up-to-date without restarting the container.
+func (s *Server) SetSkillReseedHandler(h *httpapi.SkillReseedHandler) {
+	s.handlers = append(s.handlers, h)
+}
+
 // SetOAuthHandler sets the OAuth handler (available in all modes).
 func (s *Server) SetOAuthHandler(h *httpapi.OAuthHandler) { s.handlers = append(s.handlers, h) }
 

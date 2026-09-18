@@ -524,12 +524,7 @@ func unionWithSpec(reg *Registry, current []string, allTools []string, spec []st
 // removed. With a deny containing group:mcp, MatchDenySpec removes it from the set.
 func (pe *PolicyEngine) WouldAllow(reg *Registry, name, providerName string, agentPolicy *config.ToolPolicySpec, groupAllow []string) bool {
 	allowed := pe.evaluate(reg, []string{name}, providerName, agentPolicy, groupAllow)
-	for _, a := range allowed {
-		if a == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, name)
 }
 
 // IsDenied checks if a tool name is explicitly denied by global or agent policy.

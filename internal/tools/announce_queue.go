@@ -143,11 +143,9 @@ func (aq *AnnounceQueue) startDrainLocked(
 	if aq.closed {
 		return
 	}
-	aq.drainWG.Add(1)
-	go func() {
-		defer aq.drainWG.Done()
+	aq.drainWG.Go(func() {
 		aq.drain(sessionKey, items, meta)
-	}()
+	})
 }
 
 // CloseContext closes intake, drops pending debounce batches, and waits for any

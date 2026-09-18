@@ -246,20 +246,42 @@ func (s *SQLiteSkillStore) UpsertSystemSkill(ctx context.Context, p store.SkillC
 	var existingID uuid.UUID
 	var existingHash *string
 	var existingFilePath string
+	var existingDesc *string
+	var existingName string
 	err := s.db.QueryRowContext(ctx,
+<<<<<<< Updated upstream
 		`SELECT id, file_hash, file_path FROM skills
 		 WHERE slug = ? AND tenant_id = ? AND is_system = 1`,
 		p.Slug, store.MasterTenantID,
 	).Scan(&existingID, &existingHash, &existingFilePath)
+=======
+		"SELECT id, file_hash, file_path, description, name FROM skills WHERE slug = ?", p.Slug,
+	).Scan(&existingID, &existingHash, &existingFilePath, &existingDesc, &existingName)
+>>>>>>> Stashed changes
 
 	if err == nil {
 		if existingHash != nil && p.FileHash != nil && *existingHash == *p.FileHash {
+			// Hash unchanged — patch metadata if description/name diverged
+			newDesc := ""
+			if p.Description != nil {
+				newDesc = *p.Description
+			}
+			oldDesc := ""
+			if existingDesc != nil {
+				oldDesc = *existingDesc
+			}
+			if oldDesc != newDesc || existingName != p.Name {
+				_, _ = s.db.ExecContext(ctx,
+					`UPDATE skills SET description = ?, name = ?, updated_at = ? WHERE id = ?`,
+					p.Description, p.Name, time.Now().UTC(), existingID,
+				)
+			}
 			return existingID, false, existingFilePath, nil
 		}
 		if existingHash == nil && p.FileHash != nil {
 			_, _ = s.db.ExecContext(ctx,
-				`UPDATE skills SET file_hash = ?, updated_at = ? WHERE id = ?`,
-				p.FileHash, time.Now().UTC(), existingID,
+				`UPDATE skills SET file_hash = ?, description = ?, name = ?, updated_at = ? WHERE id = ?`,
+				p.FileHash, p.Description, p.Name, time.Now().UTC(), existingID,
 			)
 			return existingID, false, existingFilePath, nil
 		}

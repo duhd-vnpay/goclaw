@@ -3,7 +3,6 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 
 	"github.com/mymmrac/telego"
@@ -52,7 +51,8 @@ func (c *Channel) sendTelegramMediaGroup(ctx context.Context, chatID telego.Chat
 		_, err = c.bot.SendMediaGroup(ctx, params)
 	}
 	if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
-		slog.Warn("sendMediaGroup: thread not found, retrying without thread", "thread_id", params.MessageThreadID)
+		// Album captions are per item, so the ERROR log is the only signal here.
+		markThreadFallback("sendMediaGroup", chatID, params.MessageThreadID)
 		params.MessageThreadID = 0
 		reset()
 		_, err = c.bot.SendMediaGroup(ctx, params)

@@ -207,7 +207,7 @@ func (ds *DraftStream) flush(ctx context.Context) error {
 		msg, err := ds.bot.SendMessage(ctx, params)
 		// TS ref: withTelegramThreadFallback — retry without thread ID when topic is deleted.
 		if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
-			slog.Warn("stream: thread not found, retrying without message_thread_id", "thread_id", params.MessageThreadID)
+			params.Text = markThreadFallback("stream", ds.chatID, params.MessageThreadID) + params.Text
 			params.MessageThreadID = 0
 			msg, err = ds.bot.SendMessage(ctx, params)
 		}

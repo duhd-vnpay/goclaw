@@ -94,6 +94,7 @@ func (c *Channel) sendGroupPairingReply(ctx context.Context, chatID int64, chatI
 	_, err = c.bot.SendMessage(ctx, msg)
 	// Retry without thread ID if topic is hidden/deleted (forum group with General topic removed).
 	if err != nil && messageThreadID > 0 && strings.Contains(err.Error(), "thread not found") {
+		msg.Text = markThreadFallback("pairing-reply", chatIDStr, messageThreadID) + msg.Text
 		msg.MessageThreadID = 0
 		_, err = c.bot.SendMessage(ctx, msg)
 	}

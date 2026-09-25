@@ -36,6 +36,18 @@ var (
 // report silently moved out of topic 158 and nobody noticed.
 const threadFallbackMarker = "⚠️ [topic %d không tồn tại — tin này nằm ở General của group]\n"
 
+// markThreadFallback logs the missing-topic fallback at ERROR (a WARN was
+// invisible in the ops stream) and returns a marker to prepend to the message
+// body or caption, so the misplacement is visible in chat and not only in the
+// pod log.
+func markThreadFallback(kind string, chat any, threadID int) string {
+	slog.Error("telegram.topic.missing",
+		"kind", kind, "chat_id", chat, "thread_id", threadID,
+		"action", "retry_without_thread",
+		"impact", "delivered to the group General topic instead of the configured topic")
+	return fmt.Sprintf(threadFallbackMarker, threadID)
+}
+
 // extractMigrateChatID checks if a Telegram API error contains a group→supergroup
 // migration indicator and returns the new chat ID, or 0 if not a migration error.
 func extractMigrateChatID(err error) int64 {
@@ -568,7 +580,7 @@ func (c *Channel) sendHTMLWithDepth(ctx context.Context, chatID int64, htmlConte
 
 		// Case 3: Thread not found. Re-check err (may have changed after Case 2 fallback).
 		if err != nil && tgMsg.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
-			slog.Warn("thread not found, retrying without message_thread_id", "thread_id", tgMsg.MessageThreadID)
+			tgMsg.Text = markThreadFallback("message", chatID, tgMsg.MessageThreadID) + tgMsg.Text
 			tgMsg.MessageThreadID = 0
 			_, err = c.bot.SendMessage(ctx, tgMsg)
 		}
@@ -611,7 +623,7 @@ func (c *Channel) sendPhoto(ctx context.Context, chatID telego.ChatID, filePath,
 		_, err = c.bot.SendPhoto(ctx, params)
 	}
 	if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
-		slog.Warn("sendPhoto: thread not found, retrying without thread", "thread_id", params.MessageThreadID)
+		params.Caption = markThreadFallback("sendPhoto", chatID, params.MessageThreadID) + params.Caption
 		file.Seek(0, 0)
 		params.MessageThreadID = 0
 		_, err = c.bot.SendPhoto(ctx, params)
@@ -654,7 +666,7 @@ func (c *Channel) sendVideo(ctx context.Context, chatID telego.ChatID, filePath,
 		_, err = c.bot.SendVideo(ctx, params)
 	}
 	if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
-		slog.Warn("sendVideo: thread not found, retrying without thread", "thread_id", params.MessageThreadID)
+		params.Caption = markThreadFallback("sendVideo", chatID, params.MessageThreadID) + params.Caption
 		file.Seek(0, 0)
 		params.MessageThreadID = 0
 		_, err = c.bot.SendVideo(ctx, params)
@@ -697,7 +709,7 @@ func (c *Channel) sendAudio(ctx context.Context, chatID telego.ChatID, filePath,
 		_, err = c.bot.SendAudio(ctx, params)
 	}
 	if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
-		slog.Warn("sendAudio: thread not found, retrying without thread", "thread_id", params.MessageThreadID)
+		params.Caption = markThreadFallback("sendAudio", chatID, params.MessageThreadID) + params.Caption
 		file.Seek(0, 0)
 		params.MessageThreadID = 0
 		_, err = c.bot.SendAudio(ctx, params)
@@ -741,7 +753,7 @@ func (c *Channel) sendVoice(ctx context.Context, chatID telego.ChatID, filePath,
 		_, err = c.bot.SendVoice(ctx, params)
 	}
 	if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
-		slog.Warn("sendVoice: thread not found, retrying without thread", "thread_id", params.MessageThreadID)
+		params.Caption = markThreadFallback("sendVoice", chatID, params.MessageThreadID) + params.Caption
 		file.Seek(0, 0)
 		params.MessageThreadID = 0
 		_, err = c.bot.SendVoice(ctx, params)
@@ -793,9 +805,7 @@ func (c *Channel) sendDocument(ctx context.Context, chatID telego.ChatID, filePa
 	if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
 		// Deliver anyway (a missing topic must not lose the document), but make
 		// the misplacement loud: ERROR log + a marker the operator sees in chat.
-		slog.Error("sendDocument: topic not found, delivering to the group General topic instead",
-			"chat_id", chatID.ID, "thread_id", params.MessageThreadID)
-		params.Caption = fmt.Sprintf(threadFallbackMarker, params.MessageThreadID) + params.Caption
+		params.Caption = markThreadFallback("sendDocument", chatID, params.MessageThreadID) + params.Caption
 		file.Seek(0, 0)
 		params.MessageThreadID = 0
 		_, err = c.bot.SendDocument(ctx, params)

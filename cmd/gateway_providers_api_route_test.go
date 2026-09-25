@@ -30,7 +30,7 @@ func TestRegisterProvidersAPIRouteDefaultsAndAuth(t *testing.T) {
 	cfg.Providers.APIRoute.APIKey = "api-route-key"
 	cfg.Providers.APIRoute.APIBase = server.URL
 	registry := providers.NewRegistry(nil)
-	registerProviders(registry, cfg, providers.NewInMemoryRegistry())
+	registerProviders(registry, cfg, providers.NewInMemoryRegistry(), ACPDeps{})
 
 	p, err := registry.GetForTenant(providers.MasterTenantID, "api_route")
 	if err != nil {

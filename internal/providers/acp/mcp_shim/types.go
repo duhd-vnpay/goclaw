@@ -17,9 +17,14 @@ const (
 )
 
 // DefaultToolTimeout is the per-tool dispatch timeout applied when a
-// ToolDescriptor leaves TimeoutMs at zero. 60s mirrors the mcp.Manager
-// timeout floor used for ops-mcp / cve-intel SSE clients.
-const DefaultToolTimeout = 60 * time.Second
+// ToolDescriptor leaves TimeoutMs at zero. 60s mirrored the mcp.Manager
+// timeout floor used for ops-mcp / cve-intel SSE clients, but ops-mcp's own
+// sql tools default to 120s (ops-mcp/server.py litellm_psql_query) and an
+// aggregate over the 24 GB SpendLogs table can exceed 60s: on 2026-09-25 the
+// daily-ops report lost 3 queries to a 60s context cancel. mcp_servers.
+// timeout_sec (300 for ops) is the server-side ceiling, so the client-side
+// dispatch cap has to sit above the tool default.
+const DefaultToolTimeout = 180 * time.Second
 
 // ToolDescriptor is the resolved view of a tool that the shim will advertise
 // over MCP for one ACP session. It is the resolver's output (Task 2) and

@@ -30,6 +30,12 @@ var (
 	htmlTagRe            = regexp.MustCompile(`<[^>]*>`)
 )
 
+// threadFallbackMarker prefixes a message that lands in the group's General
+// topic because its configured topic no longer exists. Incident 2026-09-25:
+// sendDocument dropped message_thread_id and logged only a WARN, so a daily
+// report silently moved out of topic 158 and nobody noticed.
+const threadFallbackMarker = "⚠️ [topic %d không tồn tại — tin này nằm ở General của group]\n"
+
 // extractMigrateChatID checks if a Telegram API error contains a group→supergroup
 // migration indicator and returns the new chat ID, or 0 if not a migration error.
 func extractMigrateChatID(err error) int64 {
@@ -785,7 +791,11 @@ func (c *Channel) sendDocument(ctx context.Context, chatID telego.ChatID, filePa
 		_, err = c.bot.SendDocument(ctx, params)
 	}
 	if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
-		slog.Warn("sendDocument: thread not found, retrying without thread", "thread_id", params.MessageThreadID)
+		// Deliver anyway (a missing topic must not lose the document), but make
+		// the misplacement loud: ERROR log + a marker the operator sees in chat.
+		slog.Error("sendDocument: topic not found, delivering to the group General topic instead",
+			"chat_id", chatID.ID, "thread_id", params.MessageThreadID)
+		params.Caption = fmt.Sprintf(threadFallbackMarker, params.MessageThreadID) + params.Caption
 		file.Seek(0, 0)
 		params.MessageThreadID = 0
 		_, err = c.bot.SendDocument(ctx, params)

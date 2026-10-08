@@ -10,6 +10,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
+	"github.com/nextlevelbuilder/goclaw/internal/sessions"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
@@ -41,7 +42,7 @@ func TestHandleTeammateMessageSchedulesStreamedRun(t *testing.T) {
 			case scheduled <- req:
 			default:
 			}
-			return &agent.RunResult{Content: "member deliverable"}, nil
+			return &agent.RunResult{}, nil
 		},
 	)
 	defer sched.Stop()
@@ -93,5 +94,72 @@ func TestHandleTeammateMessageSchedulesStreamedRun(t *testing.T) {
 	if delivered, last := channelMgr.InterimDeliverySnapshot(gotReq.RunID); delivered != 0 || last != "" {
 		t.Errorf("teammate run is registered for channel delivery (delivered=%d, last=%q); "+
 			"streamed chunks would reach a user incrementally", delivered, last)
+	}
+}
+
+// TestHandleTeammateMessageCronSessionIsolation guards ADR-013: a teammate
+// dispatch originating from cron (no real user chat) must scope its session
+// key by task ID, not the team ID, so each daily pipeline run starts fresh.
+// WorkspaceChatID must still carry the original chat ID for workspace
+// isolation, and the announce routing (origChatID) must stay unchanged.
+func TestHandleTeammateMessageCronSessionIsolation(t *testing.T) {
+	scheduled := make(chan agent.RunRequest, 2)
+	sched := scheduler.NewScheduler(
+		scheduler.DefaultLanes(),
+		scheduler.QueueConfig{Mode: scheduler.QueueModeQueue, Cap: 1, Drop: scheduler.DropOld, MaxConcurrent: 1},
+		func(_ context.Context, req agent.RunRequest) (*agent.RunResult, error) {
+			select {
+			case scheduled <- req:
+			default:
+			}
+			return &agent.RunResult{}, nil
+		},
+	)
+	defer sched.Stop()
+
+	deps := &ConsumerDeps{
+		Cfg:        &config.Config{},
+		Sched:      sched,
+		ChannelMgr: channels.NewManager(nil),
+	}
+	defer deps.BgWg.Wait()
+
+	const (
+		teamID = "019e4d7f-91aa-73f4-a5b6-42d3e40edb7f"
+		taskID = "019a11a0-0000-7000-8000-0000000000aa"
+	)
+	msg := bus.InboundMessage{
+		Channel:  tools.ChannelSystem,
+		SenderID: "teammate:dashboard",
+		AgentID:  "pam-newsletter",
+		ChatID:   teamID,
+		Content:  "[Assigned task #1]: write newsletter",
+		Metadata: map[string]string{
+			tools.MetaOriginChannel: "cron",
+			tools.MetaOriginChatID:  teamID,
+			tools.MetaTeamID:        teamID,
+			tools.MetaTeamTaskID:    taskID,
+			tools.MetaFromAgent:     "newsroom-conductor",
+			tools.MetaToAgent:       "pam-newsletter",
+		},
+	}
+
+	if !handleTeammateMessage(context.Background(), msg, deps) {
+		t.Fatal("handleTeammateMessage() = false, want true")
+	}
+
+	var gotReq agent.RunRequest
+	select {
+	case gotReq = <-scheduled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("teammate run was never scheduled")
+	}
+
+	wantSession := sessions.BuildTeamSessionKey("pam-newsletter", teamID, taskID)
+	if gotReq.SessionKey != wantSession {
+		t.Errorf("SessionKey = %q, want %q (cron dispatch must scope by task ID)", gotReq.SessionKey, wantSession)
+	}
+	if gotReq.WorkspaceChatID != teamID {
+		t.Errorf("WorkspaceChatID = %q, want %q (workspace isolation must keep orig chat)", gotReq.WorkspaceChatID, teamID)
 	}
 }

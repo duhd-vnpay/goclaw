@@ -223,7 +223,20 @@ func handleTeammateMessage(
 	// Use isolated team session key so member execution doesn't share
 	// the user's direct chat session with this agent.
 	// Scoped per agent + team + chatID, matching workspace isolation.
-	sessionKey := sessions.BuildTeamSessionKey(targetAgent, msg.Metadata[tools.MetaTeamID], origChatID)
+	//
+	// Cron-originated dispatches (origChannel == "cron") have no real user
+	// chat: task.Channel defaults to "cron" and chat_id falls back to the team
+	// ID, which would collapse EVERY daily pipeline run of a member into one
+	// unbounded session (ADR-013: pam-newsletter hit 602 messages / 51.4M
+	// input tokens, compaction timed out, agent loop ran 0 iterations). Scope
+	// their session key by task ID instead so each run starts fresh, while
+	// keeping WorkspaceChatID=origChatID (workspace isolation) and the announce
+	// routing (origChatID below) unchanged.
+	sessionChatID := origChatID
+	if origChannel == "cron" && msg.Metadata[tools.MetaTeamTaskID] != "" {
+		sessionChatID = msg.Metadata[tools.MetaTeamTaskID]
+	}
+	sessionKey := sessions.BuildTeamSessionKey(targetAgent, msg.Metadata[tools.MetaTeamID], sessionChatID)
 
 	slog.Info("teammate message → scheduler (team lane)",
 		"from", msg.SenderID,
@@ -264,18 +277,18 @@ func handleTeammateMessage(
 	schedCtx := tools.WithTaskActionFlags(ctx, taskActionFlags)
 
 	outCh := deps.Sched.Schedule(schedCtx, scheduler.LaneTeam, agent.RunRequest{
-		SessionKey:      sessionKey,
-		Message:         msg.Content,
-		Channel:         origChannel,
-		ChannelType:     origChannelType,
-		ChatID:          origChatID,
-		ChatTitle:       resolveGroupDisplayTitle(schedCtx, deps.ChannelMgr, origChannel, origChatID, origPeerKind, ""),
-		PeerKind:        origPeerKind,
-		LocalKey:        origLocalKey,
-		UserID:          announceUserID,
-		SenderID:        teammateSenderID, // real user who triggered the teammate dispatch (#915)
-		Role:            teammateRole,     // RBAC role for admin bypass during teammate turn (#915)
-		RunID:           fmt.Sprintf("teammate-%s-%s", msg.Metadata[tools.MetaFromAgent], msg.Metadata[tools.MetaToAgent]),
+		SessionKey:  sessionKey,
+		Message:     msg.Content,
+		Channel:     origChannel,
+		ChannelType: origChannelType,
+		ChatID:      origChatID,
+		ChatTitle:   resolveGroupDisplayTitle(schedCtx, deps.ChannelMgr, origChannel, origChatID, origPeerKind, ""),
+		PeerKind:    origPeerKind,
+		LocalKey:    origLocalKey,
+		UserID:      announceUserID,
+		SenderID:    teammateSenderID, // real user who triggered the teammate dispatch (#915)
+		Role:        teammateRole,     // RBAC role for admin bypass during teammate turn (#915)
+		RunID:       fmt.Sprintf("teammate-%s-%s", msg.Metadata[tools.MetaFromAgent], msg.Metadata[tools.MetaToAgent]),
 		// Streamed for connection liveness, not for delivery. A teammate run is
 		// never registered with the channel manager, so HandleAgentEvent drops its
 		// chunks on the first line and nothing is delivered incrementally; the task

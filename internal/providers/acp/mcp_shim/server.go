@@ -430,6 +430,26 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	if sess.Cron.SessionKey != "" {
 		ctx = tools.WithToolSessionKey(ctx, sess.Cron.SessionKey)
 	}
+	// Phase 5.1 read-side symmetry (ADR-004 Option B, T0.1 2026-10-11):
+	// team-dispatched ACP sessions must resolve relative READ paths
+	// (read_file/list_files) under the same team workspace root the write-side
+	// relocate lands files in. Before this, read fell back to the process
+	// global workspace while write_file relocated into
+	// {GOCLAW_WORKSPACE}/teams/<teamID>/ — a split-brain observed live on
+	// 2026-10-11 (WN: final_report.md present on disk but Jim reported the
+	// "2026-10-11/" directory missing; ADR-004).
+	//
+	// workspaceBase is the package-level GOCLAW_WORKSPACE join used by
+	// applyTeamRelocate, so read and write share exactly one anchor. The team
+	// root is attached as workspace AND team workspace/root so the read-side
+	// allowed-prefix checks (allowedWithTeamWorkspace) accept peer-written
+	// files. Non-team sessions (direct chat, non-team cron) are untouched.
+	if sess.Cron.TeamID != "" {
+		teamRoot := teamWorkspaceRoot(sess.Cron.TeamID)
+		ctx = tools.WithToolWorkspace(ctx, teamRoot)
+		ctx = tools.WithToolTeamWorkspace(ctx, teamRoot)
+		ctx = tools.WithToolTeamRoot(ctx, teamRoot)
+	}
 	// BridgeTool.Execute's runtime grant re-check (mcp.GrantChecker.IsAllowed,
 	// security audit finding P2#9) reads store.AgentIDFromContext/TenantIDFromContext
 	// off ctx — without these the check fails closed with "tenant_id required"

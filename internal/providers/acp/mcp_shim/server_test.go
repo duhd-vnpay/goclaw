@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -26,8 +27,8 @@ type fakeTool struct {
 	lastArgs    map[string]any
 }
 
-func (f *fakeTool) Name() string             { return f.name }
-func (f *fakeTool) Description() string      { return f.description }
+func (f *fakeTool) Name() string               { return f.name }
+func (f *fakeTool) Description() string        { return f.description }
 func (f *fakeTool) Parameters() map[string]any { return f.params }
 func (f *fakeTool) Execute(ctx context.Context, args map[string]any) *tools.Result {
 	f.mu.Lock()
@@ -333,5 +334,130 @@ func TestServer_RegisterUnregisterSession(t *testing.T) {
 	w := postMCP(t, s, "sid-reg", rpcRequest(t, 1, "tools/list", nil))
 	if w.Code != http.StatusNotFound {
 		t.Errorf("after unregister: status=%d, want 404", w.Code)
+	}
+}
+
+// ctxProbeTool records the workspace ctx values the shim attaches to a
+// dispatched tool call. Used by the team-workspace ctx tests below — the probe
+// is the only place where the ctx handleMCP built is observable end-to-end.
+type ctxProbeTool struct {
+	name    string
+	params  map[string]any
+	capture func(context.Context)
+}
+
+func (c *ctxProbeTool) Name() string        { return c.name }
+func (c *ctxProbeTool) Description() string { return "ctx probe " + c.name }
+func (c *ctxProbeTool) Parameters() map[string]any {
+	return c.params
+}
+
+func (c *ctxProbeTool) Execute(ctx context.Context, _ map[string]any) *tools.Result {
+	if c.capture != nil {
+		c.capture(ctx)
+	}
+	return tools.NewResult("ok:" + c.name)
+}
+
+func newCtxProbeRegistry(t *testing.T, capture func(context.Context)) *tools.Registry {
+	t.Helper()
+	reg := tools.NewRegistry()
+	reg.Register(&ctxProbeTool{
+		name: "write_file",
+		params: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		capture: capture,
+	})
+	return reg
+}
+
+// TestServer_TeamCronSessionAttachesTeamWorkspaceCtx verifies the T0.1 /
+// ADR-004 Option B read-side wiring: for a team-dispatched ACP session
+// (sess.Cron.TeamID != "") handleMCP must attach the team workspace root to ctx
+// as tool workspace, team workspace AND team root, so read_file/list_files
+// resolve relative paths under the same anchor write_file relocates into.
+func TestServer_TeamCronSessionAttachesTeamWorkspaceCtx(t *testing.T) {
+	wantRoot := filepath.Join(workspaceBase, "teams", "TEAM-NEWSROOM")
+
+	var gotWorkspace, gotTeamWs, gotTeamRoot string
+	reg := newCtxProbeRegistry(t, func(ctx context.Context) {
+		gotWorkspace = tools.ToolWorkspaceFromCtx(ctx)
+		gotTeamWs = tools.ToolTeamWorkspaceFromCtx(ctx)
+		gotTeamRoot = tools.ToolTeamRootFromCtx(ctx)
+	})
+	s := newTestServer(t, reg)
+
+	s.RegisterSession(SessionEntry{
+		SID:       "sid-team",
+		Allowlist: []string{"write_file"},
+		Cron:      CronContext{AgentID: "pam", TeamID: "TEAM-NEWSROOM"},
+	})
+
+	w := postMCP(t, s, "sid-team", rpcRequest(t, 1, "tools/call", map[string]any{
+		"name":      "write_file",
+		"arguments": map[string]any{},
+	}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var cr callToolResult
+	decodeResult(t, w.Body.Bytes(), &cr)
+	if cr.IsError {
+		t.Fatalf("unexpected tool error: %+v", cr)
+	}
+
+	if gotWorkspace != wantRoot {
+		t.Errorf("ToolWorkspaceFromCtx=%q want %q", gotWorkspace, wantRoot)
+	}
+	if gotTeamWs != wantRoot {
+		t.Errorf("ToolTeamWorkspaceFromCtx=%q want %q", gotTeamWs, wantRoot)
+	}
+	if gotTeamRoot != wantRoot {
+		t.Errorf("ToolTeamRootFromCtx=%q want %q", gotTeamRoot, wantRoot)
+	}
+}
+
+// TestServer_NonTeamSessionLeavesToolWorkspaceUnset verifies the ctx wiring is
+// gated on TeamID: direct-chat and non-team cron ACP sessions keep the
+// pre-Option-B behavior (no tool workspace injected — tools fall back to their
+// own configured workspace).
+func TestServer_NonTeamSessionLeavesToolWorkspaceUnset(t *testing.T) {
+	gotWorkspace, gotTeamWs, gotTeamRoot := "sentinel", "sentinel", "sentinel"
+	reg := newCtxProbeRegistry(t, func(ctx context.Context) {
+		gotWorkspace = tools.ToolWorkspaceFromCtx(ctx)
+		gotTeamWs = tools.ToolTeamWorkspaceFromCtx(ctx)
+		gotTeamRoot = tools.ToolTeamRootFromCtx(ctx)
+	})
+	s := newTestServer(t, reg)
+
+	s.RegisterSession(SessionEntry{
+		SID:       "sid-solo",
+		Allowlist: []string{"write_file"},
+		Cron:      CronContext{AgentID: "dwight", SessionKey: "agent:dwight:cron:j1"},
+	})
+
+	w := postMCP(t, s, "sid-solo", rpcRequest(t, 1, "tools/call", map[string]any{
+		"name":      "write_file",
+		"arguments": map[string]any{},
+	}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var cr callToolResult
+	decodeResult(t, w.Body.Bytes(), &cr)
+	if cr.IsError {
+		t.Fatalf("unexpected tool error: %+v", cr)
+	}
+
+	if gotWorkspace != "" {
+		t.Errorf("ToolWorkspaceFromCtx=%q want empty for non-team session", gotWorkspace)
+	}
+	if gotTeamWs != "" {
+		t.Errorf("ToolTeamWorkspaceFromCtx=%q want empty for non-team session", gotTeamWs)
+	}
+	if gotTeamRoot != "" {
+		t.Errorf("ToolTeamRootFromCtx=%q want empty for non-team session", gotTeamRoot)
 	}
 }

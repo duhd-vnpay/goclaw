@@ -35,12 +35,45 @@ var workspaceBase = func() string {
 	return "/app/workspace"
 }()
 
+// teamWorkspaceRoot is the canonical on-disk root for a team's shared
+// workspace: {GOCLAW_WORKSPACE}/teams/{teamID}. handleMCP attaches this to ctx
+// (WithToolWorkspace / WithToolTeamWorkspace / WithToolTeamRoot) for
+// team-dispatched ACP sessions, and applyTeamRelocate falls back to it as the
+// write anchor. Keeping both sides on one derivation is what makes read and
+// write resolve to the same directory (ADR-004, T0.1 2026-10-11).
+//
+// The canonical storage layout is documented in the workspaceBase comment
+// above; this helper is the single join site so a future change (e.g.
+// isolation-aware chat segment) has one place to land.
+func teamWorkspaceRoot(teamID string) string {
+	return filepath.Join(workspaceBase, "teams", teamID)
+}
+
+// teamWorkspaceAnchor returns the write anchor for a team-scoped ACP session:
+// the team workspace root handleMCP attached to ctx when present, otherwise the
+// canonical {GOCLAW_WORKSPACE}/teams/<teamID>. Returns "" for non-team sessions
+// so applyTeamRelocate stays a no-op. The ctx value is preferred so a session
+// whose workspace is already team-scoped (e.g. a future isolation-scoped
+// segment) is never re-joined with base/teams/<teamID> — that re-join is the
+// double-prefix this guard exists for.
+func teamWorkspaceAnchor(ctx context.Context, teamID string) string {
+	if teamID == "" {
+		return ""
+	}
+	if ws := tools.ToolWorkspaceFromCtx(ctx); ws != "" {
+		return ws
+	}
+	return teamWorkspaceRoot(teamID)
+}
+
 // needsTeamRelocate reports whether a tool creates a file under the workspace
 // and therefore needs its 'path' argument rewritten under the team workspace
 // root for team-dispatched ACP sessions. The whitelist is intentionally narrow
 // — add new file-creating tools explicitly. Read-side tools (read_file,
-// list_files) are NOT included; they already receive the team-scoped workspace
-// via tools.ToolWorkspaceFromCtx.
+// list_files) are NOT included because they need no arg rewriting: handleMCP
+// attaches the team-scoped workspace root to ctx (tools.WithToolWorkspace) for
+// team-dispatched sessions, so their relative 'path' resolves under the same
+// team root this whitelist writes into.
 func needsTeamRelocate(toolName string) bool {
 	switch toolName {
 	case "write_file", "create_image", "tts":
@@ -49,11 +82,22 @@ func needsTeamRelocate(toolName string) bool {
 	return false
 }
 
-// applyTeamRelocate rewrites args["path"] to land under
-// <base>/teams/<teamID>/<path> when the session is team-scoped and the tool is
-// in needsTeamRelocate. It is a no-op when teamID is empty, the tool is not
-// whitelisted, the path is absolute, the path is empty, or the path attempts
-// a ".." escape after cleaning. Mutates args in place.
+// applyTeamRelocate rewrites args["path"] to land under the team workspace
+// root when the session is team-scoped and the tool is in needsTeamRelocate.
+// It is a no-op when teamID is empty, the tool is not whitelisted, the path is
+// absolute, the path is empty, or the path attempts a ".." escape after
+// cleaning. Mutates args in place.
+//
+// Anchor: ctxTeamWs is the team workspace root handleMCP already attached to
+// the request ctx (tools.WithToolWorkspace) for this session; when non-empty it
+// IS the anchor, so the path is only joined once. Falling back to
+// base/teams/<teamID> when ctxTeamWs is empty keeps non-shim callers (and the
+// pre-Option-B behavior) working. Passing the ctx value instead of blindly
+// re-joining base/teams/<teamID> is what prevents double-prefixing: a future
+// isolation-scoped team workspace ({root}/teams/<teamID>/<chat>) that already
+// carries the team segment would otherwise become
+// {root}/teams/<teamID>/teams/<teamID>/<chat>/... — the 2026-06-16
+// double-nesting class (ADR-004, Option B).
 //
 // Idempotency: when the cleaned relative path already starts with
 // "teams/<teamID>/" or "<teamID>/", that prefix is stripped before joining so a
@@ -64,9 +108,9 @@ func needsTeamRelocate(toolName string) bool {
 // Monica's task description carried the team prefix and the relocate
 // re-prepended it).
 //
-// The pure function shape (no SessionEntry dep, base passed in) keeps it
-// trivially testable from a table-driven test.
-func applyTeamRelocate(base, teamID, toolName string, args map[string]any) {
+// The pure function shape (no SessionEntry dep, base + ctxTeamWs passed in)
+// keeps it trivially testable from a table-driven test.
+func applyTeamRelocate(base, teamID, toolName string, args map[string]any, ctxTeamWs string) {
 	if teamID == "" || !needsTeamRelocate(toolName) {
 		return
 	}
@@ -89,11 +133,14 @@ func applyTeamRelocate(base, teamID, toolName string, args map[string]any) {
 		return
 	}
 	cleaned = stripTeamPrefix(cleaned, teamID)
-	teamRoot := filepath.Join(base, "teams", teamID)
-	newPath := filepath.Join(teamRoot, cleaned)
+	anchor := ctxTeamWs
+	if anchor == "" {
+		anchor = filepath.Join(base, "teams", teamID)
+	}
+	newPath := filepath.Join(anchor, cleaned)
 	args["path"] = newPath
 	slog.Info("acp.shim.path_relocated",
-		"tool", toolName, "team_id", teamID,
+		"tool", toolName, "team_id", teamID, "anchor", anchor,
 		"from", rawPath, "to", newPath)
 }
 
@@ -194,11 +241,17 @@ func (s *Server) makeSessionAwareHandler(reg *tools.Registry, msgBus *bus.Messag
 
 		args := req.GetArguments()
 
-		// Phase 5.1: relocate file-creation tools under the team workspace
-		// root when this session is team-dispatched (sess.Cron.TeamID != "").
-		// No-op for cron / direct sessions — preserves backward compat.
-		if sess != nil {
-			applyTeamRelocate(workspaceBase, sess.Cron.TeamID, toolName, args)
+		// Phase 5.1 (+ T0.1 Option B, 2026-10-11): relocate file-creation
+		// tools under the team workspace root when this session is
+		// team-dispatched (sess.Cron.TeamID != ""). No-op for cron / direct
+		// sessions — preserves backward compat.
+		//
+		// The anchor is the team workspace root handleMCP attached to ctx;
+		// passing it keeps the relocate from re-joining base/teams/<teamID> on
+		// top of a ctx workspace that already carries the team segment.
+		if sess != nil && sess.Cron.TeamID != "" {
+			applyTeamRelocate(workspaceBase, sess.Cron.TeamID, toolName, args,
+				teamWorkspaceAnchor(ctx, sess.Cron.TeamID))
 		}
 
 		// Reuse the same routing context as mcp.NewBridgeServer's handler —

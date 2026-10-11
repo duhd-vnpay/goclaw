@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -254,5 +255,52 @@ func TestModelFallbackProviderMaxAttemptsCapsTotalAttempts(t *testing.T) {
 	}
 	if primary.calls != 1 || backup.calls != 0 {
 		t.Fatalf("calls primary=%d backup=%d, want 1/0", primary.calls, backup.calls)
+	}
+}
+
+// The ACP provider returns the child CLI error as a plain (non-HTTPError) Go
+// error wrapped by acp/session.go. These are the real production strings; the
+// second (api-llm) candidate must actually be tried.
+func TestModelFallbackProviderFallsBackOnACPSessionPromptErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "auth_unavailable",
+			body: "API Error: 503 auth_unavailable: no auth available (providers=claude, model=claude-sonnet-4-6)",
+		},
+		{
+			name: "credentials_cooling_down",
+			body: "API Error: Request rejected (429) · All credentials for model claude-haiku-4-5-20251001 are cooling down via provider claude",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := &testFallbackProvider{
+				name:  "claude-code-acp",
+				model: "claude-sonnet-5-5",
+				err:   fmt.Errorf("acp session/prompt: %w", errors.New(tc.body)),
+			}
+			backup := &testFallbackProvider{name: "api-llm", model: "openai/gpt-5.6-luna"}
+			provider := NewModelFallbackProvider(FallbackCandidate{
+				ProviderName: "claude-code-acp",
+				Provider:     primary,
+				Model:        "claude-sonnet-5-5",
+			}, []FallbackCandidate{
+				{ProviderName: "api-llm", Provider: backup, Model: "openai/gpt-5.6-luna"},
+			}, 2, false)
+
+			resp, err := provider.Chat(context.Background(), ChatRequest{})
+			if err != nil {
+				t.Fatalf("Chat() error = %v, want fallback success", err)
+			}
+			if resp.Content != "openai/gpt-5.6-luna" {
+				t.Fatalf("Chat() content = %q, want fallback model", resp.Content)
+			}
+			if primary.calls != 1 || backup.calls != 1 {
+				t.Fatalf("calls primary=%d backup=%d, want 1/1", primary.calls, backup.calls)
+			}
+		})
 	}
 }

@@ -62,6 +62,7 @@ func NewDefaultClassifier() *DefaultClassifier {
 	}
 	RegisterOpenAIPatterns(c)
 	RegisterAnthropicPatterns(c)
+	RegisterACPPatterns(c)
 	return c
 }
 
@@ -229,5 +230,24 @@ func RegisterAnthropicPatterns(c *DefaultClassifier) {
 	c.RegisterPatterns("anthropic", []ErrorPattern{
 		{Contains: "overloaded", Reason: FailoverOverloaded},
 		{Contains: "credit balance", Reason: FailoverBilling},
+	})
+}
+
+// RegisterACPPatterns adds claude-code-acp (Claude Code / cli-proxy) error
+// patterns. ACP surfaces the child CLI's own error text as a plain JSON-RPC
+// error, so ClassifyHTTPError sees status code 0 and body pattern matching is
+// the only classification signal available.
+func RegisterACPPatterns(c *DefaultClassifier) {
+	c.RegisterPatterns("acp", []ErrorPattern{
+		// "API Error: 503 auth_unavailable: no auth available (providers=claude, model=claude-sonnet-4-6)".
+		// No credential exists for the model at all: rotating ACP profiles cannot help,
+		// and a 503 status would otherwise classify as server_error (retry-forever).
+		// Permanent auth = tier-2 model fallback (failover.go: isModelFallbackRequired)
+		// plus a 1h cooldown and bgalert visibility.
+		{Contains: "auth_unavailable", Reason: FailoverAuthPermanent},
+		// "… All credentials for model claude-haiku-4-5-20251001 are cooling down via provider claude".
+		// (Also carries "· Request rejected (429)" — either substring is sufficient.)
+		{Contains: "are cooling down", Reason: FailoverRateLimit},
+		{Contains: "Request rejected (429)", Reason: FailoverRateLimit},
 	})
 }

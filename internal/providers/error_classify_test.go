@@ -2,6 +2,7 @@ package providers
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -389,5 +390,40 @@ func TestClassifyChineseInputTooLong(t *testing.T) {
 	result := classifier.Classify(nil, 400, "请求输入过长")
 	if result.Kind != "context_overflow" {
 		t.Errorf("expected context_overflow, got %s (reason: %s)", result.Kind, result.Reason)
+	}
+}
+
+// Real production strings emitted by the claude-code-acp provider. They arrive
+// as plain JSON-RPC errors wrapped by acp/session.go ("acp session/prompt: %w"),
+// i.e. no HTTPError status is available.
+func TestClassifyACPSessionPromptPatterns(t *testing.T) {
+	cases := []struct {
+		name   string
+		body   string
+		reason FailoverReason
+	}{
+		{
+			name:   "auth_unavailable",
+			body:   "API Error: 503 auth_unavailable: no auth available (providers=claude, model=claude-sonnet-4-6)",
+			reason: FailoverAuthPermanent,
+		},
+		{
+			name:   "credentials_cooling_down",
+			body:   "API Error: Request rejected (429) · All credentials for model claude-haiku-4-5-20251001 are cooling down via provider claude",
+			reason: FailoverRateLimit,
+		},
+	}
+	classifier := NewDefaultClassifier()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := fmt.Errorf("acp session/prompt: %w", errors.New(tc.body))
+			result := ClassifyHTTPError(classifier, err)
+			if result.Kind != "reason" {
+				t.Fatalf("classify kind = %q, want \"reason\" (reason: %s)", result.Kind, result.Reason)
+			}
+			if result.Reason != tc.reason {
+				t.Errorf("classify reason = %s, want %s", result.Reason, tc.reason)
+			}
+		})
 	}
 }

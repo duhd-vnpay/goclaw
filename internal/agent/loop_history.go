@@ -240,6 +240,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		AgentUUID:              l.agentUUID.String(),
 		DisplayName:            l.displayName,
 		Model:                  l.model,
+		Timezone:               l.defaultTimezone,
 		Workspace:              promptWorkspace,
 		Channel:                channel,
 		ChannelType:            channelType,

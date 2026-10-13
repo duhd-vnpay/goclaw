@@ -39,7 +39,7 @@ func TestTimeSectionContainsDate(t *testing.T) {
 // TestTimeSectionDateOnly verifies the time section uses date+weekday only,
 // not HH:MM:SS which would bust the cache every second.
 func TestTimeSectionDateOnly(t *testing.T) {
-	lines := buildTimeSection()
+	lines := buildTimeSection("")
 	if len(lines) == 0 {
 		t.Fatal("buildTimeSection returned empty")
 	}
@@ -58,6 +58,22 @@ func TestTimeSectionDateOnly(t *testing.T) {
 	for p := range parts {
 		if strings.Count(p, ":") >= 2 {
 			t.Errorf("time section contains time component: %s", dateLine)
+		}
+	}
+}
+
+// 06:30 in Ho Chi Minh is 23:30 UTC the previous day; cron agents must see the local date.
+func TestTimeSectionUsesConfiguredTimezone(t *testing.T) {
+	now := time.Date(2026, 10, 12, 23, 30, 0, 0, time.UTC)
+	cases := map[string]string{
+		"":                    "Current date: 2026-10-12 Monday (UTC)",
+		"Asia/Ho_Chi_Minh":    "Current date: 2026-10-13 Tuesday (Asia/Ho_Chi_Minh)",
+		"Asia/Saigon (UTC+7)": "Current date: 2026-10-13 Tuesday (Asia/Saigon)",
+		"Not/AZone":           "Current date: 2026-10-12 Monday (UTC)",
+	}
+	for tz, want := range cases {
+		if got := buildTimeSectionAt(now, tz)[0]; got != want {
+			t.Errorf("tz %q: got %q, want %q", tz, got, want)
 		}
 	}
 }

@@ -96,6 +96,10 @@ type SystemPromptConfig struct {
 	AgentUUID   string // agent UUID for runtime identification
 	DisplayName string // human-readable agent display name
 	Model       string
+	// Timezone for the "Current date" line (IANA, e.g. "Asia/Ho_Chi_Minh"). Empty or
+	// unparseable → UTC. Cron jobs firing before 07:00 VN otherwise see yesterday's
+	// UTC date (newsroom social-ai 2026-10-13 06:30 labelled itself 2026-10-12).
+	Timezone    string
 	Workspace   string
 	Channel     string // runtime channel instance name (e.g. "my-telegram-bot")
 	ChannelType string // platform type (e.g. "zalo_personal", "telegram")
@@ -496,7 +500,7 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 
 	// 8. Time (below boundary — date changes don't bust the stable cache)
 	if !isNone {
-		lines = append(lines, buildTimeSection()...)
+		lines = append(lines, buildTimeSection(cfg.Timezone)...)
 	}
 
 	// 9.5. Channel formatting hints — full mode only

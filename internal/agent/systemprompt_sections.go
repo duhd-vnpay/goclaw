@@ -383,10 +383,22 @@ func buildUserIdentitySection(ownerIDs []string) []string {
 	}
 }
 
-func buildTimeSection() []string {
-	now := time.Now()
+func buildTimeSection(tz string) []string {
+	return buildTimeSectionAt(time.Now(), tz)
+}
+
+// buildTimeSectionAt renders the date in `tz` so agents in UTC+7 do not see
+// yesterday before 07:00. Accepts "Asia/Ho_Chi_Minh" and the legacy config form
+// "Asia/Saigon (UTC+7)" (first token); anything unparseable falls back to UTC.
+func buildTimeSectionAt(now time.Time, tz string) []string {
+	loc, label := time.UTC, "UTC"
+	if name := strings.TrimSpace(strings.SplitN(strings.TrimSpace(tz), " ", 2)[0]); name != "" {
+		if l, err := time.LoadLocation(name); err == nil {
+			loc, label = l, name
+		}
+	}
 	return []string{
-		fmt.Sprintf("Current date: %s (UTC)", now.UTC().Format("2006-01-02 Monday")),
+		fmt.Sprintf("Current date: %s (%s)", now.In(loc).Format("2006-01-02 Monday"), label),
 		"",
 	}
 }

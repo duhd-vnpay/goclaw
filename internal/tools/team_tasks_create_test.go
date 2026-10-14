@@ -304,6 +304,12 @@ func TestCreate(t *testing.T) {
 		if !strings.Contains(result.ForLLM, "already") {
 			t.Errorf("expected finished task error, got: %s", result.ForLLM)
 		}
+		// The hint must steer to the right dependency ID, not to dropping blocked_by:
+		// "create this task without blocked_by" made the newsroom lead start Delivery
+		// before Newsletter existed (2026-10-14).
+		if strings.Contains(result.ForLLM, "without blocked_by") || !strings.Contains(result.ForLLM, "create that task first") {
+			t.Errorf("hint must point to creating the dependency first, got: %s", result.ForLLM)
+		}
 	})
 
 	t.Run("BlockedByCrossTeam", func(t *testing.T) {

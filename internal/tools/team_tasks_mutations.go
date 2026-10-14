@@ -289,10 +289,7 @@ func (t *TeamTasksTool) executeUpdate(ctx context.Context, args map[string]any) 
 				}
 				switch dt.Status {
 				case store.TeamTaskStatusCompleted, store.TeamTaskStatusCancelled, store.TeamTaskStatusFailed:
-					return ErrorResult(fmt.Sprintf(
-						"blocked_by task %s (%s) is already %s. "+
-							"Remove it from blocked_by — finished tasks cannot block new work.",
-						id, dt.Subject, dt.Status))
+					return finishedBlockerError(id, dt.Subject, dt.Status)
 				}
 			}
 		}

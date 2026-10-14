@@ -96,11 +96,7 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		}
 		switch depTask.Status {
 		case store.TeamTaskStatusCompleted, store.TeamTaskStatusCancelled, store.TeamTaskStatusFailed:
-			return ErrorResult(fmt.Sprintf(
-				"blocked_by task %s (%s) is already %s. "+
-					"Do not block on finished tasks — create this task without blocked_by, "+
-					"or pass the completed task's result in the description instead.",
-				depID, depTask.Subject, depTask.Status))
+			return finishedBlockerError(depID, depTask.Subject, depTask.Status)
 		}
 	}
 
@@ -353,4 +349,17 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		msg += "\n\nWarning: Auto-listed existing tasks because you skipped search-before-create. Next time call team_tasks(action=\"search\", query=\"<keywords>\") BEFORE create to avoid duplicates and save tokens."
 	}
 	return NewResult(msg)
+}
+
+// finishedBlockerError explains a blocked_by that points at a finished task. It must not
+// tell the model to drop blocked_by: the usual cause is a wrong ID (e.g. an earlier
+// pipeline step) for a dependency that is created in the same turn, and dropping the
+// dependency lets the dependent task run before its prerequisite (newsroom 2026-10-14).
+func finishedBlockerError(id uuid.UUID, subject, status string) *Result {
+	return ErrorResult(fmt.Sprintf(
+		"blocked_by task %s (%s) is already %s, so it cannot block this task. "+
+			"Check the ID: if this task must wait for a task you are creating now, create that task first "+
+			"and pass the id from its create response in blocked_by. Leave blocked_by out only when this task "+
+			"does not depend on any unfinished task; then put the finished task's result in the description.",
+		id, subject, status))
 }

@@ -23,18 +23,18 @@ jobs:
           - arch: amd64
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: pnpm
@@ -49,8 +49,10 @@ jobs:
 
       - name: Patch wails.json version
         working-directory: ui/desktop
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          jq --arg v "${{ steps.version.outputs.version }}" \
+          jq --arg v "$VERSION" \
             '.info.productVersion = $v' wails.json > wails.json.tmp \
             && mv wails.json.tmp wails.json
 
@@ -58,23 +60,30 @@ jobs:
         working-directory: ui/desktop
         env:
           GOARCH: ${{ matrix.arch }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           wails build -tags sqliteonly \
-            -ldflags "-s -w -X github.com/nextlevelbuilder/goclaw/cmd.Version=${{ steps.version.outputs.version }}"
+            -ldflags "-s -w -X github.com/nextlevelbuilder/goclaw/cmd.Version=$VERSION"
 
       - name: Create DMG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
         run: |
           mkdir -p dmg-staging
           cp -R ui/desktop/build/bin/goclaw-lite.app dmg-staging/
           ln -s /Applications dmg-staging/Applications
-          hdiutil create -volname "GoClaw Lite ${{ steps.version.outputs.version }}" \
+          hdiutil create -volname "GoClaw Lite $VERSION" \
             -srcfolder dmg-staging -ov -format UDZO \
-            "goclaw-lite-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.dmg"
+            "goclaw-lite-$VERSION-darwin-$ARCH.dmg"
 
       - name: Create tar.gz (for auto-update)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
         run: |
           cd ui/desktop/build/bin
-          tar czf "../../../../goclaw-lite-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.tar.gz" \
+          tar czf "../../../../goclaw-lite-$VERSION-darwin-$ARCH.tar.gz" \
             goclaw-lite.app
 
       # TODO: Add code signing when Apple Developer cert is available
@@ -82,7 +91,7 @@ jobs:
       #   run: codesign --deep --force --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" ...
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: macos-${{ matrix.arch }}
           path: |
@@ -93,18 +102,18 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: pnpm
@@ -121,26 +130,32 @@ jobs:
       - name: Patch wails.json version
         working-directory: ui/desktop
         shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           $json = Get-Content wails.json | ConvertFrom-Json
-          $json.info.productVersion = "${{ steps.version.outputs.version }}"
+          $json.info.productVersion = "$env:VERSION"
           $json | ConvertTo-Json -Depth 10 | Set-Content wails.json
 
       - name: Build desktop app
         working-directory: ui/desktop
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           wails build -tags sqliteonly \
-            -ldflags "-s -w -X github.com/nextlevelbuilder/goclaw/cmd.Version=${{ steps.version.outputs.version }}"
+            -ldflags "-s -w -X github.com/nextlevelbuilder/goclaw/cmd.Version=$VERSION"
 
       - name: Create zip
         shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           Compress-Archive -Path "ui/desktop/build/bin/goclaw-lite.exe" `
-            -DestinationPath "goclaw-lite-${{ steps.version.outputs.version }}-windows-amd64.zip"
+            -DestinationPath "goclaw-lite-$env:VERSION-windows-amd64.zip"
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: windows-amd64
           path: goclaw-lite-*.zip
@@ -150,14 +165,14 @@ jobs:
     needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF_NAME#lite-v}" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: artifacts
           merge-multiple: true
@@ -166,7 +181,7 @@ jobs:
         run: ls -la artifacts/
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           tag_name: ${{ github.ref_name }}
           name: "GoClaw Lite v${{ steps.version.outputs.version }}"
